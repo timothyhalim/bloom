@@ -222,7 +222,7 @@ fun EditorScreen(photoView: PhotoView) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    var busy by remember { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf<Float?>(null) } // export progress 0..1, null when idle
     var viewport by remember { mutableStateOf<RectF?>(null) }
     var chromePx by remember { mutableIntStateOf(0) }
     var canvasTop by remember { mutableStateOf(0f) }
@@ -254,22 +254,27 @@ fun EditorScreen(photoView: PhotoView) {
         } else null
     }
 
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    fun open(uri: android.net.Uri?) {
         if (uri != null) scope.launch {
             runCatching { withContext(Dispatchers.IO) { ImageIo.loadPreview(context.contentResolver, uri) } }
                 .onSuccess { state.load(uri, it); photoView.setImage(it) }
                 .onFailure { snackbar.showSnackbar("Can't open image: ${it.message ?: it}") }
         }
     }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), ::open)
+    // Files the photo picker doesn't list, e.g. CR3 raws (Android has no MIME type for them, so they show as octet-stream)
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::open)
     fun export(dst: android.net.Uri?, png: Boolean) {
         val src = state.source
         if (dst == null || src == null) return
         val layers = state.doc.layers
         val deband = state.doc.deband
         scope.launch {
-            busy = true
-            val r = runCatching { withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png) } }
-            busy = false
+            exporting = 0f
+            val r = runCatching {
+                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png) { exporting = it } }
+            }
+            exporting = null
             r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "export failed", it) }
             snackbar.showSnackbar(r.fold({ "Saved" }, { "Export failed: ${it.message ?: it}" }))
         }
@@ -289,7 +294,7 @@ fun EditorScreen(photoView: PhotoView) {
 
     Column(Modifier.fillMaxSize().background(Bloom.Canvas)) {
         TopBar(
-            state, busy,
+            state, exporting,
             onBack = {
                 if (state.doc.layers.isEmpty()) state.source = null
                 else confirm = "Close photo? Your edits will be lost." to { state.source = null; state.history = History(); state.bubble = null }
@@ -306,7 +311,7 @@ fun EditorScreen(photoView: PhotoView) {
             val preview = state.preview
             if (state.source == null || preview == null) {
                 // opaque, so a closed photo doesn't show through
-                Box(Modifier.fillMaxSize().background(Bloom.Canvas)) { EmptyState(openPicker, Modifier.align(Alignment.Center)) }
+                Box(Modifier.fillMaxSize().background(Bloom.Canvas)) { EmptyState(openPicker, { pickFile.launch(arrayOf("image/*", "application/octet-stream")) }, Modifier.align(Alignment.Center)) }
             } else {
                 val top = state.doc.layers.reversed()
                 LayerRail(
@@ -383,7 +388,8 @@ fun EditorScreen(photoView: PhotoView) {
 }
 
 @Composable
-private fun TopBar(state: EditorState, busy: Boolean, onBack: () -> Unit, onExport: (png: Boolean) -> Unit) {
+private fun TopBar(state: EditorState, exporting: Float?, onBack: () -> Unit, onExport: (png: Boolean) -> Unit) {
+    val busy = exporting != null
     val open = state.source != null
     val idle = state.draft == null // undo/redo cover applied edits; inside a tool, Cancel covers the draft
     Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -406,7 +412,10 @@ private fun TopBar(state: EditorState, busy: Boolean, onBack: () -> Unit, onExpo
                     .clickable(enabled = open && idle && !busy, role = Role.Button) { menu = true }.padding(horizontal = 18.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+                if (exporting != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator({ exporting }, Modifier.size(20.dp), color = Bloom.Pollen, strokeWidth = 2.dp, trackColor = Bloom.Outline)
+                    Text("${(exporting * 100).toInt()}%", Modifier.padding(start = 8.dp), color = Bloom.On, fontWeight = FontWeight.Medium)
+                }
                 else Text("Export", color = if (open && idle) Bloom.OnPollen else Bloom.Outline, fontWeight = FontWeight.Medium)
             }
             DropdownMenu(menu, { menu = false }, Modifier.background(Bloom.SurfaceHigh)) {
@@ -423,7 +432,7 @@ private fun BarIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, desc:
 }
 
 @Composable
-private fun EmptyState(onOpen: () -> Unit, modifier: Modifier) {
+private fun EmptyState(onOpen: () -> Unit, onOpenFile: () -> Unit, modifier: Modifier) {
     Column(modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Bloom", fontSize = 28.sp, fontWeight = FontWeight.Medium, color = Bloom.On)
         Text("Edit in layers. Everything runs on your phone.", Modifier.padding(top = 8.dp, bottom = 24.dp), color = Bloom.OnVariant)
@@ -435,6 +444,11 @@ private fun EmptyState(onOpen: () -> Unit, modifier: Modifier) {
             Icon(Icons.Image, null, tint = Bloom.OnPollen)
             Text("Open photo", Modifier.padding(start = 8.dp), color = Bloom.OnPollen, fontWeight = FontWeight.Medium)
         }
+        Text(
+            "Open file (RAW: CR3, NEF, ARW, DNG…)",
+            Modifier.padding(top = 12.dp).clip(Bloom.Petal).clickable(role = Role.Button, onClick = onOpenFile).padding(12.dp),
+            color = Bloom.OnVariant,
+        )
     }
 }
 

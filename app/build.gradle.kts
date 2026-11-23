@@ -16,7 +16,11 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
+
+    // LibRaw for camera raw files (app/src/main/cpp)
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
 
     // fdroid: no proprietary Google libs. play: ML Kit, Play Billing (later milestones).
     flavorDimensions += "store"

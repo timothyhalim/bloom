@@ -174,7 +174,9 @@ class PipelineTest {
 
     private fun exportPng(src: java.io.File, layers: List<Layer>): Pair<ByteArray, Bitmap> {
         val dst = java.io.File(ctx.cacheDir, "t_out.png")
-        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(src), android.net.Uri.fromFile(dst), ctx.cacheDir, layers, false, png = true)
+        val steps = mutableListOf<Float>()
+        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(src), android.net.Uri.fromFile(dst), ctx.cacheDir, layers, false, png = true) { steps += it }
+        assertTrue("progress rises to 1: $steps", steps.zipWithNext().all { (a, b) -> b >= a } && steps.last() == 1f)
         val bytes = dst.readBytes()
         return bytes to android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }
@@ -213,6 +215,23 @@ class PipelineTest {
         assertTrue("dark half on the right", out.getColor(14, 4).red() < 0.2f && out.getColor(1, 4).red() > 0.7f)
         val dst = java.io.File(ctx.cacheDir, "t_out.png")
         assertEquals(0, androidx.exifinterface.media.ExifInterface(dst).rotationDegrees)
+    }
+
+    // --- camera raw (M2.5c) ---
+
+    @Test
+    fun rawHighlightsAboveWhiteComeBackWithExposure() {
+        // Raw decodes are linear F16 with the brightest 1% above 1.0; one stop down must bring 2.0 back to white, not grey.
+        val src = Bitmap.createBitmap(32, 32, Bitmap.Config.RGBA_F16, false, android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB))
+        val two = android.util.Half.toHalf(2f)
+        val one = android.util.Half.toHalf(1f)
+        val buf = java.nio.ByteBuffer.allocateDirect(32 * 32 * 8).order(java.nio.ByteOrder.nativeOrder())
+        repeat(32 * 32) { buf.putShort(two).putShort(two).putShort(two).putShort(one) }
+        src.copyPixelsFromBuffer(buf.rewind())
+        assertEquals(255.0, redsOf(src, listOf(Layer(1).with(ColorParam.Exposure, -100f / 3))).average(), 1.0)
+        // a Curves layer on top of the raw must not cut that range off
+        val curved = Layer(1).copy(curves = Curves(rgb = listOf(0f, 0f, 0.5f, 0.6f, 1f, 1f)))
+        assertEquals(255.0, redsOf(src, listOf(curved, Layer(2).with(ColorParam.Exposure, -100f / 3))).average(), 1.0)
     }
 
     // --- Ultra HDR (M2.5c) ---

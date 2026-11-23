@@ -690,9 +690,10 @@ void main() {
     float sat = clamp(max(p.r, max(p.g, p.b)) - min(p.r, min(p.g, p.b)), 0.0, 1.0);
     p = mix(vec3(l), p, 1.0 + uP[6] + uP[7] * (1.0 - sat));
     if (uCurves) {
-        // ponytail: values above 1 are clipped here; M2.5's HDR range needs the table extended past 1.
+        // The table covers 0..1; brighter values (raw, 16-bit) ride on top so later layers can still pull them back.
+        vec3 over = max(p - 1.0, 0.0);
         vec3 q = clamp(p, 0.0, 1.0) * (1023.0 / 1024.0) + 0.5 / 1024.0; // texel centres
-        p = vec3(texture(uCurve, vec2(q.r, 0.5)).r, texture(uCurve, vec2(q.g, 0.5)).g, texture(uCurve, vec2(q.b, 0.5)).b);
+        p = vec3(texture(uCurve, vec2(q.r, 0.5)).r, texture(uCurve, vec2(q.g, 0.5)).g, texture(uCurve, vec2(q.b, 0.5)).b) + over;
     }
     if (uBlend != 0) p = blend(src.rgb, p);
     float m = 1.0;
