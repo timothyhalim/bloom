@@ -1,0 +1,1 @@
+{"error":"HTTPException","detail":"Image size(512,512) and mask size(256,256) not match.","body":"","errors":"400: Image size(512,512) and mask size(256,256) not match."}

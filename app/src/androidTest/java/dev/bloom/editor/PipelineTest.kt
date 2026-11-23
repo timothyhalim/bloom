@@ -653,7 +653,8 @@ class PipelineTest {
         val photo = gray(w, h) { x, y -> if (x in 280 until 360 && y in 200 until 280) 30 else if (x / 16 % 2 == 0) 60 else 200 }
         val hole = ByteArray(w * h) { i -> if (i % w in 276 until 364 && i / w in 196 until 284) 1 else 0 }
         val t = System.nanoTime()
-        val (box, px) = Segment.erase(model, photo, hole) ?: error("erase failed")
+        val area = EraseArea.of(photo, hole)!!
+        val (box, px) = area.paste(Segment.erase(model, area.crop, area.fill) ?: error("erase failed"))
         android.util.Log.d("Bloom", "eraser test: ${(System.nanoTime() - t) / 1_000_000} ms")
         assertTrue("box covers the hole: ${box.toList()}", box[0] <= 276 && box[1] <= 196 && box[2] >= 364 && box[3] >= 284)
         // inside the old block, columns that were dark stripes stay darker than the light ones

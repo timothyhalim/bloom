@@ -8,6 +8,48 @@ import java.io.File
 class SubjectMask(val w: Int, val h: Int, val alpha: ByteArray)
 
 /**
+ * What an eraser works on: [crop], the photo around the hole (a square of 2× its long side, min 512, see [Eraser.context]),
+ * and [fill] (crop-sized, 1 = fill): the hole widened a little. [at] is the crop's box in the photo (px).
+ */
+class EraseArea(private val photo: Bitmap, val crop: Bitmap, val fill: ByteArray, private val at: IntArray, private val box: IntArray, private val grow: Int) {
+    /**
+     * [filled] (the crop with the hole filled, any size) back on the photo: the filled part (the hole, widened a little,
+     * plus a margin) and where it sits in the photo (px). Only the hole is taken from [filled]; the rest is the photo's own.
+     */
+    fun paste(filled: Bitmap): Pair<IntArray, Bitmap> {
+        val (cl, ct, cr, cb) = at
+        val cw = cr - cl
+        val big = if (filled.width == cw && filled.height == cb - ct) filled else Bitmap.createScaledBitmap(filled, cw, cb - ct, true)
+        val out = Eraser.inflate(box, grow, photo.width, photo.height)
+        val ow = out[2] - out[0]
+        val oh = out[3] - out[1]
+        val orig = IntArray(ow * oh).also { crop.getPixels(it, 0, ow, out[0] - cl, out[1] - ct, ow, oh) }
+        val gen = IntArray(ow * oh).also { big.getPixels(it, 0, ow, out[0] - cl, out[1] - ct, ow, oh) }
+        val px = IntArray(ow * oh) { i -> if (fill[(out[1] - ct + i / ow) * cw + out[0] - cl + i % ow].toInt() != 0) gen[i] else orig[i] }
+        if (big !== filled) big.recycle()
+        return out to Bitmap.createBitmap(px, ow, oh, Bitmap.Config.ARGB_8888)
+    }
+
+    companion object {
+        /** The area to erase [hole] (photo.width × photo.height bytes, non-zero = remove) in [photo]; null if nothing is marked. */
+        fun of(photo: Bitmap, hole: ByteArray): EraseArea? {
+            val w = photo.width
+            val h = photo.height
+            // widen the hole a little: brush strokes rarely cover an object's soft edge and shadow fringe
+            val grow = maxOf(3, h / 300)
+            val box = Eraser.bounds(hole, w, h)?.let { Eraser.inflate(it, grow, w, h) } ?: return null
+            val at = Eraser.context(box, w, h)
+            val (cl, ct, cr, cb) = at
+            val cw = cr - cl
+            val ch = cb - ct
+            val keep = ByteArray(cw * ch) { i -> if (hole[(ct + i / cw) * w + cl + i % cw].toInt() != 0) 0 else -1 }
+            val fill = Eraser.erode(keep, cw, ch, grow).map { if (it.toInt() == 0) 1.toByte() else 0.toByte() }.toByteArray()
+            return EraseArea(photo, Bitmap.createBitmap(photo, cl, ct, cw, ch), fill, at, box, grow)
+        }
+    }
+}
+
+/**
  * On-device subject masks through MNN (native, app/src/main/cpp/segment.cpp): IS-Net finds the main subject by itself,
  * MobileSAM selects whatever the pins point at.
  */
@@ -72,23 +114,11 @@ object Segment {
         return depth(model.path, cache(model), small, gpu).also { small.recycle() }?.let { SubjectMask(w, h, it) }
     }
 
-    /**
-     * LaMa eraser: fills [hole] (photo.width × photo.height bytes, non-zero = remove) in [photo].
-     * Returns the filled part (the hole, widened a little, plus a margin) and where it sits in the photo (px).
-     */
-    fun erase(model: File, photo: Bitmap, hole: ByteArray): Pair<IntArray, Bitmap>? {
+    /** LaMa eraser: [crop] with [fill] (crop-sized, non-zero = fill) filled in, at the crop's size. */
+    fun erase(model: File, crop: Bitmap, fill: ByteArray): Bitmap? {
         if (!loaded) return null
-        val w = photo.width
-        val h = photo.height
-        // widen the hole a little: brush strokes rarely cover an object's soft edge and shadow fringe
-        val grow = maxOf(3, h / 300)
-        val box = Eraser.bounds(hole, w, h)?.let { Eraser.inflate(it, grow, w, h) } ?: return null
-        val (cl, ct, cr, cb) = Eraser.context(box, w, h)
-        val cw = cr - cl
-        val ch = cb - ct
-        val keep = ByteArray(cw * ch) { i -> if (hole[(ct + i / cw) * w + cl + i % cw].toInt() != 0) 0 else -1 }
-        val fill = Eraser.erode(keep, cw, ch, grow).map { if (it.toInt() == 0) 1.toByte() else 0.toByte() }.toByteArray() // 1 = fill
-        val crop = Bitmap.createBitmap(photo, cl, ct, cw, ch)
+        val cw = crop.width
+        val ch = crop.height
         // the model works at 512 x 512
         val n = SIZE_ERASE
         val small = argb(crop, n, n, mutable = true)
@@ -96,20 +126,7 @@ object Segment {
         val ok = erase(model.path, cache(model), small, m, gpu)
         val big = if (ok) Bitmap.createScaledBitmap(small, cw, ch, true) else null
         small.recycle()
-        if (big == null) {
-            if (crop !== photo) crop.recycle()
-            return null
-        }
-        // keep the photo's own pixels outside the hole: only the hole is the model's
-        val out = Eraser.inflate(box, grow, w, h)
-        val ow = out[2] - out[0]
-        val oh = out[3] - out[1]
-        val orig = IntArray(ow * oh).also { crop.getPixels(it, 0, ow, out[0] - cl, out[1] - ct, ow, oh) }
-        val gen = IntArray(ow * oh).also { big.getPixels(it, 0, ow, out[0] - cl, out[1] - ct, ow, oh) }
-        val px = IntArray(ow * oh) { i -> if (fill[(out[1] - ct + i / ow) * cw + out[0] - cl + i % ow].toInt() != 0) gen[i] else orig[i] }
-        big.recycle()
-        if (crop !== photo) crop.recycle()
-        return out to Bitmap.createBitmap(px, ow, oh, Bitmap.Config.ARGB_8888)
+        return big
     }
 
     /** [src] scaled to [w]×[h] as a new ARGB_8888 bitmap (what the native side reads); [src] is left alone. */

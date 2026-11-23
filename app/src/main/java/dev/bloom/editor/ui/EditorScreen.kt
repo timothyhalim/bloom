@@ -105,6 +105,16 @@ import dev.bloom.editor.model.DetailEffect
 import dev.bloom.editor.model.Effect
 import dev.bloom.editor.ModelStore
 import dev.bloom.editor.Segment
+import dev.bloom.editor.EraseArea
+import dev.bloom.editor.ai.AiRequest
+import dev.bloom.editor.ai.AiResult
+import dev.bloom.editor.ai.Capability
+import dev.bloom.editor.ai.OnDevice
+import dev.bloom.editor.ai.AiConfig
+import dev.bloom.editor.ai.Choice
+import dev.bloom.editor.ai.Keys
+import dev.bloom.editor.ai.open
+import dev.bloom.editor.ai.ProviderType
 import dev.bloom.editor.SubjectMask
 import dev.bloom.editor.model.History
 import dev.bloom.editor.model.Layer
@@ -177,7 +187,9 @@ class EditorState {
     var warpSoftness by mutableFloatStateOf(50f)
     var warpMore by mutableStateOf(false) // Strength and Softness rows shown
     var warpReverse by mutableStateOf(false) // Twirl counterclockwise
-    var erasing by mutableStateOf<String?>(null) // AI Erase running: what it is doing ("Downloading…", "Erasing…")
+    var erasing by mutableStateOf<String?>(null) // AI Erase running: what it is doing ("Downloading…", "Erasing…", "Queued, 3 ahead")
+    var eraseCancel by mutableStateOf<(() -> Unit)?>(null) // a remote erase running: stops it
+    var ai by mutableStateOf(AiConfig()) // AI providers and choices (Settings)
 
     // A brush's size and softness shown mid-photo while their sliders move: radius dp, softness 0..100, and a tick to time it out
     var ring by mutableStateOf<Pair<Float, Float>?>(null)
@@ -398,6 +410,14 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         }
     }
 
+    LaunchedEffect(Unit) {
+        state.ai = AiConfig.load(context)
+        snapshotFlow { state.ai }.drop(1).collect { AiConfig.save(context, it) }
+    }
+    val phone = remember { OnDevice(context) }
+    fun provider(c: Choice) = if (c.provider == OnDevice.ID) phone else open(state.ai.providers.first { it.id == c.provider }, Keys.get(context, c.provider))
+    var settings by remember { mutableStateOf(false) }
+
     var transformTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         photoView.onViewport = { viewport = it }
@@ -441,14 +461,12 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         for (pins in missing) {
             state.subjectStatus = if (pins.isEmpty()) "Finding the subject…" else "Selecting…"
             val r = runCatching {
-                withContext(Dispatchers.IO) {
-                    val get = { name: String -> ModelStore.get(context, name) { state.subjectStatus = "Downloading AI model… ${(it * 100).toInt()}%" } }
-                    val t = System.nanoTime()
-                    val m = if (pins.isEmpty()) Segment.subject(get("subject"), photo)
-                    else Segment.pinned(get("sam_encoder"), get("sam_decoder"), photo, pins)
-                    android.util.Log.d("Bloom", "subject (${pins.size / 3} pins): ${(System.nanoTime() - t) / 1_000_000} ms")
-                    m ?: error("the model couldn't run on this phone")
-                }
+                val t = System.nanoTime()
+                // ponytail: only the phone offers SEGMENT; a remote one would need the consent sheet, as this runs without a tap
+                val c = state.ai.choice(Capability.SEGMENT, phone)!!
+                val m = provider(c).run(Capability.SEGMENT, c.model, AiRequest(photo, pins = pins)) { state.subjectStatus = it } as AiResult.Mask
+                android.util.Log.d("Bloom", "subject (${pins.size / 3} pins): ${(System.nanoTime() - t) / 1_000_000} ms")
+                m.mask
             }
             r.exceptionOrNull()?.let { if (it is CancellationException) throw it; android.util.Log.e("Bloom", "subject failed", it) }
             if (state.preview !== photo) return@LaunchedEffect
@@ -565,7 +583,36 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), ::open)
     // Files the photo picker doesn't list, e.g. CR3 raws (Android has no MIME type for them, so they show as octet-stream)
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::open)
-    // AI Erase: fill the layer's mask from the photo with LaMa, then keep it as a Retouch layer above the photo
+    // AI Erase: fill the layer's mask from the photo (LaMa on the phone, or the chosen provider), then keep it as a
+    // Retouch layer above the photo. A provider off the phone is asked about first (ConsentSheet).
+    var consent by remember { mutableStateOf<Triple<Choice, EraseArea, Long>?>(null) }
+    fun runErase(c: Choice, area: EraseArea, id: Long, photo: Bitmap) {
+        val remote = c.provider != OnDevice.ID
+        state.erasing = if (remote) "Sending to ${state.ai.name(c.provider)}…" else "Erasing…"
+        val job = scope.launch {
+            val r = runCatching {
+                val t = System.nanoTime()
+                val filled = provider(c).run(Capability.ERASE, c.model, AiRequest(area.crop, area.fill)) { state.erasing = it } as AiResult.Image
+                android.util.Log.d("Bloom", "erase (${if (remote) "remote" else "phone"}): ${(System.nanoTime() - t) / 1_000_000} ms")
+                withContext(Dispatchers.Default) { area.paste(filled.bitmap) }
+            }
+            state.erasing = null
+            state.eraseCancel = null
+            val e = r.exceptionOrNull()
+            if (e is CancellationException) return@launch
+            e?.let { android.util.Log.e("Bloom", "erase failed", it); snackbar.showSnackbar("Couldn't erase: ${reason(it)}") }
+            val (box, px) = r.getOrNull() ?: return@launch
+            if (state.draft?.id != id) return@launch
+            val w = photo.width.toFloat()
+            val h = photo.height.toFloat()
+            val done = state.draft!!.copy(effect = RetouchEffect(Patch(box[0] / w, box[1] / h, box[2] / w, box[3] / h, px)))
+            // a new Retouch layer goes right above the photo, so every other layer still applies to the filled area
+            if (state.editingId != null) state.edit { it.replace(done) } else state.edit { it.copy(layers = listOf(done) + it.layers) }
+            state.close()
+        }
+        // the phone's model can't stop mid-run
+        if (remote && job.isActive) state.eraseCancel = { job.cancel() }
+    }
     fun erase() {
         val d = state.draft ?: return
         val photo = state.preview ?: return
@@ -574,28 +621,15 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         photoView.maskOf(below, d.id) { hole ->
             scope.launch {
                 val r = runCatching {
-                    withContext(Dispatchers.IO) {
-                        hole ?: error("paint over what to remove first")
-                        val model = ModelStore.get(context, "eraser") { state.erasing = "Downloading AI model… ${(it * 100).toInt()}%" }
-                        state.erasing = "Erasing…"
-                        // the mask is soft at its edge; the model needs a clear hole: anything at least half painted
-                        val bits = ByteArray(hole.size) { if ((hole[it].toInt() and 0xFF) >= 128) 1 else 0 }
-                        val t = System.nanoTime()
-                        (Segment.erase(model, photo, bits) ?: error("nothing to erase, or the model couldn't run")).also {
-                            android.util.Log.d("Bloom", "erase: ${(System.nanoTime() - t) / 1_000_000} ms")
-                        }
-                    }
+                    hole ?: error("paint over what to remove first")
+                    // the mask is soft at its edge; the model needs a clear hole: anything at least half painted
+                    val bits = ByteArray(hole.size) { if ((hole[it].toInt() and 0xFF) >= 128) 1 else 0 }
+                    withContext(Dispatchers.Default) { EraseArea.of(photo, bits) } ?: error("nothing to erase")
                 }
                 state.erasing = null
-                r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "erase failed", it); snackbar.showSnackbar("Couldn't erase: ${reason(it)}") }
-                val (box, px) = r.getOrNull() ?: return@launch
-                if (state.draft?.id != d.id) return@launch
-                val w = photo.width.toFloat()
-                val h = photo.height.toFloat()
-                val done = state.draft!!.copy(effect = RetouchEffect(Patch(box[0] / w, box[1] / h, box[2] / w, box[3] / h, px)))
-                // a new Retouch layer goes right above the photo, so every other layer still applies to the filled area
-                if (state.editingId != null) state.edit { it.replace(done) } else state.edit { it.copy(layers = listOf(done) + it.layers) }
-                state.close()
+                val area = r.getOrElse { snackbar.showSnackbar("Couldn't erase: ${reason(it)}"); return@launch }
+                val c = state.ai.choice(Capability.ERASE, phone) ?: return@launch
+                if (state.ai.needsConsent(c.provider)) consent = Triple(c, area, d.id) else runErase(c, area, d.id, photo)
             }
         }
     }
@@ -694,6 +728,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                         recents, openPicker, { pickFile.launch(arrayOf("image/*", "application/octet-stream")) },
                         onRecent = { openProject(it.dir) }, onDelete = { deleting = it }, modifier = Modifier.align(Alignment.Center),
                     )
+                    IconButton({ settings = true }, Modifier.align(Alignment.TopEnd)) { Icon(Icons.Settings, "Settings", tint = Bloom.On) }
                 }
             } else {
                 viewport?.let { v ->
@@ -712,6 +747,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                     onBarTop = { top -> photoView.setBottomInset((canvasBottom - top).roundToInt()) },
                     onDiscard = leaveTool,
                     onErase = ::erase,
+                    onSettings = { settings = true },
                     modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged {
                         chromePx = it.height
                     },
@@ -824,6 +860,28 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         },
         containerColor = Bloom.SurfaceHigh,
     )
+    consent?.let { (c, area, id) ->
+        val p = state.ai.providers.firstOrNull { it.id == c.provider }
+        val host = p?.let { if (it.type == ProviderType.Fal) "fal.ai" else runCatching { java.net.URI(it.url).host }.getOrNull() ?: it.url }.orEmpty()
+        val photo = state.preview
+        ConsentSheet(
+            state.ai, c, host,
+            "a ${area.crop.width} × ${area.crop.height} px crop of the photo around the painted area, and its mask",
+            state.ai.options(Capability.ERASE, phone) - c,
+            onSend = { keep ->
+                consent = null
+                if (keep) state.ai = state.ai.copy(consented = state.ai.consented + c.provider)
+                if (photo != null) runErase(c, area, id, photo)
+            },
+            onOther = { o ->
+                consent = null
+                state.ai = state.ai.copy(choices = state.ai.choices + (Capability.ERASE to o))
+                if (state.ai.needsConsent(o.provider)) consent = Triple(o, area, id) else if (photo != null) runErase(o, area, id, photo)
+            },
+            onDismiss = { consent = null },
+        )
+    }
+    if (settings) SettingsScreen(state.ai, phone, { state.ai = it }, { settings = false })
     deleting?.let { r ->
         AlertDialog(
             onDismissRequest = { deleting = null },
@@ -953,7 +1011,7 @@ private fun OpenButtons(onOpen: () -> Unit, onOpenFile: () -> Unit) {
 
 /** Floating bottom chrome. The bar holds what you edit; the box above holds its settings. */
 @Composable
-private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () -> Unit, onErase: () -> Unit, modifier: Modifier) {
+private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () -> Unit, onErase: () -> Unit, onSettings: () -> Unit, modifier: Modifier) {
     val float = RoundedCornerShape(16.dp)
     Column(modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         val d = state.draft
@@ -990,7 +1048,7 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
                     is ColorEffect -> ColorBar(state, d, e, onDiscard)
                     is DetailEffect -> DetailBar(state, d, onDiscard)
                     is WarpEffect -> LiquifyBar(state, d, onDiscard)
-                    is RetouchEffect -> EraseBar(state, d, onDiscard, onErase)
+                    is RetouchEffect -> EraseBar(state, d, onDiscard, onErase, onSettings)
                 }
             }
         }
@@ -1190,7 +1248,12 @@ private fun shown(p: ColorParam, v: Float): String {
 }
 
 // runCatching catches OutOfMemoryError too; its own message is a byte count
-private fun reason(e: Throwable) = if (e is OutOfMemoryError) "not enough memory. Close other apps and try again" else e.message
+private fun reason(e: Throwable) = when (e) {
+    is OutOfMemoryError -> "not enough memory. Close other apps and try again"
+    is java.net.SocketTimeoutException -> "the server took too long to answer"
+    is java.net.ConnectException, is java.net.UnknownHostException -> "can't reach the server. Check the address in AI settings"
+    else -> e.message
+}
 
 internal fun signed(v: Float): String {
     val i = v.roundToInt()

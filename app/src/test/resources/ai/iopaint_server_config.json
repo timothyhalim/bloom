@@ -1,0 +1,7 @@
+{"plugins":[{"name":"RealESRGAN","support_gen_image":true,"support_gen_mask":false},{"name":"RemoveBG","support_gen_image":true,"support_gen_mask":true}],
+"modelInfos":[{"name":"lama","path":"lama","model_type":"inpaint","is_single_file_diffusers":false,"need_prompt":false,"controlnets":[],"brushnets":[],"support_strength":false,"support_outpainting":false,"support_lcm_lora":false,"support_controlnet":false,"support_brushnet":false,"support_powerpaint_v2":false},
+{"name":"mat","path":"mat","model_type":"inpaint","is_single_file_diffusers":false,"need_prompt":false},
+{"name":"Fantasy-Studio/Paint-by-Example","path":"x","model_type":"diffusers_other","is_single_file_diffusers":false,"need_prompt":false},
+{"name":"runwayml/stable-diffusion-inpainting","path":"y","model_type":"diffusers_sd_inpaint","is_single_file_diffusers":false,"need_prompt":true,"controlnets":["lllyasviel/control_v11p_sd15_canny"]}],
+"removeBGModel":"briaai/RMBG-1.4","removeBGModels":["briaai/RMBG-1.4","u2net"],"realesrganModel":"realesr-general-x4v3","realesrganModels":["realesr-general-x4v3","RealESRGAN_x4plus"],
+"interactiveSegModel":"sam2_1_tiny","interactiveSegModels":["vit_b"],"enableFileManager":false,"enableAutoSaving":false,"enableControlnet":false,"controlnetMethod":null,"disableModelSwitch":false,"isDesktop":false,"samplers":["DPM++ 2M","UniPC","LCM"]}

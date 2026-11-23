@@ -6,14 +6,18 @@
     <uses-sdk tools:overrideLibrary="androidx.heifwriter" />
 
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
-    <!-- only to download AI models on first use (assets/models.json); photos never leave the phone -->
+    <!-- AI models on first use (assets/models.json), and AI providers the user adds in Settings: a photo crop goes to one
+         only when the user runs it there, after a consent sheet -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- cleartext: the user's own IOPaint / ComfyUI / llama.cpp servers on a home network are usually plain http;
+         Settings warns when a key or photo crop would go unencrypted -->
     <application
         android:name=".BloomApp"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="Bloom"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name=".MainActivity"

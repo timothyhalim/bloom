@@ -1,0 +1,12 @@
+{
+  "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd-v1-5-inpainting.ckpt"}, "_meta": {"title": "Load Checkpoint"}},
+  "2": {"class_type": "LoadImage", "inputs": {"image": "example.png"}, "_meta": {"title": "bloom_image"}},
+  "3": {"class_type": "LoadImage", "inputs": {"image": "example.png"}, "_meta": {"title": "bloom_mask"}},
+  "4": {"class_type": "ImageToMask", "inputs": {"channel": "red", "image": ["3", 0]}, "_meta": {"title": "Convert Image to Mask"}},
+  "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["1", 1]}, "_meta": {"title": "bloom_prompt"}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry, text, watermark, person, object", "clip": ["1", 1]}, "_meta": {"title": "Negative"}},
+  "7": {"class_type": "VAEEncodeForInpaint", "inputs": {"pixels": ["2", 0], "vae": ["1", 2], "mask": ["4", 0], "grow_mask_by": 6}, "_meta": {"title": "VAE Encode (for Inpainting)"}},
+  "8": {"class_type": "KSampler", "inputs": {"seed": 0, "steps": 25, "cfg": 7, "sampler_name": "euler", "scheduler": "normal", "denoise": 1, "model": ["1", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["7", 0]}, "_meta": {"title": "KSampler"}},
+  "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["1", 2]}, "_meta": {"title": "VAE Decode"}},
+  "10": {"class_type": "SaveImage", "inputs": {"filename_prefix": "bloom", "images": ["9", 0]}, "_meta": {"title": "bloom_output"}}
+}

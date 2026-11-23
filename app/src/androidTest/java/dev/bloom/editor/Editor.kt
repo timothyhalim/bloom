@@ -40,11 +40,11 @@ class FakePickers : ActivityResultRegistry() {
 
 /**
  * Shows the editor on a real PhotoView with [testPhoto] open (as a project opened with [doc], when given), or Home
- * when [photo] is false. Saved tool settings and projects are cleared first, so tests don't see each other's; [setup]
+ * when [photo] is false. Saved tool settings, AI settings, keys and projects are cleared first, so tests don't see each other's; [setup]
  * runs after that, before the editor starts. [pickers] stands in for the system pickers.
  */
 fun EditorRule.showEditor(doc: Document? = null, photo: Boolean = true, pickers: FakePickers = FakePickers(), setup: () -> Unit = {}): EditorState {
-    activity.getSharedPreferences("tools", 0).edit().clear().commit()
+    for (prefs in listOf("tools", "ai", "ai_keys")) activity.getSharedPreferences(prefs, 0).edit().clear().commit()
     File(activity.filesDir, "projects").deleteRecursively()
     setup()
     val state = EditorState()

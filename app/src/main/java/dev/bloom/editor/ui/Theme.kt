@@ -145,6 +145,7 @@ object Icons {
     val Crop = icon("M6 2v16h16M2 6h16v16")
     val Rotate = icon("M20 12a8 8 0 1 1-2.3-5.7M20 3v4h-4")
     val Flip = icon("M12 3v18M9 7L4 17h5zM15 7l5 10h-5z")
+    val Settings = icon("M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM10.3 3h3.4l.5 2.4 1.8 1 2.3-.8 1.7 2.9-1.8 1.6v2l1.8 1.6-1.7 2.9-2.3-.8-1.8 1-.5 2.4h-3.4l-.5-2.4-1.8-1-2.3.8-1.7-2.9 1.8-1.6v-2L3.9 8.5l1.7-2.9 2.3.8 1.8-1z")
     val Plus = icon("M12 5v14M5 12h14")
     val Minus = icon("M5 12h14")
 }

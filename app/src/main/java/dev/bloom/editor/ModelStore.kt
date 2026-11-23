@@ -18,14 +18,30 @@ object ModelStore {
 
     /** The model's file, downloading it first if needed; [progress] gets 0..1. Throws if the download or check fails. */
     fun get(context: Context, name: String, progress: (Float) -> Unit = {}): File {
-        val spec = JSONObject(context.assets.open("models.json").bufferedReader().use { it.readText() }).getJSONObject(name)
+        val spec = specs(context).getJSONObject(name)
+        return get(file(context, name), spec.getString("sha256"), spec.getString("url").split(' '), spec.getLong("size"), progress)
+    }
+
+    /** assets/models.json: each model's file, url, sha256, size and about. */
+    fun specs(context: Context) = JSONObject(context.assets.open("models.json").bufferedReader().use { it.readText() })
+
+    /** Where model [name] is kept, downloaded or not. */
+    fun file(context: Context, name: String): File {
         val dir = File(context.getExternalFilesDir(null) ?: context.filesDir, "models").apply { mkdirs() }
-        return get(File(dir, spec.getString("file")), spec.getString("sha256"), spec.getString("url").split(' '), spec.getLong("size"), progress)
+        return File(dir, specs(context).getJSONObject(name).getString("file"))
+    }
+
+    /** Deletes model [name]'s file; it downloads again on its next use. */
+    @Synchronized
+    fun delete(context: Context, name: String) {
+        val f = file(context, name)
+        verified -= f.path
+        f.delete()
     }
 
     /** [file] if its SHA-256 is [sha], else downloaded first from [urls] (joined in order), [size] bytes in all. */
     internal fun get(file: File, sha: String, urls: List<String>, size: Long, progress: (Float) -> Unit = {}): File {
-        synchronized(this) {
+        synchronized(this) { // with delete()
             if (file.path in verified) return file
             if (file.exists() && sha256(file) == sha) return file.also { verified += it.path }
             val part = File(file.parentFile, file.name + ".part")
