@@ -3,6 +3,7 @@ package dev.bloom.editor.ui
 import android.graphics.Bitmap
 import android.graphics.RectF
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -76,6 +78,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.bloom.editor.ImageIo
 import dev.bloom.editor.PhotoView
 import dev.bloom.editor.model.ColorParam
+import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Document
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorStep
@@ -129,6 +132,11 @@ class EditorState {
     var subjectStatus by mutableStateOf<String?>(null) // "Downloading…", "Finding…", or an error while there is no mask
     var subjectRetry by mutableIntStateOf(0)
     var depth by mutableStateOf<SubjectMask?>(null) // this photo's depth map, once a lens blur needs it
+
+    // The Crop tool edits [crop] (non-null while open) until ✓; it is a document setting, not a layer.
+    var crop by mutableStateOf<Crop?>(null)
+    var cropRatio by mutableStateOf<Float?>(null) // locked output width / height; null = free
+    var cropParam by mutableIntStateOf(0) // 0 Straighten, 1 Vertical, 2 Horizontal
 
     /** A Lens blur or a depth range step exists (applied or in the draft), so the depth map is needed. */
     val needsDepth: Boolean
@@ -215,7 +223,7 @@ class EditorState {
     fun addGradient() = addStep(GradientStep(false, 0.5f, 0.2f, 0.5f, 0.6f, add = maskAdd))
 
     val dirty: Boolean
-        get() = draft?.let { d -> if (editingId != null) d != doc.layers.firstOrNull { it.id == d.id } else d.edited } ?: false
+        get() = crop?.let { it != doc.crop } ?: draft?.let { d -> if (editingId != null) d != doc.layers.firstOrNull { it.id == d.id } else d.edited } ?: false
 
     fun apply() {
         val d = draft ?: return
@@ -224,7 +232,21 @@ class EditorState {
         close()
     }
 
+    fun openCrop() {
+        crop = doc.crop
+        cropRatio = null
+        cropParam = 0
+        bubble = null
+    }
+
+    fun applyCrop() {
+        val c = crop ?: return
+        edit { it.copy(crop = c) }
+        crop = null
+    }
+
     fun close() {
+        crop = null
         draft = null
         editingId = null
         maskMode = false
@@ -268,6 +290,10 @@ fun EditorScreen(photoView: PhotoView) {
         launch { snapshotFlow { state.doc.deband }.collect(photoView::setDeband) }
         launch { snapshotFlow { state.subjects }.collect(photoView::setSubjects) }
         launch { snapshotFlow { state.depth }.collect(photoView::setDepth) }
+        // the Crop tool shows the whole frame with the crop drawn over it; otherwise only the crop is shown
+        launch {
+            snapshotFlow { Triple(state.preview, state.crop ?: state.doc.crop, state.crop != null) }.collect { (_, c, full) -> photoView.setCrop(c, full) }
+        }
         snapshotFlow { state.rendered() }.collect(photoView::setLayers)
     }
     // The depth map is measured once per photo, the first time a lens blur needs it.
@@ -319,9 +345,13 @@ fun EditorScreen(photoView: PhotoView) {
         photoView.brushRadiusPx = if (state.maskMode && state.maskTool == MaskTool.Brush) state.brushSize * density.density else 0f
     }
     val lensOpen = state.draft?.let { it.kind == LayerKind.Blur && it.detail.lens } == true
-    LaunchedEffect(state.draft?.id, state.maskMode, shownPreview, lensOpen) {
+    val cropOpen by remember { derivedStateOf { state.crop != null } }
+    LaunchedEffect(cropOpen) { photoView.margin = if (cropOpen) 32 * density.density else 0f }
+    LaunchedEffect(state.draft?.id, state.maskMode, shownPreview, lensOpen, cropOpen) {
         photoView.setOverlay(state.draft?.id?.takeIf { state.maskMode })
-        photoView.onTool = if (state.maskMode && shownPreview != null) {
+        photoView.onTool = if (cropOpen && shownPreview != null) {
+            CropTouch(state, photoView, shownPreview.width.toFloat() / shownPreview.height, density.density)::on
+        } else if (state.maskMode && shownPreview != null) {
             MaskTouch(state, photoView, shownPreview.width.toFloat() / shownPreview.height, density.density) { u, v, done ->
                 photoView.sample(state.below(), u, v, done)
             }::on
@@ -342,17 +372,20 @@ fun EditorScreen(photoView: PhotoView) {
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), ::open)
     // Files the photo picker doesn't list, e.g. CR3 raws (Android has no MIME type for them, so they show as octet-stream)
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::open)
+    var exportScale by remember { mutableFloatStateOf(1f) }
     fun export(dst: android.net.Uri?, png: Boolean) {
         val src = state.source
         if (dst == null || src == null) return
         val layers = state.doc.layers
+        val crop = state.doc.crop
+        val scale = exportScale
         val deband = state.doc.deband
         scope.launch {
             exporting = 0f
             val subjects = state.subjects
             val depth = state.depth
             val r = runCatching {
-                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png, subjects, depth) { exporting = it } }
+                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png, subjects, depth, crop, scale) { exporting = it } }
             }
             exporting = null
             r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "export failed", it) }
@@ -372,13 +405,27 @@ fun EditorScreen(photoView: PhotoView) {
         }
     }
 
+    // Closing the photo loses every edit; a tool's own changes are lost by leaving it.
+    val closePhoto = {
+        if (state.doc.layers.isEmpty() && state.doc.crop.isIdentity) state.source = null
+        else confirm = "Close photo? Your edits will be lost." to { state.source = null; state.history = History(); state.bubble = null }
+    }
+    val leaveTool = { if (state.dirty) confirm = "Discard changes?" to state::close else state.close() }
+    // System back: mask mode returns to its tool, a tool closes (asking first if changed), then the photo closes (asking first).
+    BackHandler(state.source != null) {
+        when {
+            confirm != null -> confirm = null
+            state.bubble != null -> state.bubble = null
+            state.draft != null && state.maskMode -> state.maskMode = false
+            state.draft != null || state.crop != null -> leaveTool()
+            else -> closePhoto()
+        }
+    }
+
     Column(Modifier.fillMaxSize().background(Bloom.Canvas)) {
         TopBar(
-            state, exporting,
-            onBack = {
-                if (state.doc.layers.isEmpty()) state.source = null
-                else confirm = "Close photo? Your edits will be lost." to { state.source = null; state.history = History(); state.bubble = null }
-            },
+            state, exporting, exportScale, { exportScale = it },
+            onBack = closePhoto,
             onExport = { png ->
                 val name = "bloom_${System.currentTimeMillis()}"
                 if (png) savePng.launch("$name.png") else saveJpeg.launch("$name.jpg")
@@ -391,6 +438,7 @@ fun EditorScreen(photoView: PhotoView) {
             val selSubject = state.stepIndex?.let { state.draft?.mask?.steps?.getOrNull(it) } as? SubjectStep
             if (state.maskMode && selSubject != null) Pins(selSubject, photoView, transformTick)
             state.draft?.takeIf { !state.maskMode && it.kind == LayerKind.Blur && it.detail.lens }?.let { FocusMark(it.detail, photoView, transformTick) }
+            if (cropOpen) CropOverlay(state, photoView, transformTick)
             val preview = state.preview
             if (state.source == null || preview == null) {
                 // opaque, so a closed photo doesn't show through
@@ -409,8 +457,11 @@ fun EditorScreen(photoView: PhotoView) {
                     modifier = Modifier.align(Alignment.TopEnd).padding(bottom = with(density) { chromePx.toDp() } + 8.dp),
                 )
                 viewport?.let { v ->
+                    val shownCrop = state.crop ?: state.doc.crop
+                    val full = state.crop != null
+                    val thumb = remember(preview, shownCrop, full) { if (shownCrop.isIdentity) preview else cropThumb(preview, shownCrop, full) }
                     Navigator(
-                        preview, v, photoView::centerOn,
+                        thumb, v, photoView::centerOn,
                         Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = with(density) { chromePx.toDp() } + 8.dp),
                     )
                 }
@@ -419,7 +470,7 @@ fun EditorScreen(photoView: PhotoView) {
                     // The chrome floats over the photo. Only the bottom bar, which never changes height, reserves space,
                     // so rows appearing above it never move the photo.
                     onBarTop = { top -> photoView.setBottomInset((canvasBottom - top).roundToInt()) },
-                    onDiscard = { if (state.dirty) confirm = "Discard changes?" to state::close else state.close() },
+                    onDiscard = leaveTool,
                     modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged {
                         chromePx = it.height
                     },
@@ -471,10 +522,10 @@ fun EditorScreen(photoView: PhotoView) {
 }
 
 @Composable
-private fun TopBar(state: EditorState, exporting: Float?, onBack: () -> Unit, onExport: (png: Boolean) -> Unit) {
+private fun TopBar(state: EditorState, exporting: Float?, scale: Float, onScale: (Float) -> Unit, onBack: () -> Unit, onExport: (png: Boolean) -> Unit) {
     val busy = exporting != null
     val open = state.source != null
-    val idle = state.draft == null // undo/redo cover applied edits; inside a tool, Cancel covers the draft
+    val idle = state.draft == null && state.crop == null // undo/redo cover applied edits; inside a tool, Cancel covers the draft
     Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         BarIcon(Icons.Back, "Close photo", open, onBack)
         BarIcon(Icons.Undo, "Undo", open && idle && state.history.canUndo) { state.history = state.history.undo() }
@@ -502,6 +553,8 @@ private fun TopBar(state: EditorState, exporting: Float?, onBack: () -> Unit, on
                 else Text("Export", color = if (open && idle) Bloom.OnPollen else Bloom.Outline, fontWeight = FontWeight.Medium)
             }
             DropdownMenu(menu, { menu = false }, Modifier.background(Bloom.SurfaceHigh)) {
+                // size cycles in place; the menu stays open
+                DropdownMenuItem({ Text("Size: ${(scale * 100).toInt()}%", color = Bloom.OnVariant) }, { onScale(if (scale == 1f) 0.5f else if (scale == 0.5f) 0.25f else 1f) })
                 DropdownMenuItem({ Text("JPEG", color = Bloom.On) }, { menu = false; onExport(false) })
                 DropdownMenuItem({ Text("16-bit PNG (larger, for further editing)", color = Bloom.On) }, { menu = false; onExport(true) })
             }
@@ -543,6 +596,8 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
         val d = state.draft
         val box = Modifier.fillMaxWidth().background(Bloom.Surface, float).border(1.dp, Bloom.Outline, float)
         val rowModifier = box.height(48.dp)
+        val c = state.crop
+        if (c != null) state.preview?.let { CropRows(state, c, it.width.toFloat() / it.height, box) }
         if (d != null && state.maskMode) MaskRows(state, box)
         if (d != null && !state.maskMode && d.kind != LayerKind.Color) DetailRows(state, d, box)
         if (d != null && !state.maskMode && d.kind == LayerKind.Color && state.curvesOpen) CurvesRow(state, box)
@@ -564,10 +619,13 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
                 .border(1.dp, Bloom.Outline, RoundedCornerShape(20.dp)).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (d == null) {
+            if (c != null) {
+                CropBar(state, c, onDiscard)
+            } else if (d == null) {
                 // each tool joins the bar when it works
                 ToolButton("Color", Icons.Adjust, Modifier.weight(1f)) { state.openTool() }
                 ToolButton("Detail", Icons.Detail, Modifier.weight(1f)) { state.openTool(LayerKind.Blur) }
+                ToolButton("Crop", Icons.Crop, Modifier.weight(1f)) { state.openCrop() }
             } else if (state.maskMode) {
                 MaskBar(state)
             } else if (d.kind != LayerKind.Color) {
@@ -617,7 +675,7 @@ private fun ToolButton(label: String, icon: ImageVector, modifier: Modifier, onC
 
 /** Left slot of an open tool's bar: the tool's icon; tapping goes back to the tool list. */
 @Composable
-private fun ToolIcon(icon: ImageVector, desc: String, onClick: () -> Unit) {
+internal fun ToolIcon(icon: ImageVector, desc: String, onClick: () -> Unit) {
     Box(
         Modifier.size(54.dp, 48.dp).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = desc },
         contentAlignment = Alignment.Center,
@@ -748,7 +806,7 @@ private fun shown(p: ColorParam, v: Float): String {
     }
 }
 
-private fun signed(v: Float): String {
+internal fun signed(v: Float): String {
     val i = v.roundToInt()
     return when {
         i > 0 -> "+$i"

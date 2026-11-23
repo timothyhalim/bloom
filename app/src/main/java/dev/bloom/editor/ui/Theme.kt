@@ -114,6 +114,9 @@ object Icons {
     val Blur = icon("M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11zM9 14a3 3 0 0 0 3 3")
     val Sharpen = icon("M12 4l8.5 15h-17zM12 10v4")
     val Depth = icon("M3 20h18M5.5 20L10 5M18.5 20L14 5M8.3 11h7.4")
+    val Crop = icon("M6 2v16h16M2 6h16v16")
+    val Rotate = icon("M20 12a8 8 0 1 1-2.3-5.7M20 3v4h-4")
+    val Flip = icon("M12 3v18M9 7L4 17h5zM15 7l5 10h-5z")
     val Plus = icon("M12 5v14M5 12h14")
     val Minus = icon("M5 12h14")
 }

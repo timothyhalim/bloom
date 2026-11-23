@@ -78,6 +78,7 @@ class Pipeline {
 
     private val colorProgram = link(PASS_VERTEX, COLOR_FRAGMENT)
     private val copyProgram = link(PASS_VERTEX, COPY_FRAGMENT)
+    private val warpProgram = link(PASS_VERTEX, WARP_FRAGMENT)
     private val maskProgram = link(PASS_VERTEX, MASK_FRAGMENT)
     private val dabProgram = link(DAB_VERTEX, DAB_FRAGMENT)
     private val blurProgram = link(PASS_VERTEX, BLUR_FRAGMENT)
@@ -371,18 +372,24 @@ class Pipeline {
     /** The mask texture of layer [id] from the last [render], or 0. Same pixel grid as the result. */
     fun maskTexture(id: Long): Int = masks[id]?.takeIf { it.mask != null }?.tex ?: 0
 
-    /** Renders [layers] and reads the result back (export): 8-bit, or with [deep] a 16-bit float sRGB bitmap, opaque. */
-    fun renderToBitmap(layers: List<Layer>, deep: Boolean = false): Bitmap {
+    /**
+     * Renders [layers] and reads the result back (export): 8-bit, or with [deep] a 16-bit float sRGB bitmap, opaque.
+     * With [warp] (row-major 3×3, output 0..1 -> this source 0..1, projective) the result is resampled into [width]×[height]
+     * (crop, rotation, scale), averaging where it shrinks.
+     */
+    fun renderToBitmap(layers: List<Layer>, deep: Boolean = false, warp: FloatArray? = null, outW: Int = this.width, outH: Int = this.height): Bitmap {
         val t = render(layers)
+        val width = outW
+        val height = outH
         if (!deep) {
-            copyToRead(t)
+            copyToRead(t, GL_RGBA8, warp, width, height)
             val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
             glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buf)
             glBindFramebuffer(GL_FRAMEBUFFER, 0)
             return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { copyPixelsFromBuffer(buf.rewind()) }
         }
         // Float buffers only promise GL_FLOAT readback; halve on the CPU, clamped like the PNG encoder would.
-        copyToRead(t, GL_RGBA16F)
+        copyToRead(t, GL_RGBA16F, warp, width, height)
         val f = ByteBuffer.allocateDirect(width * height * 16).order(ByteOrder.nativeOrder())
         glReadPixels(0, 0, width, height, GL_RGBA, GL_FLOAT, f)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -409,8 +416,10 @@ class Pipeline {
         return FloatArray(3) { c -> (0 until 9).sumOf { buf.get(it * 4 + c).toInt() and 0xFF } / 9f / 255f }
     }
 
-    /** Copies [t] into the read target of [format] and leaves that framebuffer bound for glReadPixels. */
-    private fun copyToRead(t: Int, format: Int = GL_RGBA8) {
+    /** Copies [t] (or resamples it through [warp]) into the read target of [format], [w]×[h], and leaves that framebuffer bound for glReadPixels. */
+    private fun copyToRead(t: Int, format: Int = GL_RGBA8, warp: FloatArray? = null, w: Int = width, h: Int = height) {
+        val width = w
+        val height = h
         if (readW != width || readH != height || readFormat != format) {
             glDeleteTextures(1, read, 0)
             glDeleteFramebuffers(1, read, 1)
@@ -426,7 +435,12 @@ class Pipeline {
         }
         glBindFramebuffer(GL_FRAMEBUFFER, read[1])
         glViewport(0, 0, width, height)
-        glUseProgram(copyProgram)
+        if (warp == null) glUseProgram(copyProgram)
+        else {
+            glUseProgram(warpProgram)
+            glUniformMatrix3fv(glGetUniformLocation(warpProgram, "uWarp"), 1, true, warp, 0)
+            glUniform2f(glGetUniformLocation(warpProgram, "uOut"), width.toFloat(), height.toFloat())
+        }
         drawQuad(t)
     }
 
@@ -440,7 +454,7 @@ class Pipeline {
         glDeleteTextures(1, read, 0)
         glDeleteFramebuffers(1, read, 1)
         freeMasks()
-        listOf(colorProgram, copyProgram, maskProgram, dabProgram, blurProgram, prepareProgram, combineProgram).forEach(::glDeleteProgram)
+        listOf(colorProgram, copyProgram, warpProgram, maskProgram, dabProgram, blurProgram, prepareProgram, combineProgram).forEach(::glDeleteProgram)
     }
 
     /** Writes 0.5 + 3/4 of a half-float step into an RGBA16F target and reads it back: 0.5 means the GPU truncates. */
@@ -807,6 +821,32 @@ uniform sampler2D uTex;
 out vec4 outColor;
 """ + DITHER + """
 void main() { outColor = vec4(dither(texelFetch(uTex, ivec2(gl_FragCoord.xy), 0).rgb), 1.0); }"""
+
+        // Export resampling (crop, rotation, scale): bilinear taps on an n×n grid inside each output pixel, n = source px
+        // per output px (rounded), so shrinking averages every source pixel. Not mipmaps: their texels only line up with
+        // the output when the tile's size is a multiple of the shrink.
+        const val WARP_FRAGMENT = """#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform mat3 uWarp; // output 0..1 -> source 0..1
+uniform vec2 uOut;
+out vec4 outColor;
+""" + DITHER + """
+vec2 at(vec2 o) { vec3 h = uWarp * vec3(o / uOut, 1.0); return h.xy / h.z; }
+void main() {
+    vec2 size = vec2(textureSize(uTex, 0));
+    vec2 p = at(gl_FragCoord.xy) * size;
+    int n = int(clamp(floor(max(length(dFdx(p)), length(dFdy(p))) + 0.5), 1.0, 8.0));
+    vec3 sum = vec3(0.0);
+    for (int j = 0; j < 8; j++) {
+        if (j >= n) break;
+        for (int i = 0; i < 8; i++) {
+            if (i >= n) break;
+            sum += textureLod(uTex, at(gl_FragCoord.xy + (vec2(i, j) + 0.5) / float(n) - 0.5), 0.0).rgb;
+        }
+    }
+    outColor = vec4(dither(sum / float(n * n)), 1.0);
+}"""
 
         // uP: Exposure, Contrast, Highlights, Shadows, Temp, Tint, Saturation, Vibrance, each -1..1.
         // Exposure and white balance work in linear light; tone and saturation on the sRGB-encoded value.

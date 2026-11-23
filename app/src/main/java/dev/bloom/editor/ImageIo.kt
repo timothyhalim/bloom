@@ -17,9 +17,11 @@ import dev.bloom.editor.gl.detailReach
 import dev.bloom.editor.gl.HdrGain
 import dev.bloom.editor.gl.Offscreen
 import dev.bloom.editor.gl.Pipeline
+import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.SubjectStep
 import java.io.File
+import kotlin.math.roundToInt
 
 object ImageIo {
     const val PREVIEW_MAX = 2048
@@ -66,15 +68,17 @@ object ImageIo {
     }
 
     /**
-     * Full-resolution export with [layers] applied tile by tile on the GPU.
-     * JPEG keeps sensor orientation and the copied EXIF orientation tag; 16-bit [png] is drawn upright,
-     * since many viewers ignore orientation in PNG.
+     * Full-resolution export with [layers] applied tile by tile on the GPU, then [crop] and [scale] (output size / full).
+     * JPEG keeps sensor orientation and the copied EXIF orientation tag; 16-bit [png], and anything cropped or scaled,
+     * is drawn upright, since many viewers ignore orientation in PNG.
      * Must run on a thread with no GL context of its own (it creates one). [progress] gets 0..1 on this thread.
      */
     fun export(
         cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>, deband: Boolean, png: Boolean = false,
-        subjects: Map<List<Float>, SubjectMask> = emptyMap(), depth: SubjectMask? = null, progress: (Float) -> Unit = {},
+        subjects: Map<List<Float>, SubjectMask> = emptyMap(), depth: SubjectMask? = null,
+        crop: Crop = Crop(), scale: Float = 1f, progress: (Float) -> Unit = {},
     ) {
+        val warped = !crop.isIdentity || scale != 1f
         // Raw files decode whole (already upright); everything else is read tile by tile in sensor orientation.
         // ponytail: whole raw in memory (~14 B/px peak in LibRaw, then 8 B/px), fine to ~50 MP on 8 GB phones
         // Share of the bar: raw decode (when there is one), then tiles, then the last 5% for encoding.
@@ -107,16 +111,24 @@ object ImageIo {
         val region = BitmapFactory.Options().apply { inPreferredColorSpace = SRGB }
         // ponytail: whole image in memory (8 bytes/px for PNG, ~400 MB at 50 MP); stream rows to the encoder if phones run out
         val upright = Matrix()
-        if (png) {
+        val uprightW = if (rotation % 180 == 0) w else h
+        // Cropped or scaled: tiles cover the output, each rendered from the source rect its corners map back to.
+        val (cw, ch) = crop.size(aspect)
+        val ow = if (warped) (cw * uprightH * scale).roundToInt().coerceAtLeast(1) else 0
+        val oh = if (warped) (ch * uprightH * scale).roundToInt().coerceAtLeast(1) else 0
+        // output 0..1 -> sensor 0..1
+        val toSensor = Crop.mul(FloatArray(9).also { Matrix().apply { orient.invert(this) }.getValues(it) }, crop.matrix(aspect))
+        if (png && !warped) {
             upright.postRotate(rotation.toFloat())
             if (flipped) upright.postScale(-1f, 1f)
             val b = RectF(0f, 0f, w.toFloat(), h.toFloat()).also(upright::mapRect)
             upright.postTranslate(-b.left, -b.top)
         }
-        val out = if (png) Bitmap.createBitmap(if (rotation % 180 == 0) w else h, uprightH, Bitmap.Config.RGBA_F16, false, SRGB)
-        else Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val outW = if (warped) ow else if (png) uprightW else w
+        val outH = if (warped) oh else if (png) uprightH else h
+        val out = Bitmap.createBitmap(outW, outH, if (png) Bitmap.Config.RGBA_F16 else Bitmap.Config.ARGB_8888, false, SRGB)
         val canvas = Canvas(out).apply { concat(upright) }
-        val gpu = if (layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
+        val gpu = if (warped || layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
         val pipeline = gpu?.let { Pipeline() }
         pipeline?.setSubjects(subjects)
         pipeline?.setDepth(depth)
@@ -129,10 +141,36 @@ object ImageIo {
                 })
             }?.let { whole -> gainOf(whole)?.let(pipeline::setGainmap); whole.recycle() }
         }
-        val tiles = ((w + TILE - 1) / TILE) * ((h + TILE - 1) / TILE)
+        // output tiles shrink with the scale, so the source each one reads stays about TILE (×1.4 when rotated)
+        val step = if (warped) (TILE * minOf(scale, 1f)).toInt().coerceAtLeast(64) else TILE
+        val tiles = ((outW + step - 1) / step) * ((outH + step - 1) / step)
         var done = 0
         try {
-            for (y in 0 until h step TILE) for (x in 0 until w step TILE) {
+            if (warped) for (oy in 0 until outH step step) for (ox in 0 until outW step step) {
+                val tw = minOf(step, outW - ox)
+                val th = minOf(step, outH - oy)
+                // this tile, 0..1 -> output 0..1 -> sensor 0..1
+                val tileToSensor = Crop.mul(toSensor, floatArrayOf(tw.toFloat() / ow, 0f, ox.toFloat() / ow, 0f, th.toFloat() / oh, oy.toFloat() / oh, 0f, 0f, 1f))
+                // a projective map takes the tile to a convex quad: its corners bound it
+                val corners = listOf(0f to 0f, 1f to 0f, 0f to 1f, 1f to 1f).mapNotNull { (cx, cy) -> Crop.map(tileToSensor, cx, cy) }
+                val b = RectF(corners.minOf { it.first } * w, corners.minOf { it.second } * h, corners.maxOf { it.first } * w, corners.maxOf { it.second } * h)
+                // + the resampling footprint (a few output px in source px); start on a multiple of 64 so blur mip grids agree
+                val margin = pad + (4f / scale).toInt() + 2
+                val r = Rect(
+                    (maxOf(b.left.toInt() - margin, 0) / 64) * 64, (maxOf(b.top.toInt() - margin, 0) / 64) * 64,
+                    minOf(b.right.toInt() + margin + 1, w), minOf(b.bottom.toInt() + margin + 1, h),
+                )
+                val tile = if (raw != null) Bitmap.createBitmap(raw, r.left, r.top, r.width(), r.height()) else decoder!!.decodeRegion(r, region)
+                pipeline!!.setSource(tile, r.left, r.top, w, h, orient, aspect)
+                pipeline.deband = deband
+                tile.recycle()
+                // sensor 0..1 -> this source rect's texture 0..1
+                val toTex = floatArrayOf(w.toFloat() / r.width(), 0f, -r.left.toFloat() / r.width(), 0f, h.toFloat() / r.height(), -r.top.toFloat() / r.height(), 0f, 0f, 1f)
+                val part = pipeline.renderToBitmap(layers, png, Crop.mul(toTex, tileToSensor), tw, th)
+                canvas.drawBitmap(part, ox.toFloat(), oy.toFloat(), null)
+                part.recycle()
+                progress(tilesFrom + (0.95f - tilesFrom) * ++done / tiles)
+            } else for (y in 0 until h step TILE) for (x in 0 until w step TILE) {
                 val r = Rect(maxOf(x - pad, 0), maxOf(y - pad, 0), minOf(x + TILE + pad, w), minOf(y + TILE + pad, h))
                 var tile = if (raw != null) Bitmap.createBitmap(raw, r.left, r.top, r.width(), r.height()) else decoder!!.decodeRegion(r, region)
                 if (pipeline != null) {
@@ -160,7 +198,7 @@ object ImageIo {
         try {
             tmp.outputStream().use { out.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 95, it) }
             out.recycle()
-            copyExif(cr, src, tmp, upright = png || raw != null)
+            copyExif(cr, src, tmp, upright = png || warped || raw != null)
             cr.openOutputStream(dst)!!.use { o -> tmp.inputStream().use { it.copyTo(o) } }
             progress(1f)
         } finally {

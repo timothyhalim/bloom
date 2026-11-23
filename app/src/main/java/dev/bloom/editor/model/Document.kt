@@ -237,8 +237,8 @@ data class Layer(
     fun with(p: ColorParam, v: Float) = copy(values = values.toMutableList().also { it[p.ordinal] = v })
 }
 
-/** Layers bottom to top, the order they render in. [deband] smooths 8-bit banding in the photo itself. */
-data class Document(val layers: List<Layer> = emptyList(), val deband: Boolean = true) {
+/** Layers bottom to top, the order they render in. [deband] smooths 8-bit banding in the photo itself. [crop] applies after all layers. */
+data class Document(val layers: List<Layer> = emptyList(), val deband: Boolean = true, val crop: Crop = Crop()) {
     fun replace(l: Layer) = copy(layers = layers.map { if (it.id == l.id) l else it })
     fun remove(id: Long) = copy(layers = layers.filterNot { it.id == id })
     fun move(id: Long, toIndex: Int): Document {

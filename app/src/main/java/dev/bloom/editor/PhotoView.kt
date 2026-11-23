@@ -16,6 +16,7 @@ import dev.bloom.editor.gl.DITHER
 import dev.bloom.editor.gl.Pipeline
 import dev.bloom.editor.gl.drawFullQuad
 import dev.bloom.editor.gl.link
+import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Layer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -26,6 +27,8 @@ fun fitScale(imgW: Int, imgH: Int, viewW: Int, viewH: Int): Pair<Float, Float> {
     val view = viewW.toFloat() / viewH
     return if (img > view) 1f to view / img else img / view to 1f
 }
+
+private val IDENTITY = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
 
 /** One-finger touch on the photo while a brush or handle tool is active. */
 enum class ToolTouch { Down, Move, Up, Cancel }
@@ -40,6 +43,11 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
     private val renderer = PhotoRenderer()
     private var imgW = 0
     private var imgH = 0
+    // What is shown: the crop (output) of the photo, in preview px, and output 0..1 <-> upright photo 0..1.
+    private var outW = 0
+    private var outH = 0
+    private var crop = IDENTITY
+    private var uncrop = IDENTITY
     private var zoom = 1f
     private var panX = 0f
     private var panY = Float.NaN // NaN = rest at the top on the next update
@@ -62,8 +70,12 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
     /** Brush ring radius on screen in px, drawn at the finger and in the loupe; 0 = no ring. */
     var brushRadiusPx = 0f
 
-    /** Height of the photo on screen, in px. */
-    val imageHeightPx: Float get() = shown[1] * height
+    /** Space kept clear around the photo at Fit, in px (the Crop tool: its corners stay clear of the screen-edge back gesture). */
+    var margin = 0f
+        set(v) { if (v != field) { field = v; update() } }
+
+    /** Height of the whole (uncropped) photo on screen, in px. */
+    val imageHeightPx: Float get() = shown[1] * height * imgH / outH.coerceAtLeast(1)
 
     init {
         setEGLContextClientVersion(3)
@@ -76,8 +88,33 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
     fun setImage(bmp: Bitmap) {
         imgW = bmp.width
         imgH = bmp.height
+        outW = imgW
+        outH = imgH
+        crop = IDENTITY
+        uncrop = IDENTITY
+        renderer.crop = IDENTITY
         queueEvent { renderer.upload(bmp) }
         reset()
+    }
+
+    /**
+     * Shows [c] of the photo: its crop, or with [full] its whole frame (the Crop tool). Zoom resets when the shape changes.
+     */
+    fun setCrop(c: Crop, full: Boolean = false) {
+        if (imgW == 0) return
+        val aspect = imgW.toFloat() / imgH
+        val m = c.matrix(aspect, full)
+        val (w, h) = if (full) c.frame(aspect) else c.size(aspect)
+        val ow = (w * imgH).toInt().coerceAtLeast(1)
+        val oh = (h * imgH).toInt().coerceAtLeast(1)
+        crop = m
+        uncrop = Crop.inverse(m)
+        renderer.crop = m
+        if (ow != outW || oh != outH) {
+            outW = ow
+            outH = oh
+            reset()
+        } else update()
     }
 
     fun setSubjects(all: Map<List<Float>, SubjectMask>) {
@@ -115,14 +152,24 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
         }
     }
 
-    fun toImage(x: Float, y: Float): Pair<Float, Float> {
-        val t = shown
-        return ((2f * x / width - 1f - t[2]) / t[0] + 1f) / 2f to (1f - (1f - 2f * y / height - t[3]) / t[1]) / 2f
-    }
+    /** View px -> upright photo 0..1. */
+    fun toImage(x: Float, y: Float): Pair<Float, Float> = viewToOutput(x, y).let { (u, v) -> Crop.map(crop, u, v) ?: (-1f to -1f) }
 
-    fun toView(u: Float, v: Float): Pair<Float, Float> {
+    /** Upright photo 0..1 -> view px. */
+    fun toView(u: Float, v: Float): Pair<Float, Float> = (Crop.map(uncrop, u, v) ?: (-1f to -1f)).let { (ou, ov) -> outputToView(ou, ov) }
+
+    /** Upright photo 0..1 -> what is shown, 0..1. */
+    fun toOutput(u: Float, v: Float): Pair<Float, Float> = Crop.map(uncrop, u, v) ?: (-1f to -1f)
+
+    /** What is shown, 0..1 -> view px. */
+    fun outputToView(u: Float, v: Float): Pair<Float, Float> {
         val t = shown
         return ((2f * u - 1f) * t[0] + t[2] + 1f) / 2f * width to (1f - ((1f - 2f * v) * t[1] + t[3])) / 2f * height
+    }
+
+    private fun viewToOutput(x: Float, y: Float): Pair<Float, Float> {
+        val t = shown
+        return ((2f * x / width - 1f - t[2]) / t[0] + 1f) / 2f to (1f - (1f - 2f * y / height - t[3]) / t[1]) / 2f
     }
 
     fun setBottomInset(px: Int) {
@@ -147,10 +194,13 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
         update()
     }
 
-    private fun scales(): Pair<Float, Float> = fitScale(imgW, imgH, width, height).let { (fx, fy) -> fx * zoom to fy * zoom }
+    private fun scales(): Pair<Float, Float> {
+        val k = zoom * (1f - 2f * margin / width.coerceAtLeast(1)).coerceAtLeast(0.1f)
+        return fitScale(outW, outH, width, height).let { (fx, fy) -> fx * k to fy * k }
+    }
 
     private fun update() {
-        if (imgW == 0 || width == 0) return
+        if (outW == 0 || width == 0) return
         val (sx, sy) = scales()
         val cy = insetPx.toFloat() / height // centre of the area above the chrome, in NDC
         val a = 1f - cy // half-height of that area
@@ -212,10 +262,11 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         onTool?.let { tool ->
-            val (u, v) = toImage(e.x, e.y)
+            val (ou, ov) = viewToOutput(e.x, e.y)
+            val (u, v) = Crop.map(crop, ou, ov) ?: (-1f to -1f)
             renderer.finger = if (loupe && e.actionMasked in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE) && (toolDown || e.actionMasked == MotionEvent.ACTION_DOWN)) {
                 val d = resources.displayMetrics.density
-                floatArrayOf(e.x, e.y, u, v, brushRadiusPx, d)
+                floatArrayOf(e.x, e.y, ou, ov, brushRadiusPx, d)
             } else null
             requestRender()
             when (e.actionMasked) {
@@ -240,7 +291,8 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
     @Volatile private var t = floatArrayOf(1f, 1f, 0f, 0f) // scale x, scale y, offset x, offset y
     @Volatile var overlay: Long? = null // layer id
     @Volatile var deband = true
-    @Volatile var finger: FloatArray? = null // view x, y, image u, v, brush ring px, density; null = no loupe
+    @Volatile var finger: FloatArray? = null // view x, y, shown u, v, brush ring px, density; null = no loupe
+    @Volatile var crop = IDENTITY // shown 0..1 -> upright photo 0..1, row-major
 
     private var bitmap: Bitmap? = null // kept to re-upload after EGL context loss
     private var pipeline: Pipeline? = null
@@ -314,6 +366,7 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         val tr = t
         glUniform2f(uScale, tr[0], tr[1])
         glUniform2f(uOffset, tr[2], tr[3])
+        glUniformMatrix3fv(glGetUniformLocation(program, "uCrop"), 1, true, crop, 0)
         glUniform1i(glGetUniformLocation(program, "uOverlay"), if (maskTex == 0) 0 else 1)
         glUniform1i(glGetUniformLocation(program, "uInvert"), if (ol?.mask?.invert == true) 1 else 0)
         glActiveTexture(GL_TEXTURE1)
@@ -367,8 +420,9 @@ uniform sampler2D uMask;
 uniform int uOverlay; // 0 none, 1 red tint + hatch + edge
 uniform bool uInvert;
 uniform vec4 uLoupe; // centre x, y (window px), radius px, zoom; radius 0 = the normal photo pass
-uniform vec2 uFinger; // image uv under the finger
-uniform vec2 uUvPerPx; // image uv per screen px at the current zoom
+uniform vec2 uFinger; // shown uv under the finger
+uniform vec2 uUvPerPx; // shown uv per screen px at the current zoom
+uniform mat3 uCrop; // shown uv -> photo uv (projective)
 uniform vec3 uRing; // brush ring centre x, y (window px) and radius px; radius 0 = none
 out vec4 outColor;
 """ + DITHER + """
@@ -382,6 +436,10 @@ void main() {
         uv = uFinger + vec2(d.x, -d.y) * uUvPerPx / uLoupe.w;
         if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) { outColor = vec4(0.055, 0.055, 0.055, 1.0); return; }
     }
+    vec3 h = uCrop * vec3(uv, 1.0);
+    uv = h.xy / h.z;
+    // the Crop tool shows the whole frame; where the turned or straightened photo doesn't reach is background
+    if (h.z <= 0.0 || uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) { outColor = vec4(0.055, 0.055, 0.055, 1.0); return; }
     vec3 c = texture(uTex, uv).rgb;
     if (uOverlay > 0) {
         float m = texture(uMask, uv).r;

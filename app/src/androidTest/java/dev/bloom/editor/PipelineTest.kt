@@ -10,6 +10,7 @@ import android.graphics.Matrix
 import dev.bloom.editor.model.Blend
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
+import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Curves
 import dev.bloom.editor.model.Detail
 import dev.bloom.editor.model.LayerKind
@@ -219,6 +220,96 @@ class PipelineTest {
         assertTrue("dark half on the right", out.getColor(14, 4).red() < 0.2f && out.getColor(1, 4).red() > 0.7f)
         val dst = java.io.File(ctx.cacheDir, "t_out.png")
         assertEquals(0, androidx.exifinterface.media.ExifInterface(dst).rotationDegrees)
+    }
+
+    // --- Crop (M4.5) ---
+
+    /** Exports [src] (saved as a lossless PNG) as a 16-bit PNG with [crop] and [scale]; returns its pixels, 8-bit. */
+    private fun exportCropped(src: Bitmap, crop: Crop, scale: Float = 1f): Bitmap {
+        val f = java.io.File(ctx.cacheDir, "t_crop.png").apply { outputStream().use { src.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+        val dst = java.io.File(ctx.cacheDir, "t_crop_out.png")
+        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(f), android.net.Uri.fromFile(dst), ctx.cacheDir, emptyList(), false, png = true, crop = crop, scale = scale)
+        val out = android.graphics.BitmapFactory.decodeFile(dst.path)
+        return out.copy(Bitmap.Config.ARGB_8888, false)
+    }
+
+    private fun pattern(w: Int, h: Int) = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+        setPixels(IntArray(w * h) { val x = it % w; val y = it / w; Color.rgb(x * 255 / w, (x xor y) and 0xFF, y and 0xFF) }, 0, w, 0, 0, w, h)
+    }
+
+    private fun smooth(w: Int, h: Int) = gray(w, h) { x, y -> (128 + 100 * Math.sin(x / 37.0) * Math.cos(y / 23.0)).toInt() }
+
+    @Test
+    fun cropExportIsThatRegionPixelForPixel() {
+        // wider than two tiles, so a tile edge falls inside the crop
+        val w = 2500
+        val h = 1300
+        val src = pattern(w, h)
+        val out = exportCropped(src, Crop(left = 0.2f, top = 0.1f, right = 0.9f, bottom = 0.8f))
+        assertEquals(1750, out.width)
+        assertEquals(910, out.height)
+        for (y in 0 until out.height step 7) for (x in 0 until out.width step 3) {
+            val e = src.getPixel(500 + x, 130 + y)
+            val o = out.getPixel(x, y)
+            for (sh in listOf(16, 8, 0)) assertNear("($x,$y)", (e shr sh) and 0xFF, (o shr sh) and 0xFF, 1)
+        }
+    }
+
+    @Test
+    fun quarterTurnExportIsTheRotatedPhotoAndFourTurnsAreTheOriginal() {
+        val w = 300
+        val h = 200
+        val src = pattern(w, h)
+        val out = exportCropped(src, Crop().turned())
+        assertEquals(h, out.width)
+        assertEquals(w, out.height)
+        // clockwise: output (x, y) shows photo (y, h - 1 - x)
+        for (y in 0 until w step 5) for (x in 0 until h step 5) assertNear("($x,$y)", src.getPixel(y, h - 1 - x) and 0xFF, out.getPixel(x, y) and 0xFF, 1)
+        // round trip: turned back to the start, the export is the whole photo at full size
+        val back = exportCropped(src, Crop().turned().turned().turned().turned())
+        assertEquals(w, back.width)
+        assertEquals(h, back.height)
+        assertNear("pixel", src.getPixel(123, 45), back.getPixel(123, 45), 0)
+    }
+
+    @Test
+    fun straightenedExportMatchesBilinearSamplingAcrossTiles() {
+        val w = 2200
+        val h = 1400
+        val src = smooth(w, h)
+        val aspect = w.toFloat() / h
+        val crop = Crop(angle = 7f, vertical = 20f).fit(aspect)
+        val out = exportCropped(src, crop)
+        val m = crop.matrix(aspect)
+        val px = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
+        val at = { x: Int, y: Int -> Color.red(px[y.coerceIn(0, h - 1) * w + x.coerceIn(0, w - 1)]).toDouble() }
+        var worst = 0.0
+        for (y in 0 until out.height step 5) for (x in 0 until out.width step 5) {
+            val (u, v) = Crop.map(m, (x + 0.5f) / out.width, (y + 0.5f) / out.height)!!
+            val sx = u * w - 0.5
+            val sy = v * h - 0.5
+            val x0 = Math.floor(sx).toInt()
+            val y0 = Math.floor(sy).toInt()
+            val fx = sx - x0
+            val fy = sy - y0
+            val e = (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy
+            worst = maxOf(worst, Math.abs(e - Color.red(out.getPixel(x, y))))
+        }
+        assertTrue("worst difference $worst levels", worst <= 3.0)
+    }
+
+    @Test
+    fun halfSizeExportAveragesPixels() {
+        val w = 2000
+        val h = 1000
+        val src = smooth(w, h)
+        val out = exportCropped(src, Crop(), scale = 0.5f)
+        assertEquals(1000, out.width)
+        assertEquals(500, out.height)
+        for (y in 0 until 500 step 9) for (x in 0 until 1000 step 7) {
+            val e = listOf(0 to 0, 1 to 0, 0 to 1, 1 to 1).sumOf { (dx, dy) -> Color.red(src.getPixel(2 * x + dx, 2 * y + dy)) } / 4.0
+            assertEquals("($x,$y)", e, Color.red(out.getPixel(x, y)).toDouble(), 2.0)
+        }
     }
 
     // --- camera raw (M2.5c) ---
