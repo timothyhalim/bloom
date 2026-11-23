@@ -28,6 +28,16 @@ Rules that hold throughout:
 11. **First-send notice** per provider ("This sends the selected area to <host>"), remembered.
 12. **Ask UI**: a text field in the AI tool; result preview as the new layers in draft; ✓ applies, Cancel discards.
 
+### UI decisions (agreed 2026-11-23)
+- **Bar:** mode icons like Liquify's tools (Erase, Fill, Upscale, Background, Ask); a mode shows only when some provider supports it. Each mode has the usual settings box ("Erase / Size").
+- **Choosing a model:** the run button is split: tap runs; ▾ opens a menu of every provider *and model* that can run this mode ("Phone · LaMa", "My server · big-lama", "fal · flux-fill"…), the current one ticked, plus "AI settings…". The choice is remembered per mode; the default per mode is set in Settings. A small label under the run icon names where it runs.
+- **Running remotely locks the AI tool** until the job ends, with live status in the settings box: "Uploading 40 %", "Queued, 3 ahead", "Step 12 / 30", "Downloading result", or the provider's error message, plus Cancel. Status comes from fal's queue status, ComfyUI's websocket progress, and elapsed time for IOPaint (no progress API).
+- **Consent:** a sheet the first time a photo crop goes to a provider (what is sent, where, `Send` / `Not now` / `Use a different provider`, `Don't ask again for <provider>`); reset or hide cloud features in Settings › Privacy.
+- **Settings page:** AI providers (one row per mode → provider + model; `+ Add provider` form: type, URL, key, `Test connection` which must pass and lists the modes and models found before Save), On-device models, Privacy, Appearance, About. Keys: Replace / Forget only, never shown again.
+- **Ask:** the LLM turns a sentence into Bloom layers (Color parameters, masks from Subject / Background / Gradient / Luminance, Blur). Only the text and a summary of the current layers are sent, never the photo. Result is a checklist of layers; `Apply n layers` is one undo step. A vision option (send a small thumbnail for requests like "fix the white balance") is a later, opt-in addition.
+- **Fill (prompted):** in M8 for bring-your-own providers; same plumbing as Erase plus a prompt field.
+- Update `design/mockup.html` to the shipped design after M8.
+
 ### Tests
 - Unit: request/response JSON for each adapter against recorded fixtures (`src/test/resources/ai/*`), edit-ops parsing, clamping and rejection, key encryption round-trip (instrumented, Keystore needs a device).
 - Fake server: a tiny local HTTP server in instrumented tests (`ServerSocket` on 127.0.0.1) replaying fixtures for IOPaint, ComfyUI and fal adapters: success, 4xx, timeout, cancel.
