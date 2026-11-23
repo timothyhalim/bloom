@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bloom UI mockup</title>
+<style>
+:root{
+  --canvas:#0E0E0E;--surface:#171717;--sc:#1F1F1F;--sch:#292929;
+  --on:#EDEDED;--onv:#A8A8A8;--outline:#757575;--outv:#333333;
+  --pri:#FFC857;--onpri:#2A1D00;--pric:#4A3600;--onpric:#FFE2A6;
+  --ter:#9ECBFF;--err:#FFB4AB;--scrim:rgba(0,0,0,.55);--page:#000;
+}
+[data-theme=light]{
+  --canvas:#DADADA;--surface:#FAFAFA;--sc:#F0F0F0;--sch:#E6E6E6;
+  --on:#1A1A1A;--onv:#5C5C5C;--outline:#757575;--outv:#D0D0D0;
+  --pri:#7A5200;--onpri:#FFFFFF;--pric:#FFDEA0;--onpric:#261900;
+  --ter:#1F5F99;--err:#BA1A1A;--scrim:rgba(0,0,0,.4);--page:#CFCFCF;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--page);color:var(--on);overflow-x:hidden;
+  font:14px/20px Roboto,system-ui,-apple-system,"Segoe UI",sans-serif}
+button,select,input[type=text]{font:inherit;color:inherit;background:none;border:0;padding:0}
+button,select{cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
+
+/* mockup navigation (not part of the app) */
+.nav{position:sticky;top:0;z-index:9;display:flex;gap:8px;align-items:center;height:52px;padding:0 8px;
+  background:var(--page);max-width:390px;margin:0 auto}
+.nav .chips{display:flex;gap:6px;overflow-x:auto;flex:1;scrollbar-width:none;padding:2px}
+.nav .chips::-webkit-scrollbar{display:none}
+.nav button{flex:none;height:36px;padding:0 12px;border-radius:18px;border:1px solid var(--outline);color:var(--onv);font-size:12px;font-weight:500}
+.nav button[aria-current=true]{background:var(--on);color:var(--surface);border-color:var(--on)}
+
+.phone{position:relative;width:100%;max-width:390px;margin:0 auto;height:calc(100dvh - 52px);min-height:620px;max-height:844px;
+  background:var(--surface);overflow:hidden}
+.scr{position:absolute;inset:0;display:flex;flex-direction:column}
+
+/* icons */
+.i{display:inline-grid;place-items:center;width:24px;height:24px;flex:none}
+.i svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ib{width:48px;height:48px;display:grid;place-items:center;border-radius:24px;color:var(--on);flex:none}
+.ib:active{background:var(--sch)}
+.ib[aria-disabled=true]{color:var(--outline)}
+.ib.ok{color:var(--pri)}
+.bar .ib[aria-pressed=true] .i{background:var(--pric);color:var(--onpric);border-radius:8px;box-shadow:0 0 0 5px var(--pric)}
+
+/* top bar and canvas */
+.top{height:56px;display:flex;align-items:center;padding:0 4px;flex:none}
+.top .sp{flex:1}
+.pill{height:40px;padding:0 18px;border-radius:14px 4px 14px 4px;background:var(--pri);color:var(--onpri);font-weight:500;margin-right:8px}
+.canvas{position:relative;flex:1;min-height:0;background:var(--canvas);overflow:hidden}
+.canvas[data-cv]{touch-action:none;user-select:none;-webkit-user-select:none}
+.photo{position:absolute;inset:8px;width:calc(100% - 16px);height:calc(100% - 16px)}
+.maskdisp{position:absolute;pointer-events:none}
+.over{overflow:visible}
+.canvas.orig .maskdisp,.canvas.orig .over,.canvas.res .maskdisp,.canvas.nomask .maskdisp{visibility:hidden}
+.canvas:not([data-brush])>.ring,.canvas.busy .hint,.canvas.res>.ring{display:none}
+
+/* floating canvas instruments: navigator, layer rail + bubble, brush ring, loupe */
+.navi{position:absolute;left:8px;bottom:calc(var(--cover,0px) + 8px);width:66px;height:88px;background:var(--sc);border:1px solid var(--outline);border-radius:4px;overflow:hidden;touch-action:none;display:none}
+.navi.show{display:block}
+.navi svg{width:100%;height:100%;display:block}
+.navi .vp{position:absolute;border:2px solid #fff;box-shadow:0 0 0 1px #000,inset 0 0 0 1px #000;pointer-events:none}
+.canvas.busy .navi{bottom:calc(var(--cover,0px) + 84px)}
+.pop .navi{visibility:hidden}
+.rail{position:absolute;top:8px;right:4px;width:44px;max-height:calc(100% - 16px - var(--cover,0px));display:flex;flex-direction:column;transition:opacity .2s}
+.rs{flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;touch-action:none}
+.rs::-webkit-scrollbar{display:none}
+.rail button{width:44px;height:48px;display:grid;place-items:center;flex:none;position:relative}
+.rail .t{width:36px;height:36px;border-radius:8px;background:var(--sc);border:1px solid var(--outline);display:grid;place-items:center;color:var(--on);position:relative;transition:transform .1s,box-shadow .1s}
+.rail .rh .t{height:28px;border-radius:14px;font-size:11px;font-weight:500;grid-auto-flow:column;gap:1px;padding:0 4px}
+.rail .i,.rail .i svg{width:18px;height:18px}
+.rail .rh .i,.rail .rh .i svg,.rail .ra .i,.rail .ra .i svg{width:14px;height:14px}
+.rail .ra{position:absolute;left:4px;width:36px;height:20px;border-radius:10px;background:var(--sc);border:1px solid var(--outline);z-index:1}
+.rail .ra::after{content:"";position:absolute;inset:-12px -4px}
+.rail .ra.up{top:48px}.rail .ra.dn{bottom:0}
+.rail .act .t{border:2px solid var(--pri)}
+.rail .act::before{content:"";position:absolute;left:0;top:16px;width:3px;height:16px;border-radius:2px;background:var(--pri)}
+.rail .pend .t{border:2px dashed var(--pri)}
+.rail .off .i{opacity:.4}
+.rail .off .t::after{content:"";position:absolute;inset:16px 4px;border-top:2px solid var(--on);transform:rotate(-45deg)}
+.rail .drag{z-index:2}
+.rail .drag .t{box-shadow:0 4px 12px rgba(0,0,0,.7);transform:scale(1.15)}
+.rail .mb{position:absolute;right:-3px;bottom:-3px;width:14px;height:14px;border-radius:50%;border:2px solid var(--sc);background:linear-gradient(90deg,var(--on) 50%,var(--outline) 50%)}
+.railtab{position:absolute;top:8px;right:0;width:20px;height:48px;border-radius:8px 0 0 8px;background:var(--sc);border:1px solid var(--outline);border-right:0;display:none;place-items:center}
+.railtab::after{content:"";position:absolute;inset:0 0 0 -28px}
+.railtab .i,.railtab .i svg{width:14px;height:14px}
+.norail .rail{display:none}.norail .railtab{display:grid}
+.canvas.gesture .rail{opacity:.25}
+.canvas.painting .navi,.canvas.painting .hint{display:none}
+.bubble{position:absolute;right:58px;width:236px;background:var(--sch);border:1px solid var(--outline);border-radius:12px;padding:0 0 8px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:3;touch-action:auto}
+.bubble::after{content:"";position:absolute;right:-7px;top:var(--ty);width:12px;height:12px;margin-top:-6px;background:var(--sch);border:1px solid var(--outline);border-left:0;border-bottom:0;transform:rotate(45deg)}
+.bubble .bh{display:flex;align-items:center;height:48px;padding-left:16px;font-weight:500}
+.bubble .bh b{flex:1;font-weight:500}
+.bubble .sr{grid-template-columns:52px 1fr 36px}
+.bubble select{grid-column:2/4;height:36px;border:1px solid var(--outline);border-radius:8px;padding:0 8px;background:var(--sc);color:var(--on);font-size:12px;font-weight:500;width:100%}
+.bubble .ba{display:flex;padding:4px 8px 0}
+.bubble .ba button{flex:1;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;line-height:16px;font-weight:500;color:var(--on);border-radius:8px}
+.bubble .ba .i,.bubble .ba .i svg{width:20px;height:20px}
+.ring{position:absolute;left:50%;top:40%;border-radius:50%;border:1.5px solid #fff;box-shadow:0 0 0 1px #000,inset 0 0 0 1px #000;pointer-events:none;transform:translate(-50%,-50%)}
+.loupe{position:absolute;top:8px;left:8px;width:104px;height:104px;border-radius:50%;border:2px solid var(--on);overflow:hidden;background:#000;box-shadow:0 2px 8px rgba(0,0,0,.6);pointer-events:none}
+.loupe.low{top:auto;bottom:calc(var(--cover,0px) + 8px)}
+.loupe svg,.loupe canvas{position:absolute;inset:0;width:100%;height:100%}
+.loupe .ring{left:50%;top:50%}
+.hint,.origtag{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--cover,0px) + 10px);background:var(--sc);border:1px solid var(--outv);color:var(--on);font-size:12px;padding:6px 12px;border-radius:16px;white-space:nowrap;pointer-events:none}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--cover,0px) + 10px);background:var(--sc);border:1px solid var(--outline);border-radius:16px;padding:0 2px 0 14px;display:flex;align-items:center;font-size:12px;white-space:nowrap;z-index:2}
+.toast .txtbtn{height:40px}
+.origtag{bottom:auto;top:10px;display:none;font-weight:500}
+.canvas.orig .origtag{display:block}
+.canvas.orig .hint{display:none}
+
+/* floating bottom chrome: one bar, plus at most a few slim rows above it */
+.float{position:absolute;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:6px;z-index:2;pointer-events:none}
+#stack{display:flex;flex-direction:column;gap:6px}
+#stack>*,.bar,.popup{pointer-events:auto}
+#pop{position:absolute;inset:0;pointer-events:none}
+.bar,.frow{background:var(--surface);border:1px solid var(--outline);position:relative}
+.bar{display:flex;align-items:center;height:60px;padding:0 4px;border-radius:20px}
+.frow{display:flex;align-items:center;min-height:48px;border-radius:16px}
+.frow.info{min-height:36px;padding:0 14px;font-size:12px;color:var(--onv);gap:8px}
+.frow.col{flex-direction:column;align-items:stretch}
+.frow input[type=text]{flex:1;min-width:0;height:46px;padding:0 14px;font-size:16px}
+.frow input[type=text]::placeholder{color:var(--onv)}
+.frow .sr{flex:1;min-width:0}
+.frow .sr.tight{grid-template-columns:auto 1fr 32px;padding:0 4px 0 10px}
+.frow .sr.bare{grid-template-columns:1fr;padding:0 4px 0 8px}
+.frow .sr.bare span,.frow .sr.bare output{display:none}
+.frow .tc{height:46px;padding:0 6px}
+.frow>.pc{margin:0 3px}
+.frow>.pc:first-child,.frow>.mseg:first-child{margin-left:6px}
+.frow .it{flex:1;min-width:0;font-size:12px;color:var(--onv);padding:0 10px}
+.frow.btns .ib{flex:none;width:48px;border-radius:0 16px 16px 0}
+.mo .i{transition:transform .2s}
+.mo[aria-expanded=true] .i{transform:rotate(180deg)}
+.tool{flex:1;min-width:48px;height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--onv);font-size:11px;line-height:16px;font-weight:500}
+.tl{width:54px;height:48px;display:flex;align-items:center;justify-content:center;flex:none;color:var(--onv)}
+.tl .m{width:36px;height:30px;border-radius:14px 4px 14px 4px;background:var(--pric);color:var(--onpric);display:grid;place-items:center}
+.tl>.i,.tl>.i svg{width:14px;height:14px}
+.tc{flex:1;min-width:0;height:100%;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:0 4px;touch-action:none}
+.tc::-webkit-scrollbar{display:none}
+.tr{display:flex;align-items:center;flex:none}
+.sep{width:1px;height:28px;background:var(--outline);flex:none}
+.pc{flex:none;height:40px;padding:0 10px;border-radius:10px;font-size:12px;font-weight:500;color:var(--onv);display:inline-flex;align-items:center;gap:5px;white-space:nowrap;position:relative}
+.pc::before{content:"";position:absolute;inset:-10px 0}/* 60dp-tall touch area */
+.pc b{font-weight:500;color:var(--on);font-variant-numeric:tabular-nums}
+.pc b:empty{display:none}
+.pc .i,.pc .i svg{width:16px;height:16px}
+.pc.sel{background:var(--sch);color:var(--on);box-shadow:inset 0 -2px 0 var(--pri)}
+.pc.chg::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--pri);flex:none}
+.pc.ch,.pc.ty,.pc.stepchip{border:1px solid var(--outline);color:var(--on)}
+.pc.ch.on{background:var(--pric);border-color:var(--pric);color:var(--onpric)}
+.pc.stepchip.sel{border:2px solid var(--pri)}
+.pc.stepchip.hid{text-decoration:line-through;color:var(--onv);border-style:dashed}
+.pc.stepchip.drag{transform:scale(1.1);box-shadow:0 4px 12px rgba(0,0,0,.7);background:var(--sch);z-index:1}
+.mseg{display:flex;flex:none;border:1px solid var(--outline);border-radius:10px;overflow:hidden}
+.mseg button{height:40px;padding:0 10px;display:flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:var(--onv)}
+.mseg button+button{border-left:1px solid var(--outline)}
+.mseg button[aria-pressed=true]{background:var(--sch);color:var(--on);box-shadow:inset 0 -2px 0 var(--pri)}
+.mseg .i,.mseg .i svg{width:16px;height:16px}
+.maskbtn{min-width:48px;height:48px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;gap:4px;font-size:12px;font-weight:500;color:var(--on);border-radius:12px}
+.maskbtn.on{background:var(--pric);color:var(--onpric);height:40px}
+.mthumb{width:15px;height:20px;border-radius:3px;border:1px solid var(--outline);background:#000}
+.run{display:flex;gap:2px;margin:0 4px 0 2px}
+.run button{height:44px;background:var(--pri);color:var(--onpri);font-weight:500}
+.run .main{padding:0 10px 0 12px;border-radius:16px 0 0 5px;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;font-size:13px;line-height:15px}
+.run .main small{font-size:10px;line-height:12px;font-weight:400}
+.run .caret{width:32px;border-radius:0 5px 16px 0;display:grid;place-items:center}
+.run .caret .i,.run .caret .i svg{width:18px;height:18px}
+.run button:disabled{background:var(--sch);color:var(--outline);cursor:default}
+.rtxt{flex:1;font-weight:500;font-size:13px;line-height:16px;padding-left:4px}
+.rtxt small{display:block;font-size:11px;font-weight:400;color:var(--onv)}
+.txtbtn{height:48px;padding:0 12px;font-weight:500;color:var(--pri)}
+.keep{height:44px;padding:0 14px;margin:0 4px;border-radius:16px 5px 16px 5px;background:var(--pri);color:var(--onpri);font-weight:500;display:inline-flex;align-items:center;gap:4px}
+.sw{width:28px;height:28px;border-radius:8px;border:2px solid var(--on);flex:none;margin-left:8px}
+.sw+.sw{margin-left:4px}
+.graph{flex-direction:column;align-items:stretch;padding:8px 12px 12px;gap:8px}
+.graph svg{width:100%;height:120px;border:1px solid var(--outline);border-radius:8px;background:var(--sc)}
+.checker{background:repeating-conic-gradient(#8a8a8a 0 25%,#5e5e5e 0 50%) 0 0/16px 16px}
+.frow.btns button{flex:1;height:48px;display:flex;align-items:center;justify-content:center;gap:4px;font-size:12px;font-weight:500}
+.frow.btns button+button{border-left:1px solid var(--outline)}
+.frow.btns .i,.frow.btns .i svg{width:18px;height:18px}
+.lr{flex:1;position:relative;height:52px;margin:0 16px 0 24px;touch-action:none}
+.lr .strip{position:absolute;left:0;right:0;top:20px;height:12px;border-radius:4px;border:1px solid var(--outline);background:linear-gradient(to right,#000,#fff)}
+.lr .band{position:absolute;left:0;right:0;top:34px;height:4px;border-radius:2px}
+.lr .k{position:absolute;top:2px;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:var(--surface);border:3px solid var(--on)}
+.lr .k.out{top:39px;width:12px;height:12px;margin-left:-6px;border-width:2px}
+
+/* popups anchored above the floating stack: menus and small bubbles */
+.popup{position:absolute;bottom:calc(100% + 8px);background:var(--sch);border:1px solid var(--outline);border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:4}
+.popup.menu{min-width:244px;padding:4px 0}
+.popup.menu button{display:flex;align-items:center;gap:12px;width:100%;height:48px;padding:0 12px;font-size:14px;text-align:left}
+.popup.menu span.l{flex:1}
+.popup.menu .i,.popup.menu .i svg{width:20px;height:20px}
+.popup .ck{visibility:hidden}
+.popup [aria-checked=true] .ck{visibility:visible}
+.popup hr{border:0;border-top:1px solid var(--outline);margin:4px 0}
+.popup .cl{color:var(--ter)}
+.popup.bub{width:216px;padding:4px 8px}
+.popup.bub::after{content:"";position:absolute;left:var(--tx,27px);bottom:-7px;width:12px;height:12px;margin-left:-6px;background:var(--sch);border:1px solid var(--outline);border-left:0;border-top:0;transform:rotate(45deg)}
+.popup.bub p{margin:8px 8px 0;font-weight:500}
+.popup .ba{display:flex}
+.popup .ba button{flex:1;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;line-height:16px;font-weight:500;border-radius:8px}
+.popup .ba .i,.popup .ba .i svg{width:20px;height:20px}
+
+/* shared controls */
+.chip{height:32px;padding:0 10px;border-radius:8px;border:1px solid var(--outline);display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12px;font-weight:500;color:var(--on);flex:none;position:relative}
+.chip::after{content:"";position:absolute;inset:-8px 0}
+.chip .i,.chip .i svg{width:16px;height:16px}
+.chip.on{background:var(--pric);border-color:var(--pric);color:var(--onpric)}
+.row{display:flex;gap:8px;align-items:center;padding:8px 16px}
+.seg{display:flex;margin:4px 16px 8px;border:1px solid var(--outline);border-radius:12px;overflow:hidden}
+.seg button{flex:1;height:48px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;font-weight:500;color:var(--onv)}
+.seg button+button{border-left:1px solid var(--outline)}
+.seg button[aria-pressed=true]{background:var(--sch);color:var(--on);box-shadow:inset 0 -2px 0 var(--pri)}
+.sr{display:grid;grid-template-columns:76px 1fr 44px;gap:8px;align-items:center;height:48px;padding:0 4px 0 16px;font-size:12px;font-weight:500;color:var(--onv)}
+.sr output{color:var(--on);font-size:14px;font-variant-numeric:tabular-nums;text-align:right;padding-right:4px}
+.sheet .sr{padding:0 16px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:48px;margin:0;background:none;--a:0%;--b:50%}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(to right,var(--outline) var(--a),var(--pri) var(--a),var(--pri) var(--b),var(--outline) var(--b))}
+input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:linear-gradient(to right,var(--outline) var(--a),var(--pri) var(--a),var(--pri) var(--b),var(--outline) var(--b))}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;margin-top:-9px;border-radius:50%;background:var(--surface);border:3px solid var(--on)}
+input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--surface);border:3px solid var(--on)}
+.cta{height:52px;padding:0 20px;border-radius:20px 6px 20px 6px;background:var(--pri);color:var(--onpri);font-weight:500;font-size:14px;display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:1}
+.btn{height:52px;padding:0 20px;border-radius:12px;border:1px solid var(--outline);font-weight:500;display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:1}
+
+/* sheets */
+.scrim{position:absolute;inset:0;background:var(--scrim);z-index:5}
+.sheet{z-index:5;position:absolute;left:0;right:0;bottom:0;background:var(--sc);border-radius:28px 28px 0 0;padding:0 0 calc(12px + env(safe-area-inset-bottom));max-height:86%;overflow-y:auto}
+.sheet::before{content:"";display:block;width:32px;height:4px;border-radius:2px;background:var(--outline);margin:10px auto 6px}
+.sheet h2{margin:0;font-size:22px;line-height:28px;font-weight:500;padding:4px 20px 8px;display:flex;align-items:center}
+.sheet h2>span{flex:1}
+.sheet h3{margin:0;padding:12px 20px 0;font-size:12px;line-height:16px;font-weight:500;color:var(--onv)}
+.kv{display:grid;grid-template-columns:24px 1fr;gap:4px 12px;padding:8px 20px;color:var(--onv)}
+.kv b{color:var(--on);font-weight:500;display:block}
+.kv .i{margin-top:2px}
+.check{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 16px}
+.sheet .check{min-height:48px;padding:0 20px}
+.check input{width:20px;height:20px;accent-color:var(--pri);margin:0}
+.link{color:var(--pri);font-weight:500;height:48px;padding:0 20px;text-decoration:underline}
+
+/* job pill */
+.job{position:absolute;left:12px;right:12px;bottom:calc(var(--cover,0px) + 12px);background:var(--sc);border:1px solid var(--outv);border-radius:16px;padding:10px 4px 10px 16px;display:flex;align-items:center;gap:12px}
+.job .t{flex:1;min-width:0}
+.job .t small{color:var(--onv);font-size:12px;display:block}
+.jbar{height:4px;border-radius:2px;background:var(--outline);margin-top:6px;overflow:hidden}
+.jbar i{display:block;height:100%;width:0;background:var(--pri);transition:width 2.4s linear}
+
+/* home */
+.home{align-items:center;text-align:center;padding:0 24px calc(24px + env(safe-area-inset-bottom))}
+.home .top{width:calc(100% + 48px)}
+.word{font-size:28px;line-height:36px;font-weight:500;letter-spacing:-.5px;margin:16px 0 8px}
+.home p{color:var(--onv);margin:0 auto;max-width:280px}
+.recent{width:100%;text-align:left;margin-top:24px}
+.recent h3{font-size:12px;color:var(--onv);font-weight:500;margin:0 0 8px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.grid div{aspect-ratio:3/4;border-radius:12px}
+.priv{font-size:12px;line-height:16px;color:var(--onv);display:flex;gap:8px;align-items:center;justify-content:center;margin-top:12px}
+.priv .i,.priv .i svg{width:16px;height:16px}
+</style>
+</head>
+<body>
+
+<!-- shared artwork: photo stand-in + logo -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#27335f"/><stop offset=".55" stop-color="#c9727a"/><stop offset="1" stop-color="#f6c177"/></linearGradient>
+    <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b9806f"/><stop offset=".25" stop-color="#4a5670"/><stop offset="1" stop-color="#18202b"/></linearGradient>
+    <path id="balloon" d="M115 62c-31 0-50 23-50 48 0 27 27 46 41 65h18c14-19 41-38 41-65 0-25-19-48-50-48zM106 184h18v14h-18z"/>
+    <g id="post"><rect x="233" y="262" width="4" height="46" fill="#3b2a1c"/><rect x="219" y="258" width="32" height="16" rx="2" fill="#e9e2d0"/><path d="M224 266h22" stroke="#3b2a1c" stroke-width="2"/></g>
+    <g id="scene">
+      <rect width="300" height="270" fill="url(#sky)"/>
+      <circle cx="212" cy="222" r="24" fill="#ffe6ae"/>
+      <path d="M0 250l50-48 38 30 46-58 52 60 40-28 74 44v40H0z" fill="#4d4868"/>
+      <path d="M0 268l70-30 60 22 80-26 90 30v30H0z" fill="#2c3340"/>
+      <rect y="278" width="300" height="122" fill="url(#lake)"/>
+      <path d="M200 286h24M194 296h36M204 308h18" stroke="#ffe6ae" stroke-width="2" opacity=".6" stroke-linecap="round"/>
+      <use href="#balloon" fill="#d9485f"/>
+      <path d="M115 62c-12 14-16 34-9 113M115 62c12 14 16 34 9 113" stroke="#f4d9b0" stroke-width="5" fill="none"/>
+      <path d="M106 184h18v14h-18z" fill="#5a3b22"/>
+    </g>
+    <g id="photo"><use href="#scene"/><use href="#post"/></g>
+    <path id="petal" d="M0 0C0-11 7-18 18-18 18-7 11 0 0 0z"/>
+  </defs>
+</svg>
+
+<div class="nav" aria-label="Mockup states">
+  <div class="chips" id="navchips"></div>
+  <button id="theme" aria-label="Toggle light theme">Light</button>
+</div>
+
+<main class="phone">
+
+<!-- HOME -->
+<section class="scr home" id="s-home">
+  <div class="top"><span class="sp"></span><button class="ib" aria-label="Settings"><span class="i" data-i="gear"></span></button></div>
+  <span style="flex:1"></span>
+  <svg width="96" height="96" viewBox="-22 -22 44 44" role="img" aria-label="Bloom logo">
+    <use href="#petal" fill="var(--on)" opacity=".35" transform="rotate(180)"/>
+    <use href="#petal" fill="var(--on)" opacity=".6" transform="rotate(90)"/>
+    <use href="#petal" fill="var(--on)" opacity=".9" transform="rotate(270)"/>
+    <use href="#petal" fill="var(--pri)"/>
+  </svg>
+  <div class="word">Bloom</div>
+  <p>Edit in layers. Everything runs on your phone.</p>
+  <div class="recent" id="recent" hidden>
+    <h3>Recent</h3>
+    <div class="grid">
+      <div style="background:linear-gradient(160deg,#27335f,#c9727a 60%,#f6c177)"></div>
+      <div style="background:linear-gradient(200deg,#3d5a4c,#9fb88a 55%,#e8e2c8)"></div>
+      <div style="background:linear-gradient(140deg,#1d2b3a,#517a9c 50%,#d8c3a5)"></div>
+    </div>
+  </div>
+  <span style="flex:1.4"></span>
+  <div style="display:flex;width:100%"><button class="cta" data-nav="editor"><span class="i" data-i="image"></span>Open photo</button></div>
+  <div class="priv"><span class="i" data-i="device"></span>Nothing is uploaded unless you choose a cloud action.</div>
+  <button class="txtbtn" id="toggleRecent">Show with recent projects</button>
+</section>
+
+<!-- EDITOR: one screen. The floating bar is the tool list, a tool, or that tool's mask editor -->
+<section class="scr" id="s-editor" hidden>
+  <div class="top">
+    <button class="ib" data-nav="home" aria-label="Close photo"><span class="i" data-i="back"></span></button>
+    <button class="ib" aria-label="Undo"><span class="i" data-i="undo"></span></button>
+    <button class="ib" aria-label="Redo" aria-disabled="true"><span class="i" data-i="redo"></span></button>
+    <button class="ib" id="cmp" aria-label="Compare. Hold to see the original"><span class="i" data-i="compare"></span></button>
+    <span class="sp"></span><button class="pill" data-nav="export">Export</button>
+  </div>
+  <div class="canvas" data-cv id="cv"><div class="photo checker" hidden></div><svg class="photo" viewBox="0 0 300 400"><use href="#photo"/>
+    <g id="fillresult" hidden><use href="#balloon" fill="#2f6fb5"/><path d="M115 62c-12 14-16 34-9 113M115 62c12 14 16 34 9 113" stroke="#ffffff" stroke-width="5" fill="none"/><path d="M106 184h18v14h-18z" fill="#5a3b22"/></g></svg>
+    <canvas class="maskdisp" width="600" height="800"></canvas>
+    <svg class="photo over" viewBox="0 0 300 400" style="pointer-events:none"><g id="gradui"></g><g id="cropui"></g></svg>
+    <div class="hint" id="hint" hidden></div>
+    <div class="job" id="job" hidden role="status">
+      <div class="t"><b id="jobt">Generating…</b><small id="jobd">Bloom Cloud · about 10 s</small><div class="jbar"><i id="jobbar"></i></div></div>
+      <button class="txtbtn" id="jobcancel">Cancel</button>
+    </div>
+  </div>
+  <div class="float" id="float"><div id="stack"></div><div class="bar" id="bar"></div><div id="pop"></div></div>
+  <div id="consent" hidden>
+    <div class="scrim"></div>
+    <div class="sheet" role="dialog" aria-labelledby="ctitle">
+      <h2 id="ctitle"><span>Send to Bloom Cloud?</span></h2>
+      <div class="kv">
+        <span class="i" data-i="image"></span><div><b>What is sent</b>The masked area of this photo, its mask and your prompt. Not the full photo, not its location data.</div>
+        <span class="i" data-i="cloud"></span><div><b>Where it goes</b>Bloom Cloud, processed by fal.ai.</div>
+        <span class="i" data-i="trash"></span><div><b>What is kept</b>Deleted after the result is returned.</div>
+        <span class="i" data-i="credit"></span><div><b>Cost</b>2 credits. You have 12.</div>
+      </div>
+      <label class="check"><input type="checkbox">Don't ask again for Bloom Cloud</label>
+      <div class="row">
+        <button class="btn" id="cno">Not now</button>
+        <button class="cta" id="cyes">Send and generate</button>
+      </div>
+      <button class="link" id="cother">Use a different provider</button>
+    </div>
+  </div>
+</section>
+
+<!-- EXPORT -->
+<section class="scr" id="s-export" hidden>
+  <div class="top"><button class="ib" data-nav="editor" aria-label="Back"><span class="i" data-i="back"></span></button></div>
+  <div class="canvas"><svg class="photo" viewBox="0 0 300 400" preserveAspectRatio="xMidYMin meet" style="height:44%"><use href="#photo"/></svg></div>
+  <div class="scrim" data-nav="editor"></div>
+  <div class="sheet" role="dialog" aria-label="Export">
+    <h2><span>Export</span><button class="ib" data-nav="editor" aria-label="Close"><span class="i" data-i="close"></span></button></h2>
+    <h3>Format</h3>
+    <div class="seg" role="group" aria-label="Format"><button aria-pressed="true">JPEG</button><button>PNG</button><button>WebP</button></div>
+    <label class="sr"><span>Quality</span><input type="range" min="1" max="100" value="90"><output></output></label>
+    <h3>Size (long edge)</h3>
+    <div class="seg" role="group" aria-label="Size"><button aria-pressed="true">Original</button><button>2048</button><button>1080</button></div>
+    <label class="check"><input type="checkbox" checked>Remove location data</label>
+    <div class="row" style="color:var(--onv);font-size:12px;padding-top:0"><span>3000 × 4000 · about 3.2 MB</span></div>
+    <div class="row">
+      <button class="btn"><span class="i" data-i="share"></span>Share</button>
+      <button class="cta" data-nav="editor"><span class="i" data-i="export"></span>Save</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script>
+const I={
+back:"M15 5l-7 7 7 7",undo:"M8 6L4 10l4 4M4 10h10a5 5 0 0 1 0 10h-3",redo:"M16 6l4 4-4 4M20 10H10a5 5 0 0 0 0 10h3",
+compare:"M12 3v18M4 6h5v12H4zM15 6h5v12h-5",layers:"M12 4l9 5-9 5-9-5 9-5zM3 14l9 5 9-5",
+export:"M12 4v11M8 11l4 4 4-4M5 15v4h14v-4",share:"M12 15V4M8 8l4-4 4 4M5 13v6h14v-6",
+select:"M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M12 10.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z",
+half:"M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18M12 7.5l-6.5 3.5M12 12l-8.5 4.5M12 16.5l-5 2.7",
+adjust:"M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4",blur:"M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z",sharpen:"M12 4l9 16H3z",
+erase:"M14 5l6 6-8 8H8l-4-4 10-10zM9 10l6 6M12 19h8",liquify:"M3 9c3-4 6 4 9 0s6-4 9 0M3 16c3-4 6 4 9 0s6-4 9 0",
+crop:"M7 3v14h14M3 7h14v14",ai:"M11 4l1.8 5.2L18 11l-5.2 1.8L11 18l-1.8-5.2L4 11l5.2-1.8zM18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z",
+eye:"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+eyeoff:"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM4 4l16 16",close:"M6 6l12 12M18 6L6 18",
+check:"M5 12l5 5 9-10",plus:"M12 5v14M5 12h14",minus:"M5 12h14",down:"M7 10l5 5 5-5",left:"M15 5l-7 7 7 7",up:"M7 14l5-5 5 5",
+cloud:"M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A4.5 4.5 0 0 1 17 18z",
+device:"M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2",
+server:"M4 5h16v6H4zM4 13h16v6H4zM7.5 8h.01M7.5 16h.01",key:"M8 11a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM10.2 11.8L19 3M16 6l3 3M13 9l2 2",
+gear:"M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1",
+flag:"M6 21V4h11l-2 4 2 4H6",invert:"M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18M12 7h5M12 12h8M12 17h5",
+image:"M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4",brush:"M15 4l5 5-9 9H6v-5l9-9z",retry:"M19 12a7 7 0 1 1-2-5M19 4v4h-4",trash:"M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13",
+upscale:"M4 20h7v-7H4zM14 4h6v6M20 4l-8 8",rotl:"M4 9a8 8 0 1 1 2 8M4 4v5h5",rotr:"M20 9a8 8 0 1 0-2 8M20 4v5h-5",fliph:"M12 3v18M8 7l-5 5 5 5zM16 7l5 5-5 5z",flipv:"M3 12h18M7 8l5-5 5 5zM7 16l5 5 5-5z",orient:"M5 3h9v18H5zM14 12h7v9h-7",chat:"M4 5h16v11H9l-5 4z",
+credit:"M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8l3 4-3 4-3-4z"};
+const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
+const ic=(n,c='')=>`<span class="i ${c}" data-i="${n}"></span>`;
+const icons=r=>$$('[data-i]',r).forEach(e=>{if(!e.firstChild)e.innerHTML=`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${I[e.dataset.i]}"/></svg>`});
+const Q=new URLSearchParams(location.search); // screenshot presets, e.g. ?demo&theme=light&tool=color&mask&steps=luminance+,subject-&sel=0
+if(Q.has('demo'))window.onerror=m=>document.body.insertAdjacentHTML('afterbegin','<pre style="position:fixed;z-index:99;color:red;background:#fff;margin:0">'+m+'</pre>');
+const cv=$('#cv'),float=$('#float');
+
+// ---------- state ----------
+const p=(n,v,d=0,min=-100,max=100,u='')=>({n,v,d,min,max,u});
+const BP={size:p('Size',40,40,4,200,' px'),soft:p('Softness',50,50,0,100,'%'),flow:p('Flow',100,100,1,100,'%'),feather:p('Feather',0,0,0,100,' px')};
+const Bs={get size(){return BP.size.v},get soft(){return BP.soft.v},get flow(){return BP.flow.v}};
+const TOOLS=['color','detail','liquify','crop','ai'];
+// Crop is a document transform, not a layer. Rectangle in image units (300 x 400), q = free perspective corner offsets
+function newCrop(){return{name:'Crop',icon:'crop',mode:'crop',aspect:'Free',portrait:true,r:{x0:0,y0:0,x1:300,y1:400},angle:p('Angle',0,0,-45,45,'°'),rot:0,fh:false,fv:false,
+  pv:p('Vertical',0),ph:p('Horizontal',0),sel:0,free:false,q:[[0,0],[0,0],[0,0],[0,0]],scale:p('Scale',100,100,50,150,'%'),fill:true}}
+const ASPECTS=['Free','Original','1:1','4:5','3:2','16:9'];
+const TD={
+  color:{name:'Color',icon:'adjust',sel:0,curves:false,params:[p('Exposure',35),p('Contrast',0),p('Highlights',-20),p('Shadows',15),p('Temp',0),p('Tint',0),p('Saturation',0),p('Vibrance',0)]},
+  detail:{name:'Detail',icon:'blur',choice:0,sel:0,lens:true,sets:[[p('Amount',18,0,0,100)],[p('Amount',40,0,0,100),p('Radius',2,2,1,20,' px'),p('Clarity',10)]]},
+  liquify:{name:'Liquify',icon:'liquify',choice:0,sel:0,params:[BP.size,p('Strength',50,50,1,100,'%')]},
+  crop:newCrop(),
+  ai:{name:'AI',icon:'ai',mode:'erase',x:2,bg:'blur',bgAmt:p('Amount',30,30,0,100),asked:false,prov:{},text:{fill:'a blue hot-air balloon',background:'a snowy mountain valley at dawn',ask:'make it warmer and blur the background'}},
+};
+const MODES={ // each mode lists only the providers that support it
+  erase:{n:'Erase object',icon:'erase',kind:'retouch',verb:'Erase',prov:[['device','On device','on device'],['cloud','Bloom Cloud · 1 credit','1 credit'],['server','My IOPaint server','my server']]},
+  fill:{n:'Generative fill',icon:'ai',kind:'ai',verb:'Generate',prov:[['cloud','Bloom Cloud · 2 credits','2 credits'],['key','My fal key','my fal key'],['server','My ComfyUI server','my server']]},
+  upscale:{n:'Upscale',icon:'upscale',verb:'Upscale',prov:[['device','On device','on device'],['cloud','Bloom Cloud · 1 credit','1 credit']]},
+  background:{n:'Replace background',icon:'image',kind:'background',verb:'Replace',prov:[['device','On device','on device']],gen:[['cloud','Bloom Cloud · 2 credits','2 credits'],['server','My ComfyUI server','my server']]},
+  ask:{n:'Ask',icon:'chat',verb:'Ask',prov:[['server','My llama.cpp server','my server'],['cloud','Bloom Cloud · 1 credit','1 credit']]}};
+const KIND={sharpen:'Sharpen',retouch:'Retouch',color:'Color',blur:'Blur',ai:'Fill',background:'Background',liquify:'Liquify',photo:'Photo'};
+const ICON={retouch:'erase',color:'adjust',background:'image'},EDIT={color:'color',blur:'detail',sharpen:'detail',retouch:'ai',ai:'ai',background:'ai',liquify:'liquify'};
+let tool=null,mask=false,more=false,dirty=false,msel='brush',menu=null,fs='prompt',editing=null,timer;
+const aiArea=()=>tool==='ai'&&(TD.ai.mode==='erase'||TD.ai.mode==='fill'); // AI modes that act on the layer's mask
+const hasMask=()=>tool&&tool!=='crop'&&(tool!=='ai'||aiArea());
+const layerKind=()=>tool==='ai'?MODES[TD.ai.mode].kind:tool==='detail'?['blur','sharpen'][TD.detail.choice]:tool==='crop'?null:tool;
+
+// ---------- layer rail ----------
+const thumb=(k,cls,m)=>`<button class="rt ${cls}" data-k="${k}"><span class="t"${k==='photo'?' style="background:linear-gradient(160deg,#27335f,#c9727a 60%,#f6c177)"':''}>${k==='photo'?'':ic(ICON[k]||k)}<span class="mb"${m?'':' hidden'}></span></span></button>`;
+cv.insertAdjacentHTML('beforeend',`<div class="origtag" role="status">Original</div>
+  <div class="navi" aria-hidden="true"><svg viewBox="0 0 300 400" preserveAspectRatio="none"><use href="#photo"/></svg><div class="vp"></div></div>
+  <div class="rail" role="group" aria-label="Layers, top first"><button class="rh" aria-label="Hide layers"><span class="t">${ic('layers')}<span class="n"></span></span></button><button class="ra up" hidden aria-label="Scroll layers up">${ic('up')}</button><div class="rs"></div><button class="ra dn" hidden aria-label="Scroll layers down">${ic('down')}</button></div>
+  <button class="railtab" aria-label="Show layers">${ic('left')}</button>
+  <div class="toast" hidden role="status"><span></span><button class="txtbtn">Undo</button></div>
+  <div class="ring"></div><div class="loupe" hidden aria-hidden="true"><svg><use href="#photo"/></svg><canvas width="208" height="208"></canvas><div class="ring"></div></div>`);
+const rail=$('.rail',cv),rs=$('.rs',rail);
+function setLayers(list){rs.innerHTML=list.split(',').map(s=>{const[k,f='']=s.split(':');return thumb(k,f.includes('a')?'act':'',f.includes('m'))}).join('');icons(rs);railLabels()}
+function railLabels(){
+  $$('.rt',rs).forEach(t=>t.setAttribute('aria-label',KIND[t.dataset.k]+' layer'+($('.mb:not([hidden])',t)?', has mask':'')+(t.classList.contains('off')?', hidden':'')+(t.classList.contains('pend')?', not applied yet':'')));
+  $('.rh .n',rail).textContent=$$('.rt:not(.pend):not([data-k=photo])',rs).length;arrows();
+}
+function arrows(){$('.up',rail).hidden=rs.scrollTop<2;$('.dn',rail).hidden=rs.scrollTop>rs.scrollHeight-rs.clientHeight-2}
+function pend(){ // the layer being made shows dashed, directly above the active layer
+  $$('.pend',rs).forEach(x=>x.remove());const k=tool&&!editing&&layerKind();
+  if(k){($('.act',rs)||rs.firstChild).insertAdjacentHTML('beforebegin',thumb(k,'pend',hasSel()));icons(rs)}
+  railLabels();
+}
+let toasts=0,toastT; // the toast with Undo shows the first few times only
+function toggleLayer(t,quiet){
+  const off=t.classList.toggle('off'),el=$('.toast',cv);closeBubble();railLabels();if(navigator.vibrate)navigator.vibrate(10);
+  if(quiet||toasts++>=3)return;
+  $('span',el).textContent=`${KIND[t.dataset.k]} layer ${off?'hidden':'shown'}`;el.hidden=false;$('button',el).onclick=()=>{toggleLayer(t,true);el.hidden=true};
+  clearTimeout(toastT);toastT=setTimeout(()=>el.hidden=true,Q.has('demo')?1e6:3000);
+}
+let bub=null;
+function closeBubble(){if(bub){bub.remove();bub=null}popClass()}
+function popClass(){document.body.classList.toggle('pop',!!bub||!!menu)}
+function openBubble(t){
+  closeBubble();const k=t.dataset.k,name=KIND[k];
+  $$('.rt',rs).forEach(x=>x.classList.toggle('act',x===t));
+  cv.insertAdjacentHTML('beforeend',`<div class="bubble" role="dialog" aria-label="${name} layer settings">
+    <div class="bh"><b>${name}</b><button class="ib bv" aria-label="Visible" aria-pressed="${!t.classList.contains('off')}">${ic(t.classList.contains('off')?'eyeoff':'eye')}</button></div>
+    <label class="sr"><span>Opacity</span><input type="range" min="0" max="100" value="${t.dataset.o||100}"><output data-u="%"></output></label>
+    <label class="sr"><span>Blend</span><select><option>Normal</option><option>Multiply</option><option>Screen</option><option>Overlay</option><option>Soft light</option></select></label>
+    <div class="ba"><button class="be">${ic('brush')}Edit</button><button class="bm">${ic('half')}Edit mask</button><button class="bd">${ic('trash')}Delete</button></div></div>`);
+  bub=$('.bubble',cv);icons(bub);popClass();const s=$('input',bub);paint(s);
+  s.oninput=()=>{paint(s);t.dataset.o=s.value};
+  $('.bv',bub).onclick=e=>{const off=t.classList.toggle('off');e.currentTarget.setAttribute('aria-pressed',!off);e.currentTarget.innerHTML=ic(off?'eyeoff':'eye');icons(bub);railLabels()};
+  $('.bd',bub).onclick=()=>{t.remove();closeBubble();railLabels()};
+  const edit=m=>{const md={retouch:'erase',ai:'fill',background:'background'}[k];if(md)TD.ai.mode=md;if(k==='blur'||k==='sharpen')TD.detail.choice=+(k==='sharpen');
+    closeBubble();setTool(EDIT[k],t);if(m){if($('.mb:not([hidden])',t)&&!STEPS.length)newStep(k==='blur'?'background':'subject','add');mask=hasMask()}ui()};
+  $('.be',bub).onclick=()=>edit(false);$('.bm',bub).onclick=()=>edit(true); // Edit mask: the owning tool opens with its mask editor up
+  const cr=cv.getBoundingClientRect(),tr=t.getBoundingClientRect(),cy=tr.top+tr.height/2-cr.top,h=bub.offsetHeight;
+  const top=Math.max(4,Math.min(cr.height-h-4-(parseFloat(cv.style.getPropertyValue('--cover'))||0),cy-40));bub.style.top=top+'px';bub.style.setProperty('--ty',Math.max(14,Math.min(h-14,cy-top))+'px');
+}
+{let d=null,auto=0; // tap = bubble, plain drag = scroll, long-press then drag = reorder
+  rs.addEventListener('scroll',()=>{arrows();closeBubble()});
+  $('.up',rail).onclick=()=>rs.scrollBy({top:-48,behavior:'smooth'});$('.dn',rail).onclick=()=>rs.scrollBy({top:48,behavior:'smooth'});
+  const place=()=>{const o=$$('.rt:not([data-k=photo])',rs).find(x=>{const r=x.getBoundingClientRect();return x!==d.t&&d.cy>r.top&&d.cy<r.bottom});
+    if(o)rs.insertBefore(d.t,o.compareDocumentPosition(d.t)&4?o:o.nextSibling)};
+  rs.addEventListener('pointerdown',e=>{const t=e.target.closest('.rt');if(!t)return;
+    rs.setPointerCapture(e.pointerId);d={t,x:e.clientX,y:e.clientY,cy:e.clientY,st:rs.scrollTop,moved:false,drag:false};
+    if(t.dataset.k!=='photo'&&!t.classList.contains('pend'))d.h=setTimeout(()=>{if(!d||d.moved)return;
+      d.drag=true;t.classList.add('drag');closeBubble();if(navigator.vibrate)navigator.vibrate(10); // lift
+      auto=setInterval(()=>{const r=rs.getBoundingClientRect();if(d.cy<r.top+24)rs.scrollTop-=6;else if(d.cy>r.bottom-24)rs.scrollTop+=6;else return;place()},16)},400)});
+  rs.addEventListener('pointermove',e=>{if(!d)return;d.cy=e.clientY;const dx=e.clientX-d.x,dy=e.clientY-d.y;
+    if(!d.moved&&!d.drag&&Math.hypot(dx,dy)>8){d.moved=true;clearTimeout(d.h); // the first 8dp decide: sideways = show/hide, vertical = scroll
+      d.swipe=Math.abs(dx)>Math.abs(dy)&&d.t.dataset.k!=='photo'&&!d.t.classList.contains('pend')}
+    if(d.drag)place();
+    else if(d.swipe){$('.t',d.t).style.transform=`translateX(${Math.max(-10,Math.min(10,dx*.3))}px)`;if(!d.done&&Math.abs(dx)>24){d.done=true;toggleLayer(d.t)}} // follows the finger with resistance; toggles once past 24dp
+    else if(d.moved)rs.scrollTop=d.st-dy});
+  const up=()=>{if(!d)return;clearTimeout(d.h);clearInterval(auto);d.t.classList.remove('drag');$('.t',d.t).style.transform='';const t=d.t,tap=!d.moved&&!d.drag;d=null;
+    if(tap&&t.dataset.k!=='photo'&&!t.classList.contains('pend'))bub&&t.classList.contains('act')?closeBubble():openBubble(t)};
+  rs.addEventListener('pointerup',up);rs.addEventListener('pointercancel',up);
+}
+document.addEventListener('click',e=>{if(e.target.closest('.rh,.railtab')){closeBubble();document.body.classList.toggle('norail')}});
+
+// ---------- sliders ----------
+const fmt=(v,bi)=>bi?(v>0?'+':v<0?'−':'')+Math.abs(v):''+v;
+const val=P=>fmt(P.v,P.min<0)+P.u;
+function paint(s){ // fill from zero (centre for ± ranges), value always readable
+  const min=+s.min,max=+s.max,v=+s.value,pc=(v-min)/(max-min)*100,bi=min<0,z=bi?50:0;
+  s.style.setProperty('--a',Math.min(pc,z)+'%');s.style.setProperty('--b',Math.max(pc,z)+'%');
+  const o=$('output',s.parentElement);o.textContent=fmt(v,bi)+(o.dataset.u||'');s.setAttribute('aria-valuetext',o.textContent);
+}
+$$('#s-export input[type=range]').forEach(s=>{paint(s);s.oninput=()=>paint(s)});
+$$('.seg').forEach(g=>g.addEventListener('click',e=>{const b=e.target.closest('button');if(b)$$('button',g).forEach(x=>x.setAttribute('aria-pressed',x===b))}));
+
+// ---------- the floating bar: tool list -> tool -> that tool's mask editor ----------
+let H=[],REG=[],skipClick=false;
+const h=f=>(H.push(f),`data-h="${H.length-1}"`);
+const chipP=(P,on,pick)=>(REG.push(P),`<button class="pc${on?' sel':''}${P.v!==P.d?' chg':''}" data-pc="${REG.length-1}" aria-pressed="${on}" ${h(pick)}>${P.n}<b>${on?val(P):''}</b></button>`);
+const choice=(label,on,f)=>`<button class="pc ch${on?' on':''}" aria-pressed="${on}" ${h(f)}>${label}</button>`;
+const moreBtn=()=>`<button class="ib mo" aria-expanded="${more}" aria-label="More settings" ${h(()=>{more=!more;ui()})}>${ic('down')}</button>`;
+const sr=(P,cls='')=>(REG.push(P),`<label class="sr ${cls}"><span>${P.n}</span><input type="range" min="${P.min}" max="${P.max}" value="${P.v}" data-p="${REG.length-1}"><output data-u="${P.u}"></output></label>`);
+const srow=(P,m)=>`<div class="frow">${sr(P)}${m?moreBtn():''}</div>`;
+const info=t=>`<div class="frow info">${t}</div>`;
+const prompt=(key,ph)=>`<div class="frow"><input type="text" data-t="${key}" value="${TD.ai.text[key]}" placeholder="${ph}" aria-label="${ph}"></div>`;
+const left=(icon,label,f)=>`<button class="tl" aria-label="${label}" ${h(f)}>${ic('left')}<span class="m">${ic(icon)}</span></button>`;
+const maskBtn=()=>{const n=STEPS.length,on=hasSel();return `<button class="maskbtn${on?' on':''}" aria-label="${on?`Mask: ${n} step${n===1?'':'s'}${inv?', inverted':''}. Edit`:'Mask: none. Add'}" ${h(()=>{mask=true;more=false;msel='brush';menu=null;ui()})}>${on?`<canvas class="mthumb" width="18" height="24"></canvas>${n}`:ic('half')}</button>`};
+const okBtn=(label,f)=>`<button class="ib ok" aria-label="${label}" ${h(f)}>${ic('check')}</button>`;
+
+const rst=(what,f)=>`<button class="ib" aria-label="Reset ${what}" ${h(()=>{f();dirty=true;ui()})}>${ic('retry')}</button>`;
+const row=(...parts)=>`<div class="frow">${parts.join('')}</div>`; // one control row
+const crow=c=>`<div class="frow"><div class="tc">${c}</div></div>`; // one slim chip row, scrolls sideways
+// Rule: the bar holds what you edit (modes or parameters). The rows above hold how: slider, toggles, actions, Reset.
+function toolView(){
+  const t=TD[tool];let chips='',rows=[],right=(hasMask()?maskBtn():'')+okBtn(`Apply as ${KIND[layerKind()]||t.name} layer`,apply);
+  if(tool==='color'){
+    const P=t.params[t.sel];
+    chips=t.params.map((X,i)=>chipP(X,!t.curves&&i===t.sel,()=>{t.sel=i;t.curves=false;ui()})).join('')+`<button class="pc${t.curves?' sel':''}" aria-pressed="${t.curves}" ${h(()=>{t.curves=!t.curves;ui()})}>Curves</button>`;
+    rows=[t.curves?`<div class="frow graph"><div class="row" style="padding:0">${['RGB','R','G','B'].map((c,i)=>`<button class="chip${i?'':' on'}">${c}</button>`).join('')}</div>
+      <svg viewBox="0 0 200 100" preserveAspectRatio="none" role="img" aria-label="Tone curve"><path d="M50 0v100M100 0v100M150 0v100M0 25h200M0 50h200M0 75h200" stroke="var(--outv)" vector-effect="non-scaling-stroke"/><path d="M0 100C40 92 60 70 100 46S160 10 200 0" fill="none" stroke="var(--on)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg></div>`:row(sr(P),rst(P.n,()=>P.v=P.d))];
+  }else if(tool==='detail'){
+    const set=t.sets[t.choice],P=set[t.sel],R=rst(P.n,()=>P.v=P.d);
+    chips=['Blur','Sharpen'].map((n,i)=>choice(n,i===t.choice,()=>{t.choice=i;t.sel=0;dirty=true;ui()})).join('');
+    rows=t.choice?[crow(set.map((X,i)=>chipP(X,i===t.sel,()=>{t.sel=i;ui()})).join('')),row(sr(P),R)]
+      :[row(`<div class="mseg" role="group" aria-label="Blur type">${['Gaussian','Lens'].map((n,i)=>`<button aria-pressed="${t.lens===!!i}" ${h(()=>{t.lens=!!i;dirty=true;ui()})}>${n}</button>`).join('')}</div>`,sr(P,'tight'),R)];
+  }else if(tool==='liquify'){
+    chips=['Push','Bloat','Pinch','Twirl','Restore'].map((n,i)=>choice(n,i===t.choice,()=>{t.choice=i;ui()})).join('');
+    rows=[...(more?[srow(BP.soft)]:[]),row(t.params.map((X,i)=>chipP(X,i===t.sel,()=>{t.sel=i;ui()})).join(''),sr(t.params[t.sel],'bare'),moreBtn())];
+  }else if(tool==='crop'){
+    const m=t.mode,act=(l,f,i)=>`<button class="pc ty" ${h(()=>{f();dirty=true;ui()})}>${i?ic(i):''}${l}</button>`,R=rst(m,()=>cropReset(m)),
+      inf=x=>`<div class="frow"><span class="it">${x}</span>${R}</div>`;
+    chips=[['crop','Crop'],['straighten','Straighten'],['rotate','Rotate'],['persp','Perspective'],['scale','Scale']].map(([k,l])=>`<button class="pc ch${m===k?' on':''}${cropChanged(k)?' chg':''}" aria-pressed="${m===k}" ${h(()=>{t.mode=k;ui()})}>${l}</button>`).join('');
+    if(m==='crop')rows=[crow(ASPECTS.map(a=>choice(a,t.aspect===a,()=>{t.aspect=a;aspectRect();dirty=true;ui()})).join('')+act(t.portrait?'Portrait':'Landscape',()=>{t.portrait=!t.portrait;aspectRect()},'orient')),inf('<span id="cropsize"></span> · drag corners or edges')];
+    if(m==='straighten')rows=[row(sr(t.angle,'tight'),act('Auto',()=>{t.angle.v=-4},'ai'),R)];
+    if(m==='rotate')rows=[`<div class="frow btns">${[['rotl','90° left',()=>t.rot=(t.rot+3)%4],['rotr','90° right',()=>t.rot=(t.rot+1)%4],['fliph','Flip H',()=>t.fh=!t.fh],['flipv','Flip V',()=>t.fv=!t.fv]].map(([i,l,f])=>`<button ${h(()=>{f();dirty=true;ui()})}>${ic(i)}${l}</button>`).join('')}${R}</div>`];
+    if(m==='persp')rows=[crow([t.pv,t.ph].map((X,i)=>chipP(X,!t.free&&i===t.sel,()=>{t.sel=i;t.free=false;ui()})).join('')+choice('Free',t.free,()=>{t.free=!t.free;ui()})+act('Auto',()=>{t.pv.v=14},'ai')),
+      t.free?inf('Drag the four corners on the photo'):row(sr([t.pv,t.ph][t.sel]),R)];
+    if(m==='scale')rows=[row(sr(t.scale,'tight'),choice('Fill edges',t.fill,()=>{t.fill=!t.fill;dirty=true;ui()}),R)];
+    right=okBtn('Apply crop',apply);
+  }else{ // AI: the bar holds only the mode; the run button takes the place of the check
+    const m=MODES[t.mode],gen=t.mode==='background'&&t.bg==='prompt',list=gen?m.gen:m.prov,pi=Math.min(t.prov[t.mode+gen]||0,list.length-1),need=aiArea()&&!hasSel();
+    chips=`<button class="pc ch on" aria-haspopup="menu" aria-label="AI mode: ${m.n}. Change" ${h(()=>{menu=menu==='modes'?null:'modes';ui()})}>${ic(m.icon)}${m.n}${ic('down')}</button>`;
+    if(aiArea())rows=[...(t.mode==='fill'?[prompt('fill','Describe what to add, or leave empty')]:[]),...(more?[srow(BP.soft),srow(BP.flow)]:[]),srow(BP.size,true)];
+    if(t.mode==='upscale')rows=[row([2,4].map(x=>choice(x+'×',t.x===x,()=>{t.x=x;ui()})).join(''),`<span class="it">3000 × 4000 → ${3000*t.x} × ${4000*t.x} px · no new layer</span>`)];
+    if(t.mode==='background')rows=[crow(['blur','color','image','prompt'].map(b=>choice(b[0].toUpperCase()+b.slice(1),t.bg===b,()=>{t.bg=b;ui()})).join('')),
+      t.bg==='prompt'?prompt('background','Describe the new background'):t.bg==='blur'?row(sr(t.bgAmt),rst('Amount',()=>t.bgAmt.v=t.bgAmt.d)):t.bg==='color'?`<div class="frow info" style="min-height:48px">Color${['#1f1f1f','#ffffff','#9ecbff','#f6c177','#3d5a4c'].map(c=>`<span class="sw" style="background:${c}"></span>`).join('')}</div>`:`<div class="frow"><span class="it">Replace opens your photos to pick the image.</span></div>`];
+    if(t.mode==='ask')rows=[...(t.asked?[`<div class="frow col" role="group" aria-label="Layers this will create"><label class="check"><input type="checkbox" checked>Color · Temp +18</label><label class="check"><input type="checkbox" checked>Blur · Background · Lens 20</label></div>`]:[]),prompt('ask','Describe the edit')];
+    const asked=t.mode==='ask'&&t.asked;
+    right=(aiArea()?maskBtn():'')+`<div class="run"><button class="main" ${need?'disabled':''} ${h(run)}>${asked?'Apply':m.verb}<small>${asked?'2 layers':list[pi][2]}</small></button><button class="caret" aria-haspopup="menu" aria-label="Choose where ${m.verb} runs" ${h(()=>{menu=menu==='prov'?null:'prov';ui()})}>${ic('down')}</button></div>`;
+  }
+  return [left(t.icon,`${t.name}. Back to tools`,leave)+`<div class="tc">${chips}</div><div class="tr">${right}</div>`,rows];
+}
+function cropReset(m){const t=TD.crop,d=newCrop(); // Reset acts on the mode that is open
+  if(m==='crop')Object.assign(t,{r:d.r,aspect:d.aspect,portrait:d.portrait});if(m==='straighten')t.angle.v=0;if(m==='rotate')Object.assign(t,{rot:0,fh:false,fv:false});
+  if(m==='persp'){t.pv.v=t.ph.v=0;t.q=d.q;t.free=false}if(m==='scale'){t.scale.v=100;t.fill=true}}
+const TYPES=[['brush','Brush'],['subject','Subject'],['background','Background'],['gradient','Gradient'],['color','Color'],['luminance','Luminance']];
+function maskView(){ // bar: Add/Remove + step types. Above: the steps row, then the selected step's settings row
+  const s=typeof msel==='number'?STEPS[msel]:null,sign=bmode==='add'?'plus':'minus',back=()=>{mask=false;more=false;menu=null;pick=null;ui()};
+  const chips=`<button class="pc ch on" aria-label="Next step: ${bmode==='add'?'add':'remove'}. Switch to ${bmode==='add'?'remove':'add'}" ${h(()=>{bmode=bmode==='add'?'sub':'add';ui()})}>${ic(sign)}${bmode==='add'?'Add':'Remove'}</button>`
+    +TYPES.map(([ty,l])=>`<button class="pc ty${ty==='brush'&&msel==='brush'&&!pick||ty==='color'&&pick?' sel':''}" ${h(()=>{menu=null;
+        if(ty==='brush'){msel='brush';pick=null}else if(ty==='color')pick='new';else{pick=null;newStep(ty,bmode);msel=STEPS.length-1;dirty=true}ui()})}>${ic(sign)}${l}</button>`).join('');
+  const steps=STEPS.map((x,i)=>`<button class="pc stepchip${i===msel?' sel':''}${x.hidden?' hid':''}" data-si="${i}" aria-pressed="${i===msel}" aria-label="Step ${i+1} of ${STEPS.length}: ${x.op==='add'?'add':'subtract'} ${NAME[x.type]}${x.hidden?', hidden':''}"
+        ${h(()=>{menu=msel===i&&menu==='step'?null:'step';msel=i;pick=null;ui()})}>${ic(x.op==='add'?'plus':'minus')}${NAME[x.type]}</button>`).join('');
+  let main;
+  if(!s||s.type==='brush')main=sr(BP.size);
+  else if(s.g)main=`<div class="mseg" role="group" aria-label="Gradient type">${['linear','radial'].map(g=>`<button aria-pressed="${s.g.type===g}" ${h(()=>{s.g.type=g;ui()})}>${g[0].toUpperCase()+g.slice(1)}</button>`).join('')}</div><span class="it">Drag the handles on the photo</span>`;
+  else if(s.c)main=s.c.samples.map(q=>`<span class="sw" style="background:rgb(${q})" role="img" aria-label="Sampled color"></span>`).join('')+`<button class="ib" aria-label="Add a color sample" ${h(()=>{pick='add';ui()})}>${ic('plus')}</button>`+sr(s.c.range,'tight');
+  else if(s.l)main=`<div class="lr" id="lr" role="group" aria-label="Luminance range. Top handles: fully selected. Bottom handles: fade out"><i class="k" data-k="i0"></i><i class="k" data-k="i1"></i><div class="strip"></div><div class="band"></div><i class="k out" data-k="o0"></i><i class="k out" data-k="o1"></i></div><button class="chip" id="lpre" style="margin-right:2px"></button>`;
+  else main=`<span class="it" style="padding-left:16px">${NAME[s.type]} · found on device</span>`;
+  const rows=[...(STEPS.length?[crow(steps)]:[]),
+    ...(more?[srow(BP.soft),srow(BP.flow),srow(BP.feather),...(s&&s.c?[srow(s.c.smooth)]:[]),
+      `<div class="frow info" style="min-height:48px"><button class="chip" ${h(()=>{menu='copy';ui()})}>${ic('layers')}Copy mask from…</button><button class="chip" ${h(()=>{STEPS.length=0;inv=false;msel='brush';pick=null;dirty=true;ui()})}>Clear mask</button></div>`]:[]),
+    `<div class="frow">${main}${moreBtn()}</div>`];
+  return [left('half',`${TD[tool].name} mask. Back to ${TD[tool].name}`,back)+`<div class="tc">${chips}</div><div class="tr"><button class="ib" aria-pressed="${inv}" aria-label="Invert mask" ${h(()=>{inv=!inv;dirty=true;ui()})}>${ic('invert')}</button>${okBtn('Done with mask',back)}</div>`,rows];
+}
+function popView(){ // one popup at a time, anchored above the floating stack
+  const t=TD.ai,pop=$('#pop');let cls='menu',st='left:0',html='';
+  if(menu==='modes')html=Object.entries(MODES).map(([k,m])=>`<button role="menuitemradio" aria-checked="${k===t.mode}" ${h(()=>{t.mode=k;t.asked=false;more=false;menu=null;if(!aiArea())mask=false;ui()})}>${ic(m.icon)}<span class="l">${m.n}</span>${ic('check','ck')}</button>`).join('');
+  else if(menu==='prov'){const gen=t.mode==='background'&&t.bg==='prompt',list=gen?MODES[t.mode].gen:MODES[t.mode].prov,pi=Math.min(t.prov[t.mode+gen]||0,list.length-1);st='right:0';
+    html=list.map((q,i)=>`<button role="menuitemradio" aria-checked="${i===pi}" ${h(()=>{t.prov[t.mode+gen]=i;menu=null;ui()})}>${ic(q[0],q[0]==='cloud'?'cl':'')}<span class="l">${q[1]}</span>${ic('check','ck')}</button>`).join('')+`<hr><button role="menuitem" ${h(()=>{menu=null;ui()})}>${ic('gear')}<span class="l">AI settings…</span></button>`}
+  else if(menu==='copy'){st='right:0';html=[['subject','adjust','Color · Subject'],['background','blur','Blur · Background']].map(([ty,i,l])=>`<button role="menuitem" ${h(()=>{STEPS.length=0;inv=false;newStep(ty,'add');msel='brush';menu=null;dirty=true;ui()})}>${ic(i)}<span class="l">${l}</span></button>`).join('')}
+  else if(menu==='discard'){cls='bub';html=`<p>Discard changes?</p><div class="ba"><button ${h(()=>{menu=null;ui()})}>${ic('brush')}Keep editing</button><button ${h(exitTool)}>${ic('trash')}Discard</button></div>`}
+  else if(menu==='step'){const s=STEPS[msel];cls='bub';html=`<div class="ba"><button ${h(()=>{s.op=s.op==='add'?'sub':'add';dirty=true;ui()})}>${ic(s.op==='add'?'minus':'plus')}${s.op==='add'?'Make −':'Make +'}</button><button ${h(()=>{s.hidden=!s.hidden;dirty=true;ui()})}>${ic(s.hidden?'eye':'eyeoff')}${s.hidden?'Show':'Hide'}</button><button ${h(()=>{STEPS.splice(msel,1);msel='brush';menu=null;dirty=true;ui()})}>${ic('trash')}Delete</button></div>`}
+  pop.innerHTML=menu?`<div class="popup ${cls}" role="${cls==='menu'?'menu':'dialog'}" style="${st}">${html}</div>`:'';
+  if(menu==='step'){const b=$('.popup',pop),ch=$(`.stepchip[data-si="${msel}"]`),f=float.getBoundingClientRect(),r=ch.getBoundingClientRect(),w=216,cx=Math.max(70,Math.min(f.width-70,r.left+r.width/2-f.left)),l=Math.max(0,Math.min(f.width-w,cx-w/2));
+    b.style.left=l+'px';b.style.setProperty('--tx',cx-l+'px')}
+}
+function ui(){
+  const bar=$('#bar'),sl=$('.tc',bar)?.scrollLeft||0;H=[];REG=[];let b,rows=[];
+  if(fs==='result')b=`<button class="ib" aria-label="Try again" ${h(()=>fill('running'))}>${ic('retry')}</button><button class="ib" aria-label="Report this result">${ic('flag')}</button><span class="rtxt">Result 1 of 1<small>AI generated</small></span><button class="txtbtn" ${h(()=>fill('prompt'))}>Discard</button><button class="keep" ${h(apply)}>${ic('check')}Keep</button>`;
+  else if(!tool)b=TOOLS.map(k=>`<button class="tool" ${h(()=>{setTool(k);ui()})}>${ic(TD[k].icon)}${TD[k].name}</button>`).join('');
+  else[b,rows]=mask?maskView():toolView();
+  bar.innerHTML=b;$('#stack').innerHTML=fs==='result'?'':rows.join('');popView();icons(float);
+  $$('input[type=range]',float).forEach(paint);const tc=$('.tc',bar),cur2=tc&&$('.pc.sel:not(.ty)',tc);
+  if(tc){tc.scrollLeft=sl;if(cur2){const a=cur2.offsetLeft-tc.offsetLeft-8,b=a+cur2.offsetWidth+16;if(a<tc.scrollLeft)tc.scrollLeft=a;else if(b>tc.scrollLeft+tc.clientWidth)tc.scrollLeft=b-tc.clientWidth}} // keep the selected chip in view
+  $$('#stack .tc').forEach(r=>{const c=$('.sel',r);if(c)r.scrollLeft=Math.max(0,c.offsetLeft-r.offsetLeft+c.offsetWidth+8-r.clientWidth)});
+  lumWire();
+  // canvas follows the bar: brush on or off, tint while editing a mask, edge only while adjusting
+  const br=mask||aiArea()?'sel':tool==='liquify'?'ring':'';if(br)cv.dataset.brush=br;else delete cv.dataset.brush;
+  cv.classList.toggle('nomask',!hasMask());
+  const hint=!hasMask()||STEPS.length?'':mask?'Paint the mask · 2 fingers move':tool!=='ai'?'':TD.ai.mode==='erase'?'Paint over what to remove':'Paint where to fill';
+  $('#hint').textContent=pick?'Tap the photo to pick a color':hint;$('#hint').hidden=!pick&&!hint;
+  $$('#navchips button').forEach(x=>x.setAttribute('aria-current',x.dataset.nav===(mask?'mask':tool||'editor')&&!$('#s-editor').hidden));
+  popClass();pend();ringSize();gradUI();layout();cropUI();draw();
+}
+float.addEventListener('input',e=>{const el=e.target; // sliders and text fields update state in place, without rebuilding the bar
+  if(el.dataset.t){TD.ai.text[el.dataset.t]=el.value;return}
+  const P=REG[el.dataset.p];if(!P)return;P.v=+el.value;paint(el);dirty=true;
+  $$('[data-pc]',float).forEach(c=>{if(REG[c.dataset.pc]===P){$('b',c).textContent=c.classList.contains('sel')?val(P):'';c.classList.toggle('chg',P.v!==P.d)}});
+  ringSize();draw();if(tool==='crop'){cv.classList.toggle('cgrid',TD.crop.mode==='straighten');cropUI()}});
+float.addEventListener('change',()=>{if(!Q.has('grid'))cv.classList.remove('cgrid');cropUI()}); // the fine grid shows only while the Straighten slider is held
+document.addEventListener('click',e=>{const t=e.target.closest('[data-h]');if(t&&!t.disabled&&!skipClick)H[+t.dataset.h]()});
+document.addEventListener('pointerdown',e=>{ // a tap outside closes the open popup or bubble, and does nothing else
+  if(menu&&!e.target.closest('#pop')){menu=null;ui();e.stopPropagation();skipClick=true;setTimeout(()=>skipClick=false,350)}
+  if(bub&&!e.target.closest('.bubble,.rt')){closeBubble();if(e.target.closest('[data-cv]'))e.stopPropagation()}
+},true);
+{let d=null; // chip row: drag scrolls it; long-press a step chip, then drag, to reorder steps
+  float.addEventListener('pointerdown',e=>{const r=e.target.closest('.tc');if(!r)return;const ch=e.target.closest('.stepchip');
+    d={r,ch,x:e.clientX,sl:r.scrollLeft,id:e.pointerId,moved:false,drag:false};
+    if(ch)d.t=setTimeout(()=>{if(!d||d.moved)return;d.drag=true;r.setPointerCapture(d.id);ch.classList.add('drag');$('#pop').innerHTML='';menu=null;if(navigator.vibrate)navigator.vibrate(10)},400)});
+  float.addEventListener('pointermove',e=>{if(!d)return;const dx=e.clientX-d.x;
+    if(d.drag){const o=$$('.stepchip',d.r).find(c=>{const b=c.getBoundingClientRect();return c!==d.ch&&e.clientX>b.left&&e.clientX<b.right});
+      if(o){const a=+d.ch.dataset.si,b=+o.dataset.si;STEPS.splice(b,0,STEPS.splice(a,1)[0]);d.r.insertBefore(d.ch,a<b?o.nextSibling:o);$$('.stepchip',d.r).forEach((c,i)=>c.dataset.si=i);dirty=true;draw()}}
+    else if(d.moved||Math.abs(dx)>8){if(!d.moved){d.moved=true;clearTimeout(d.t);d.r.setPointerCapture(d.id)}d.r.scrollLeft=d.sl-dx}});
+  const up=()=>{if(!d)return;clearTimeout(d.t);const{drag,moved,ch}=d;d=null;
+    if(drag||moved){skipClick=true;setTimeout(()=>skipClick=false,50)}if(drag){msel=+ch.dataset.si;ui()}};
+  float.addEventListener('pointerup',up);float.addEventListener('pointercancel',up);
+}
+// entering, leaving and applying a tool. Each tool owns the mask of the layer it is making
+const MK={};
+function setTool(k,edit=null){if(tool)MK[tool].inv=inv;tool=k;editing=edit;mask=false;more=false;dirty=false;menu=null;pick=null;msel='brush';
+  const m=MK[k]=MK[k]||{steps:[],inv:false};STEPS=m.steps;inv=m.inv}
+function exitTool(){if(tool)delete MK[tool];TD.crop=newCrop();cv.classList.remove('cgrid','cthirds');tool=null;editing=null;mask=false;more=false;dirty=false;menu=null;pick=null;STEPS=[];inv=false;TD.ai.asked=false;fill('prompt')}
+function leave(){if(dirty){menu='discard';ui()}else exitTool()} // the left slot cancels; unapplied changes ask first
+function apply(){const t=$('.pend',rs);if(t){$$('.act',rs).forEach(x=>x.classList.remove('act'));t.classList.remove('pend');t.classList.add('act')}exitTool()}
+function run(){ // in AI, running is applying
+  const t=TD.ai,sub=$('.run small').textContent;
+  if(t.mode==='fill')return fill(sub.includes('credit')?'consent':'running');
+  if(t.mode==='ask'&&!t.asked){t.asked=true;dirty=true;return ui()}
+  apply();
+}
+function fill(state){ // generative fill: prompt -> consent (credit-costing run, first time) -> running -> result
+  clearTimeout(timer);fs=state;
+  $('#consent').hidden=state!=='consent';$('#job').hidden=state!=='running';cv.classList.toggle('busy',state==='running');cv.classList.toggle('res',state==='result');
+  $('#fillresult').toggleAttribute('hidden',state!=='result');$('#jobbar').style.width='0';
+  if(state==='running'){requestAnimationFrame(()=>requestAnimationFrame(()=>$('#jobbar').style.width='100%'));timer=setTimeout(()=>fill('result'),2500)}
+  ui();
+}
+$('#cno').onclick=$('#cother').onclick=$('#jobcancel').onclick=()=>fill('prompt');$('#cyes').onclick=()=>fill('running');
+// Compare: press and hold the top-bar button, in any tool
+{const c=$('#cmp'),on=v=>()=>cv.classList.toggle('orig',v);
+  c.addEventListener('pointerdown',e=>{c.setPointerCapture(e.pointerId);on(true)()});c.addEventListener('pointerup',on(false));c.addEventListener('pointercancel',on(false));
+  c.addEventListener('keydown',e=>{if(e.key===' '||e.key==='Enter')on(true)()});c.addEventListener('keyup',on(false))}
+
+// ---------- mockup navigation ----------
+const NAV=[['home','Home'],['editor','Editor'],['color','Color'],['mask','Mask'],['detail','Detail'],['liquify','Liquify'],['ai','AI'],['export','Export']];
+$('#navchips').innerHTML=NAV.map(s=>`<button data-nav="${s[0]}">${s[1]}</button>`).join('');
+function go(id){
+  const scr=id==='home'||id==='export'?id:'editor';closeBubble();
+  $$('.scr').forEach(s=>s.hidden=s.id!=='s-'+scr);
+  if(scr==='editor'){if(id==='editor')exitTool();else if(id==='mask'){if(!tool||!hasMask())setTool('color');mask=true}else setTool(id);if(V.z===1)V.cy=0;ui()}
+  $$('#navchips button').forEach(b=>{const on=b.dataset.nav===id;b.setAttribute('aria-current',on);if(on)b.scrollIntoView({inline:'center',block:'nearest'})});
+  history.replaceState(null,'','#'+id);
+}
+document.addEventListener('click',e=>{const t=e.target.closest('[data-nav]');if(t)go(t.dataset.nav)});
+function theme(l){document.documentElement.dataset.theme=l?'light':'dark';$('#theme').textContent=l?'Dark':'Light'}
+$('#theme').onclick=()=>theme(document.documentElement.dataset.theme!=='light');
+$('#toggleRecent').onclick=e=>{const r=$('#recent');r.hidden=!r.hidden;e.target.textContent=r.hidden?'Show with recent projects':'Show first-run state'};
+
+// ---------- zoom (pinch, double-tap), pan, navigator ----------
+const V={z:1,cx:.5,cy:.5};
+function layout(){
+  const c=cv,W=c.clientWidth,H=c.clientHeight;if(!W)return;
+  const cover=float.offsetHeight+16,Hv=H-cover; // Hv = height left clear above the floating chrome
+  c.style.setProperty('--cover',cover+'px');
+  const f=Math.min((W-16)/300,(H-16)/400),w=300*f*V.z,h=400*f*V.z;
+  let x=W/2-V.cx*w,y=H/2-V.cy*h;
+  x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));
+  y=h<=Hv?(Hv-h)/2:Math.min(h<H?8:0,Math.max(Hv-h,y)); // fits above the chrome: centre there. Otherwise pan until the bottom edge clears it
+  V.cx=(W/2-x)/w;V.cy=(H/2-y)/h;c._r={x,y,w,h,W,H,f};
+  $$('.photo,.maskdisp',c).forEach(el=>Object.assign(el.style,{left:x+'px',top:y+'px',width:w+'px',height:h+'px'}));
+  const n=$('.navi',c);n.classList.toggle('show',w>W+1||h>H+1); // navigator only while the image is larger than the canvas
+  const x0=Math.max(0,-x/w),x1=Math.min(1,(W-x)/w),y0=Math.max(0,-y/h),y1=Math.min(1,(Hv-y)/h);
+  Object.assign($('.vp',n).style,{left:x0*100+'%',top:y0*100+'%',width:(x1-x0)*100+'%',height:Math.max(0,y1-y0)*100+'%'});
+  arrows();cropUI();
+}
+function setZoom(z){V.z=Math.min(8,Math.max(1,z));if(V.z<1.02)V.z=1;layout()}
+const dist=(a,b)=>Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
+{const c=cv,ro=new ResizeObserver(layout);ro.observe(c);ro.observe(float);
+  const n=$('.navi',c),navTo=e=>{const r=n.getBoundingClientRect();V.cx=(e.clientX-r.left)/r.width;V.cy=(e.clientY-r.top)/r.height;layout()};
+  n.addEventListener('pointerdown',e=>{n.setPointerCapture(e.pointerId);navTo(e)});
+  n.addEventListener('pointermove',e=>{if(e.buttons||e.pointerType==='touch')navTo(e)});
+  const P=new Map();let mode=null,st,moved,lastTap=0;
+  const end=()=>{if(mode==='paint')strokeEnd();if(mode==='crop'){c.classList.remove('cthirds');cropUI()}mode=null;c.classList.remove('gesture','painting')};
+  c.addEventListener('pointerdown',e=>{
+    if(e.target.closest('.rail,.railtab,.navi,.job,.bubble'))return;
+    c.setPointerCapture(e.pointerId);P.set(e.pointerId,e);c.classList.add('gesture');
+    if(P.size===2){if(mode==='paint')strokeEnd();c.classList.remove('painting');mode='pinch';const[a,b]=[...P.values()]; // two fingers always pinch and pan
+      st={d:dist(a,b),z:V.z,mx:(a.clientX+b.clientX)/2,my:(a.clientY+b.clientY)/2,cx:V.cx,cy:V.cy}}
+    else if(P.size===1){moved=false;st={x:e.clientX,y:e.clientY,cx:V.cx,cy:V.cy};
+      const brush=c.dataset.brush,hd=mask&&G()&&handleAt(e);
+      if(mask&&pick)mode='pick';
+      else if(hd){mode='grad';st.h=hd}
+      else if(brush==='sel'){mode='paint';c.classList.add('painting');strokeStart(e)} // one finger always paints in a brush context
+      else if(tool==='crop'&&(st.cr=cropHit(e)))mode='crop';
+      else mode=brush?'ring':'pan'}
+  });
+  c.addEventListener('pointermove',e=>{
+    if(c.dataset.brush)ringAt(e);
+    if(!P.has(e.pointerId))return;P.set(e.pointerId,e);
+    if(mode==='pinch'&&P.size===2){const[a,b]=[...P.values()],z=Math.min(8,Math.max(1,st.z*dist(a,b)/st.d)),w=300*c._r.f*z;
+      V.cx=st.cx-((a.clientX+b.clientX)/2-st.mx)/w;V.cy=st.cy-((a.clientY+b.clientY)/2-st.my)/(w/3*4);setZoom(z)}
+    else if(mode==='pan'){const dx=e.clientX-st.x,dy=e.clientY-st.y;if(Math.hypot(dx,dy)>6)moved=true;
+      if(moved){V.cx=st.cx-dx/c._r.w;V.cy=st.cy-dy/c._r.h;layout()}}
+    else if(mode==='paint')strokeMove(e);
+    else if(mode==='grad')gradDrag(e,st.h);
+    else if(mode==='crop')cropDrag(e,st.cr);
+  });
+  const up=e=>{
+    if(!P.delete(e.pointerId))return;
+    if(mode==='pick')pickAt(e);
+    if(mode==='pan'&&!moved){const now=Date.now(); // double-tap (outside brush contexts): Fit <-> 2x at the tapped point
+      if(now-lastTap<300){lastTap=0;
+        if(V.z>1){V.cx=.5;V.cy=0;setZoom(1)}else{const b=c.getBoundingClientRect(),r=c._r;V.cx=(e.clientX-b.left-r.x)/r.w;V.cy=(e.clientY-b.top-r.y)/r.h;setZoom(2)}}
+      else lastTap=now}
+    if(mode==='pinch'||!P.size)end();
+    if(P.size)mode=null;
+  };
+  c.addEventListener('pointerup',up);c.addEventListener('pointercancel',up);
+}
+
+// ---------- mask = ordered steps, each Add (max) or Subtract (a*(1-b)), evaluated first to last from empty ----------
+const MW=600,MH=800,mk=()=>{const c=Object.assign(document.createElement('canvas'),{width:MW,height:MH});return c.getContext('2d',{willReadFrequently:true})};
+const F=new Uint8Array(MW*MH);
+const BAL=(()=>{const x=mk();x.scale(2,2);x.fill(new Path2D($('#balloon').getAttribute('d')));const d=x.getImageData(0,0,MW,MH).data,a=new Uint8Array(MW*MH);for(let i=0;i<a.length;i++)a[i]=d[i*4+3];return a})();
+const NAME={subject:'Subject',background:'Background',gradient:'Gradient',color:'Color',luminance:'Luminance',brush:'Brush'};
+// photo pixels for Color and Luminance steps: the stand-in SVG rendered into a canvas
+let PIX=null;const LUM=new Uint8Array(MW*MH);
+{const img=new Image();
+  img.onload=()=>{const x=mk();x.drawImage(img,0,0,MW,MH);PIX=x.getImageData(0,0,MW,MH).data;
+    for(let i=0;i<LUM.length;i++)LUM[i]=.2126*PIX[i*4]+.7152*PIX[i*4+1]+.0722*PIX[i*4+2];draw()};
+  img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${MW}" height="${MH}" viewBox="0 0 300 400"><defs>${$('svg defs').innerHTML}</defs><use href="#photo"/></svg>`)}
+const LP={Shadows:{o0:0,i0:0,i1:25,o1:40},Midtones:{o0:25,i0:40,i1:60,o1:75},Highlights:{o0:60,i0:75,i1:100,o1:100}}; // full between i0..i1, fading out to o0 and o1 (percent)
+function lumLUT(l){const t=new Uint8Array(256);for(let v=0;v<256;v++){const q=v/2.55;
+  t[v]=255*(q<l.o0||q>l.o1?0:q<l.i0?(q-l.o0)/(l.i0-l.o0):q>l.i1?(l.o1-q)/(l.o1-l.i1):1)}return t}
+function colorAt(c,i){if(!PIX)return 0;let m=1e9;for(const q of c.samples){const d=Math.hypot(PIX[i*4]-q[0],PIX[i*4+1]-q[1],PIX[i*4+2]-q[2]);if(d<m)m=d}
+  const t=c.range.v*2.2,f=c.smooth.v*2.2+1;return m<=t?255:m>=t+f?0:255*(1-(m-t)/f)}
+let STEPS=[],pick=null,inv=false,bmode='add',raf=0,last=null,lp=null,cur=null;
+const hasSel=()=>STEPS.length>0||inv;
+const G=()=>mask&&typeof msel==='number'&&STEPS[msel]&&STEPS[msel].g||null; // handles show for the selected gradient step
+function newStep(type,op){
+  const s={type,op};
+  if(type==='brush')s.ctx=mk();
+  if(type==='gradient'){const n=STEPS.filter(x=>x.type==='gradient').length;s.g={type:'linear',cx:150,cy:200+n%3*50,hx:0,hy:80}}
+  if(type==='color')s.c={samples:[],range:p('Range',30,30,0,100),smooth:p('Smoothness',30,30,0,100)};
+  if(type==='luminance')s.l={...LP.Shadows};
+  STEPS.push(s);return s;
+}
+function draw(){if(!raf)raf=requestAnimationFrame(render)}
+function render(){
+  raf=0;if($('#s-editor').hidden)return;
+  F.fill(0);
+  for(const s of STEPS){if(s.hidden)continue;
+    const sub=s.op==='sub',src=s.type==='brush'?s.ctx.getImageData(0,0,MW,MH).data:null,g=s.g,bg=s.type==='background';
+    const lut=s.l&&PIX&&lumLUT(s.l);
+    let L2,L,lin;if(g){L2=g.hx*g.hx+g.hy*g.hy||1;L=Math.sqrt(L2);lin=g.type==='linear'}
+    for(let y=0,i=0;y<MH;y++)for(let x=0;x<MW;x++,i++){
+      let b;
+      if(src)b=src[i*4+3];
+      else if(g){const px=x/2-g.cx,py=y/2-g.cy,v=lin?.5-(px*g.hx+py*g.hy)/L2/2:2-2*Math.hypot(px,py)/L;b=v<=0?0:v>=1?255:v*255}
+      else if(s.l)b=lut?lut[LUM[i]]:0;
+      else if(s.c)b=colorAt(s.c,i);
+      else b=bg?255-BAL[i]:BAL[i];
+      if(b)F[i]=sub?F[i]*(255-b)/255:Math.max(F[i],b);
+    }
+  }
+  if(inv)for(let i=0;i<F.length;i++)F[i]=255-F[i]; // Invert is global, after all steps
+  const t=$('.maskdisp',cv),tint=mask||tool==='ai',ctx=t.getContext('2d'),out=ctx.createImageData(MW,MH),o=out.data; // tint while editing the mask, edge only while adjusting
+  for(let y=0,i=0,j=0;y<MH;y++)for(let x=0;x<MW;x++,i++,j+=4){
+    const a=F[i],inn=a>127;
+    if((x+3<MW&&(F[i+3]>127)!==inn)||(y+3<MH&&(F[i+MW*3]>127)!==inn)){o[j]=o[j+1]=o[j+2]=((x+y)>>3)&1?255:0;o[j+3]=255} // dashed edge at 50%
+    else if(tint&&a){const hh=(x+y)%12<3;o[j]=255;o[j+1]=hh?170:59;o[j+2]=hh?160:48;o[j+3]=a*(hh?.6:.45)} // red tint + hatch
+  }
+  ctx.putImageData(out,0,0);
+  const th=$('.mthumb');if(th){const x=th.getContext('2d'),im=x.createImageData(18,24); // tiny mask thumbnail on the Mask button
+    for(let y=0,j=0;y<24;y++)for(let xx=0;xx<18;xx++,j+=4){im.data[j]=im.data[j+1]=im.data[j+2]=F[(y*33+16)*MW+xx*33+16];im.data[j+3]=255}x.putImageData(im,0,0)}
+  if(lp)loupeDraw();
+}
+function lumWire(){ // luminance range: top handles bound the fully selected range, bottom handles set the fade
+  const lr=$('#lr');if(!lr)return;const L=STEPS[msel].l,names=Object.keys(LP),pre=$('#lpre');let k=null;
+  const match=()=>names.find(n=>Object.keys(L).every(x=>L[x]===LP[n][x]));
+  const show=()=>{$$('.k',lr).forEach(n=>n.style.left=L[n.dataset.k]+'%');
+    $('.band',lr).style.background=`linear-gradient(to right,transparent ${L.o0}%,#FF3B30 ${L.i0}%,#FF3B30 ${L.i1}%,transparent ${L.o1}%)`;
+    pre.textContent=match()||`${L.i0}–${L.i1}%`;pre.setAttribute('aria-label',`Luminance ${L.i0} to ${L.i1} percent, fading from ${L.o0} to ${L.o1}. Next preset`)};
+  const set=e=>{const r=lr.getBoundingClientRect(),v=Math.round(Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100)));
+    if(k==='i0'){L.i0=Math.min(v,L.i1);L.o0=Math.min(L.o0,L.i0)}if(k==='i1'){L.i1=Math.max(v,L.i0);L.o1=Math.max(L.o1,L.i1)}
+    if(k==='o0')L.o0=Math.min(v,L.i0);if(k==='o1')L.o1=Math.max(v,L.i1);dirty=true;show();draw()};
+  lr.onpointerdown=e=>{lr.setPointerCapture(e.pointerId);const r=lr.getBoundingClientRect(),v=(e.clientX-r.left)/r.width*100,row=e.clientY-r.top<26?'i':'o';
+    k=v-L[row+'0']<L[row+'1']-v?row+'0':row+'1';set(e)};
+  lr.onpointermove=e=>{if(k)set(e)};lr.onpointerup=lr.onpointercancel=()=>k=null;
+  pre.onclick=()=>{Object.assign(L,LP[names[(names.indexOf(match())+1)%names.length]]);dirty=true;show();draw()}; // tap cycles Shadows / Midtones / Highlights
+  show();
+}
+function pickAt(e){ // eyedropper: one tap samples the photo
+  const q=toMask(e),x=Math.round(q.x),y=Math.round(q.y);if(!PIX||x<0||y<0||x>=MW||y>=MH)return;
+  const i=(y*MW+x)*4,rgb=[PIX[i],PIX[i+1],PIX[i+2]];
+  if(pick==='new'){newStep('color',bmode);msel=STEPS.length-1}
+  if(STEPS[msel]&&STEPS[msel].c)STEPS[msel].c.samples.push(rgb);
+  pick=null;dirty=true;ui();
+}
+// brush: soft round stamps; consecutive strokes with the same operation share one Brush step
+const toMask=e=>{const b=cv.getBoundingClientRect(),r=cv._r,px=e.clientX-b.left,py=e.clientY-b.top;
+  return{px,py,x:(px-r.x)/r.w*MW,y:(py-r.y)/r.h*MH,k:MW/r.w}};
+function stamp(x,y,rad){
+  const ctx=cur.ctx,a=Math.pow(Bs.flow/100,1.5),g=ctx.createRadialGradient(x,y,0,x,y,rad);
+  g.addColorStop(0,`rgba(0,0,0,${a})`);g.addColorStop(Math.min(.99,1-Bs.soft/100),`rgba(0,0,0,${a})`);g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g;ctx.fillRect(x-rad,y-rad,2*rad,2*rad);
+}
+function strokeStart(e){
+  const op=mask?bmode:'add',l=STEPS[STEPS.length-1];closeBubble();dirty=true;
+  cur=l&&l.type==='brush'&&l.op===op&&!l.hidden?l:newStep('brush',op);if(cur!==l){menu=null;ui()}
+  const q=toMask(e);last=q;stamp(q.x,q.y,Bs.size/2*q.k);loupeAt(q);draw()}
+function strokeMove(e){
+  const q=toMask(e),rad=Bs.size/2*q.k,d=Math.hypot(q.x-last.x,q.y-last.y),step=Math.max(1,rad/4);
+  for(let s=step;s<=d;s+=step)stamp(last.x+(q.x-last.x)*s/d,last.y+(q.y-last.y)*s/d,rad);
+  if(d>=step)last=q;loupeAt(q);draw();
+}
+function strokeEnd(){last=lp=null;$('.loupe',cv).hidden=true}
+// loupe: 2x view under the finger; drops to just above the floating bar when the finger is near the top-left
+function loupeAt(q){const l=$('.loupe',cv);l.hidden=false;l.classList.toggle('low',q.px<150&&q.py<150);lp=q;
+  const half=26/(cv._r.w/300),ix=q.x/2,iy=q.y/2;$('svg',l).setAttribute('viewBox',`${ix-half} ${iy-half} ${half*2} ${half*2}`);
+  const d=Bs.size*2;Object.assign($('.ring',l).style,{width:d+'px',height:d+'px'})}
+function loupeDraw(){const half=26/(cv._r.w/300)*2,x=$('.loupe canvas',cv).getContext('2d');
+  x.clearRect(0,0,208,208);x.drawImage($('.maskdisp',cv),lp.x-half,lp.y-half,half*2,half*2,0,0,208,208)}
+function ringSize(){Object.assign($(':scope>.ring',cv).style,{width:Bs.size+'px',height:Bs.size+'px'})}
+function ringAt(e){const b=cv.getBoundingClientRect();Object.assign($(':scope>.ring',cv).style,{left:e.clientX-b.left+'px',top:e.clientY-b.top+'px'})}
+// gradient handles (selected gradient step): centre moves it, an outer handle sets width and angle
+function gradUI(){
+  const el=$('#gradui'),g=G();if(!g){el.innerHTML='';return}
+  const{cx,cy,hx,hy}=g,L=Math.hypot(hx,hy)||1,ne='vector-effect="non-scaling-stroke" fill="none"';let s='';
+  const two=(d,dash)=>`<path d="${d}" stroke="#000" stroke-width="3.5" ${ne}/><path d="${d}" stroke="#fff" stroke-width="1.5" ${dash?'stroke-dasharray="6 5"':''} ${ne}/>`;
+  if(g.type==='linear'){const dx=-hy/L*700,dy=hx/L*700;for(const k of[1,0,-1])s+=two(`M${cx+k*hx-dx} ${cy+k*hy-dy}L${cx+k*hx+dx} ${cy+k*hy+dy}`,k===0)}
+  else for(const k of[1,.5])s+=two(`M${cx-L*k} ${cy}a${L*k} ${L*k} 0 1 0 ${2*L*k} 0a${L*k} ${L*k} 0 1 0 ${-2*L*k} 0`,k===.5);
+  const dot=(x,y,r)=>`<circle cx="${x}" cy="${y}" r="${r}" fill="#fff" stroke="#000" stroke-width="1.5"/>`;
+  el.innerHTML=s+dot(cx,cy,6)+dot(cx+hx,cy+hy,5)+(g.type==='linear'?dot(cx-hx,cy-hy,5):'');
+}
+function handleAt(e){const q=toMask(e),ix=q.x/2,iy=q.y/2,{cx,cy,hx,hy,type}=G(),lim=28*q.k/2;
+  const hs=[['c',cx,cy],['a',cx+hx,cy+hy]].concat(type==='linear'?[['b',cx-hx,cy-hy]]:[]);
+  const n=hs.map(([k,x,y])=>[k,Math.hypot(ix-x,iy-y)]).sort((a,b)=>a[1]-b[1])[0];return n[1]<lim&&n[0]}
+function gradDrag(e,hd){const q=toMask(e),ix=q.x/2,iy=q.y/2,g=G();dirty=true;
+  if(hd==='c'){g.cx=Math.max(0,Math.min(300,ix));g.cy=Math.max(0,Math.min(400,iy))}
+  else{const s=hd==='a'?1:-1,x=(ix-g.cx)*s,y=(iy-g.cy)*s;if(Math.hypot(x,y)>8){g.hx=x;g.hy=y}}
+  gradUI();draw()}
+
+// ---------- crop: rectangle, straighten, rotate, perspective, scale (CSS transform on the stand-in photo) ----------
+function ratio(){const t=TD.crop;if(t.aspect==='Free')return 0;let[a,b]=t.aspect==='Original'?[3,4]:t.aspect.split(':').map(Number);if(t.portrait!==(a<b))[a,b]=[b,a];return a/b}
+function aspectRect(){const a=ratio();if(!a)return;const w=Math.min(300,400*a),hh=w/a;TD.crop.r={x0:150-w/2,y0:200-hh/2,x1:150+w/2,y1:200+hh/2}}
+function cropChanged(k){const t=TD.crop,r=t.r;
+  return k==='crop'?t.aspect!=='Free'||r.x0>0||r.y0>0||r.x1<300||r.y1<400:k==='straighten'?t.angle.v!==0:k==='rotate'?t.rot||t.fh||t.fv:k==='persp'?t.pv.v||t.ph.v||t.q.flat().some(Boolean):t.scale.v!==100||!t.fill}
+// projective transform that maps the 4 source corners to 4 target corners, as a CSS matrix3d
+function adj(m){return[m[4]*m[8]-m[5]*m[7],m[2]*m[7]-m[1]*m[8],m[1]*m[5]-m[2]*m[4],m[5]*m[6]-m[3]*m[8],m[0]*m[8]-m[2]*m[6],m[2]*m[3]-m[0]*m[5],m[3]*m[7]-m[4]*m[6],m[1]*m[6]-m[0]*m[7],m[0]*m[4]-m[1]*m[3]]}
+function mul(a,b){const c=[];for(let i=0;i<3;i++)for(let j=0;j<3;j++){let v=0;for(let k=0;k<3;k++)v+=a[3*i+k]*b[3*k+j];c[3*i+j]=v}return c}
+function basis(q){const m=[q[0],q[2],q[4],q[1],q[3],q[5],1,1,1],a=adj(m),v=[0,1,2].map(i=>a[3*i]*q[6]+a[3*i+1]*q[7]+a[3*i+2]);return mul(m,[v[0],0,0,0,v[1],0,0,0,v[2]])}
+function proj(src,dst){const t=mul(basis(dst),adj(basis(src)));return `matrix3d(${[t[0],t[3],0,t[6],t[1],t[4],0,t[7],0,0,1,0,t[2],t[5],0,t[8]].map(x=>x/t[8]).join(',')})`}
+function cropUI(){
+  const el=$('#cropui'),img=$('svg.photo:not(.over)',cv),t=TD.crop,on=tool==='crop';
+  $('.checker',cv).hidden=!on||t.fill; // Fill edges off: empty areas show a checkerboard
+  if(!on||!cv._r){el.innerHTML='';img.style.transform='';return}
+  const{w,h}=cv._r,u=w/300,pv=t.pv.v/100*66,ph=t.ph.v/100*88; // keystone pulls one pair of corners inward
+  const d=[[0,0],[300,0],[0,400],[300,400]].map(([x,y],i)=>[x+t.q[i][0]+(pv>0&&i<2||pv<0&&i>1?(i%2?-1:1)*Math.abs(pv):0),y+t.q[i][1]+(ph>0&&i%2===0||ph<0&&i%2?(i<2?1:-1)*Math.abs(ph):0)]);
+  t._d=d;
+  const a=t.angle.v*Math.PI/180,auto=Math.abs(Math.cos(a))+Math.abs(Math.sin(a))*4/3, // straighten scales up just enough that no corner is empty
+    fillS=t.fill?1+(Math.abs(t.pv.v)+Math.abs(t.ph.v))/100*.8+Math.max(...t.q.flat().map(Math.abs))/150:1,sc=t.scale.v/100*auto*fillS*(t.rot%2?.75:1);
+  img.style.transformOrigin='0 0';
+  img.style.transform=`translate(${w/2}px,${h/2}px) rotate(${t.angle.v+t.rot*90}deg) scale(${sc*(t.fh?-1:1)},${sc*(t.fv?-1:1)}) translate(${-w/2}px,${-h/2}px) ${proj([0,0,w,0,0,h,w,h],d.flat().map(v=>v*u))}`;
+  const r=t.r,W=r.x1-r.x0,Hh=r.y1-r.y0,L=(p,sw=1,o=1)=>`<path d="${p}" fill="none" stroke="#fff" stroke-width="${sw}" opacity="${o}" vector-effect="non-scaling-stroke"/>`;
+  let o=`<path fill-rule="evenodd" fill="rgba(0,0,0,.65)" d="M-900-900h2100v2200h-2100zM${r.x0} ${r.y0}H${r.x1}V${r.y1}H${r.x0}z"/>`+L(`M${r.x0} ${r.y0}H${r.x1}V${r.y1}H${r.x0}z`,1.5); // dim outside the crop rectangle
+  if(cv.classList.contains('cthirds'))o+=L([1,2].map(k=>`M${r.x0+W*k/3} ${r.y0}v${Hh}M${r.x0} ${r.y0+Hh*k/3}h${W}`).join(''),1,.7);
+  if(cv.classList.contains('cgrid')){let g='';for(let k=1;k<12;k++)g+=`M${r.x0+W*k/12} ${r.y0}v${Hh}M${r.x0} ${r.y0+Hh*k/12}h${W}`;o+=L(g,1,.45)}
+  if(t.mode==='crop'){const c=14;o+=L(`M${r.x0} ${r.y0+c}v${-c}h${c}M${r.x1-c} ${r.y0}h${c}v${c}M${r.x1} ${r.y1-c}v${c}h${-c}M${r.x0+c} ${r.y1}h${-c}v${-c}M${r.x0+W/2-c/2} ${r.y0}h${c}M${r.x0+W/2-c/2} ${r.y1}h${c}M${r.x0} ${r.y0+Hh/2-c/2}v${c}M${r.x1} ${r.y0+Hh/2-c/2}v${c}`,4)}
+  if(t.mode==='persp'&&t.free)o+=L('M'+[0,1,3,2].map(i=>d[i].join(' ')).join('L')+'z',1.5)+d.map(([x,y])=>`<circle cx="${x}" cy="${y}" r="6" fill="#fff" stroke="#000" stroke-width="1.5"/>`).join('');
+  el.innerHTML=o;const sz=$('#cropsize');if(sz)sz.textContent=`${Math.round(W*10)} × ${Math.round(Hh*10)} px`;
+}
+function cropHit(e){
+  const t=TD.crop,q=toMask(e),ix=q.x/2,iy=q.y/2,tol=26*q.k/2,r=t.r;
+  if(t.mode==='persp'&&t.free){let best=null,bd=tol*1.5;t._d.forEach(([x,y],i)=>{const dd=Math.hypot(ix-x,iy-y);if(dd<bd){bd=dd;best=i}});
+    return best==null?null:{c:best,q0:t.q.map(v=>[...v]),ix,iy}}
+  if(t.mode!=='crop'||ix<r.x0-tol||ix>r.x1+tol||iy<r.y0-tol||iy>r.y1+tol)return null;
+  const hd=(Math.abs(ix-r.x0)<tol?'L':Math.abs(ix-r.x1)<tol?'R':'')+(Math.abs(iy-r.y0)<tol?'T':Math.abs(iy-r.y1)<tol?'B':'');
+  cv.classList.add('cthirds');return{hd:hd||'M',r0:{...r},ix,iy}; // rule-of-thirds grid while dragging
+}
+function cropDrag(e,c){
+  const t=TD.crop,q=toMask(e),dx=q.x/2-c.ix,dy=q.y/2-c.iy,cl=(v,a,b)=>Math.max(a,Math.min(b,v)),min=40;dirty=true;
+  if(c.q0){t.q[c.c]=[c.q0[c.c][0]+dx,c.q0[c.c][1]+dy];return cropUI()}
+  const r={...c.r0},hd=c.hd;
+  if(hd==='M'){const mx=cl(dx,-r.x0,300-r.x1),my=cl(dy,-r.y0,400-r.y1);r.x0+=mx;r.x1+=mx;r.y0+=my;r.y1+=my}
+  else{
+    if(hd.includes('L'))r.x0=cl(r.x0+dx,0,r.x1-min);if(hd.includes('R'))r.x1=cl(r.x1+dx,r.x0+min,300);
+    if(hd.includes('T'))r.y0=cl(r.y0+dy,0,r.y1-min);if(hd.includes('B'))r.y1=cl(r.y1+dy,r.y0+min,400);
+    const a=ratio();if(a){ // locked aspect: width drives height on corners and side edges; height drives width on top and bottom edges
+      if(/[LR]/.test(hd)){const hh=Math.min((r.x1-r.x0)/a,hd.includes('T')?r.y1:hd.includes('B')?400-r.y0:400),w=hh*a;if(hd.includes('L'))r.x0=r.x1-w;else r.x1=r.x0+w;
+        if(hd.includes('T'))r.y0=r.y1-hh;else if(hd.includes('B'))r.y1=r.y0+hh;else{const y0=cl((c.r0.y0+c.r0.y1)/2-hh/2,0,400-hh);r.y0=y0;r.y1=y0+hh}}
+      else{const w=Math.min((r.y1-r.y0)*a,300),hh=w/a,x0=cl((c.r0.x0+c.r0.x1)/2-w/2,0,300-w);r.x0=x0;r.x1=x0+w;if(hd==='T')r.y0=r.y1-hh;else r.y1=r.y0+hh}}
+  }
+  t.r=r;cropUI();
+}
+
+// ---------- start (query string presets a state for screenshots) ----------
+icons(document);
+setLayers(Q.has('long')?'sharpen,color:m,blur:m,retouch,color:ma,ai:m,sharpen,color:m,blur,liquify,photo':'sharpen,color:ma,blur:m,photo');
+if(Q.get('theme')==='light')theme(true);
+if(Q.get('z'))V.z=+Q.get('z');
+if(Q.get('mode'))TD.ai.mode=Q.get('mode');
+if(Q.get('bg'))TD.ai.bg=Q.get('bg');
+if(Q.has('asked'))TD.ai.asked=true;
+go(location.hash.slice(1)||'home');
+if(tool){
+  for(const t of (Q.get('steps')||'').split(',').filter(Boolean)){const s=newStep(t.slice(0,-1),t.endsWith('-')?'sub':'add');if(Q.get('gt')&&s.g)s.g.type=Q.get('gt');if(s.c)s.c.samples.push([217,72,95])}
+  if(Q.get('m'))bmode=Q.get('m');
+  if(Q.has('mask'))mask=hasMask();
+  if(Q.has('sel'))msel=+Q.get('sel');
+  if(Q.has('chip'))TD[tool].sel=+Q.get('chip');
+  if(Q.has('curves'))TD.color.curves=true;
+  if(Q.has('sharpen'))TD.detail.choice=1;
+  if(Q.has('more'))more=true;
+  if(Q.get('menu'))menu=Q.get('menu');
+  if(Q.has('dirty'))dirty=true;
+  if(tool==='crop'){const t=TD.crop;if(Q.get('cm'))t.mode=Q.get('cm');if(Q.get('aspect')){t.aspect=Q.get('aspect');aspectRect()}if(Q.get('pv'))t.pv.v=+Q.get('pv');if(Q.get('ph'))t.ph.v=+Q.get('ph');
+    if(Q.get('ang'))t.angle.v=+Q.get('ang');if(Q.get('sc'))t.scale.v=+Q.get('sc');if(Q.has('nofill'))t.fill=false;if(Q.has('free')){t.free=true;t.q=[[30,20],[-10,40],[0,0],[-40,-30]]}
+    if(Q.has('grid'))cv.classList.add('cgrid');if(Q.has('thirds'))cv.classList.add('cthirds')}
+  ui();
+  if(Q.get('fs'))fill(Q.get('fs'));
+}
+requestAnimationFrame(()=>{if($('#s-editor').hidden)return;
+  if(Q.has('stroke')&&cv.dataset.brush==='sel'){const b=cv.getBoundingClientRect(),ev=(x,y)=>({clientX:b.left+x,clientY:b.top+y}),y0=b.height*.42;
+    cv.classList.add('gesture','painting');strokeStart(ev(190,y0));for(let i=1;i<=14;i++)strokeMove(ev(190+i*6,y0+Math.sin(i/3)*18));ringAt(ev(274,y0+Math.sin(14/3)*18))}
+  if(Q.has('bubble'))openBubble($$('.rt',rs)[+Q.get('bubble')||1]);
+  if(Q.has('hold'))cv.classList.add('orig');
+  if(Q.has('railscroll'))rs.scrollTop=+Q.get('railscroll');
+  if(Q.has('swipe'))toggleLayer($$('.rt',rs)[+Q.get('swipe')]);
+  if(Q.has('lift'))$$('.rt',rs)[+Q.get('lift')].classList.add('drag');
+  if(Q.has('pany')){V.cy=+Q.get('pany');layout()}
+  if(Q.has('chipscroll'))$('.tc').scrollLeft=+Q.get('chipscroll');
+});
+</script>
+</body>
+</html>
