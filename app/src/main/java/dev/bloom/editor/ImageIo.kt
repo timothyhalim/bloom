@@ -19,6 +19,8 @@ import dev.bloom.editor.gl.Offscreen
 import dev.bloom.editor.gl.Pipeline
 import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Layer
+import dev.bloom.editor.model.LayerKind
+import dev.bloom.editor.model.WarpField
 import dev.bloom.editor.model.SubjectStep
 import java.io.File
 import kotlin.math.roundToInt
@@ -105,7 +107,9 @@ object ImageIo {
         // Subject edges look up to 3 mask texels away (joint bilateral upsampling).
         val subjectReach = if (subjects.isNotEmpty() && layers.any { l -> l.visible && l.mask.steps.any { it.visible && it is SubjectStep } }) 3f / Segment.SIZE else 0f
         val blurReach = layers.maxOfOrNull { detailReach(it) } ?: 0f
-        val reach = maxOf(feather * 0.03f, if (deband) 2 * DEBAND_RADIUS else 0f, subjectReach, blurReach)
+        // Liquify reads up to its largest offset away
+        val warpReach = layers.filter { it.visible && it.kind == LayerKind.Liquify }.maxOfOrNull { WarpField(aspect).apply { update(it.warp) }.maxOffset() + 0.002f } ?: 0f
+        val reach = maxOf(feather * 0.03f, if (deband) 2 * DEBAND_RADIUS else 0f, subjectReach, blurReach, warpReach)
         // Wide blurs read mipmaps; tiles starting on a multiple of 64 share the whole photo's mip grid, so they match.
         val pad = if (reach > 0f) ((reach * uprightH).toInt() + 2).let { if (blurReach > 0f) (it + 63) / 64 * 64 else it } else 0
         val region = BitmapFactory.Options().apply { inPreferredColorSpace = SRGB }

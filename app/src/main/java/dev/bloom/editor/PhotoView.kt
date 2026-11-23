@@ -70,6 +70,11 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
     /** Brush ring radius on screen in px, drawn at the finger and in the loupe; 0 = no ring. */
     var brushRadiusPx = 0f
 
+    /** Brush softness 0..1: a faint inner ring marks where the brush starts to fade. */
+    var brushSoftness: Float
+        get() = renderer.softness
+        set(v) { renderer.softness = v }
+
     /** Space kept clear around the photo at Fit, in px (the Crop tool: its corners stay clear of the screen-edge back gesture). */
     var margin = 0f
         set(v) { if (v != field) { field = v; update() } }
@@ -291,6 +296,7 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
     @Volatile private var t = floatArrayOf(1f, 1f, 0f, 0f) // scale x, scale y, offset x, offset y
     @Volatile var overlay: Long? = null // layer id
     @Volatile var deband = true
+    @Volatile var softness = 0f
     @Volatile var finger: FloatArray? = null // view x, y, shown u, v, brush ring px, density; null = no loupe
     @Volatile var crop = IDENTITY // shown 0..1 -> upright photo 0..1, row-major
 
@@ -376,6 +382,7 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         val f = finger
         val uLoupe = glGetUniformLocation(program, "uLoupe")
         val uRing = glGetUniformLocation(program, "uRing")
+        glUniform1f(glGetUniformLocation(program, "uSoft"), softness)
         glUniform4f(uLoupe, 0f, 0f, 0f, 0f)
         // brush ring at the finger (GL window coordinates have y up)
         glUniform3f(uRing, f?.get(0) ?: 0f, viewH - (f?.get(1) ?: 0f), f?.get(4) ?: 0f)
@@ -424,6 +431,7 @@ uniform vec2 uFinger; // shown uv under the finger
 uniform vec2 uUvPerPx; // shown uv per screen px at the current zoom
 uniform mat3 uCrop; // shown uv -> photo uv (projective)
 uniform vec3 uRing; // brush ring centre x, y (window px) and radius px; radius 0 = none
+uniform float uSoft; // brush softness: a faint inner ring at (1 - uSoft) of the radius
 out vec4 outColor;
 """ + DITHER + """
 void main() {
@@ -455,6 +463,14 @@ void main() {
         float e = abs(length(gl_FragCoord.xy - uRing.xy) - uRing.z);
         c = mix(c, vec3(0.0), 0.5 * (1.0 - smoothstep(1.0, 2.5, e)));
         c = mix(c, vec3(1.0), 1.0 - smoothstep(0.5, 1.2, e));
+        // softness: a faint dashed ring where the brush starts to fade
+        vec2 d = gl_FragCoord.xy - uRing.xy;
+        float inner = uRing.z * (1.0 - uSoft);
+        if (uSoft > 0.02 && inner > 2.0) {
+            float ei = abs(length(d) - inner);
+            float dash = step(0.5, fract(atan(d.y, d.x) * inner / 25.0));
+            c = mix(c, vec3(1.0), 0.6 * dash * (1.0 - smoothstep(0.4, 1.0, ei)));
+        }
     }
     outColor = vec4(dither(c), 1.0);
 }"""

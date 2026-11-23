@@ -202,8 +202,8 @@ private fun tangents(p: List<Float>): FloatArray {
 }
 
 /** One Color layer. Values are slider units (-100..100), indexed by [ColorParam.ordinal]. */
-/** What a layer does. Color uses [Layer.values] and [Layer.curves]; Blur and Sharpen use [Layer.detail]. */
-enum class LayerKind { Color, Blur, Sharpen }
+/** What a layer does. Color uses [Layer.values] and [Layer.curves]; Blur and Sharpen use [Layer.detail]; Liquify [Layer.warp]. */
+enum class LayerKind { Color, Blur, Sharpen, Liquify }
 
 /**
  * Blur and Sharpen settings, 0..100 unless noted. Blur: [amount] is the radius (Gaussian: 100 = sigma 2% of the image
@@ -212,9 +212,21 @@ enum class LayerKind { Color, Blur, Sharpen }
  * -100..100 is midtone local contrast.
  */
 data class Detail(
-    val lens: Boolean = false, val amount: Float = 0f, val radius: Float = 30f, val clarity: Float = 0f,
+    val type: BlurType = BlurType.Gaussian, val amount: Float = 0f, val radius: Float = 30f, val clarity: Float = 0f,
     val focusX: Float = 0.5f, val focusY: Float = 0.5f, val range: Float = 10f, val bloom: Float = 30f,
-)
+    val angle: Float = 0f,
+) {
+    val lens: Boolean get() = type == BlurType.Lens
+
+    /** Lens and Zoom blur act around a point on the photo (focus / centre), set by tapping it. */
+    val hasPoint: Boolean get() = type == BlurType.Lens || type == BlurType.Zoom
+}
+
+/**
+ * Blur kinds. Motion streaks along [Detail.angle] (degrees, 0 = across); Zoom streaks toward ([Detail.focusX],
+ * [Detail.focusY]); for both [Detail.amount] 100 = the longest streak.
+ */
+enum class BlurType { Gaussian, Lens, Motion, Zoom }
 
 data class Layer(
     val id: Long,
@@ -226,12 +238,14 @@ data class Layer(
     val curves: Curves = Curves(),
     val kind: LayerKind = LayerKind.Color,
     val detail: Detail = Detail(),
+    val warp: List<WarpStroke> = emptyList(),
 ) {
     /** Whether the layer changes the photo at all (mask and blend aside). */
     val edited: Boolean get() = when (kind) {
         LayerKind.Color -> values.any { it != 0f } || curves.active
         LayerKind.Blur -> detail.amount > 0f
         LayerKind.Sharpen -> detail.amount > 0f || detail.clarity != 0f
+        LayerKind.Liquify -> warp.isNotEmpty()
     }
     operator fun get(p: ColorParam) = values[p.ordinal]
     fun with(p: ColorParam, v: Float) = copy(values = values.toMutableList().also { it[p.ordinal] = v })

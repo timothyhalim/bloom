@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -72,6 +73,11 @@ fun Modifier.scrollFade(state: ScrollState = rememberScrollState(), width: Dp = 
                 Brush.horizontalGradient(listOf(Color.Black, Color.Transparent), size.width - w, size.width),
                 topLeft = Offset(size.width - w, 0f), size = Size(w, size.height), blendMode = BlendMode.DstIn,
             )
+            // ‹ and › where there is more: the fade alone is easy to miss
+            val t = 5.dp.toPx()
+            val cy = size.height / 2
+            if (state.value > 0) drawPath(Path().apply { moveTo(1.dp.toPx(), cy); lineTo(1.dp.toPx() + t, cy - t); lineTo(1.dp.toPx() + t, cy + t); close() }, Bloom.OnVariant)
+            if (state.value < state.maxValue) drawPath(Path().apply { moveTo(size.width - 1.dp.toPx(), cy); lineTo(size.width - 1.dp.toPx() - t, cy - t); lineTo(size.width - 1.dp.toPx() - t, cy + t); close() }, Bloom.OnVariant)
         }
         .horizontalScroll(state)
 
@@ -82,7 +88,8 @@ object Icons {
     val Redo = icon("M16 6l4 4-4 4M20 10H10a5 5 0 0 0 0 10h3")
     val Compare = icon("M12 3v18M4 6h5v12H4zM15 6h5v12h-5")
     val Layers = icon("M12 4l9 5-9 5-9-5 9-5zM3 14l9 5 9-5")
-    val Adjust = icon("M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4")
+    // Color: three overlapping circles (light mixing)
+    val Adjust = icon("M12 3.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 1 0 0-9zM8 10a4.5 4.5 0 1 0 0 9 4.5 4.5 0 1 0 0-9zM16 10a4.5 4.5 0 1 0 0 9 4.5 4.5 0 1 0 0-9z")
     val Check = icon("M5 12l5 5 9-10")
     val Reset = icon("M19 12a7 7 0 1 1-2-5M19 4v4h-4")
     val Eye = icon("M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z")
@@ -110,10 +117,24 @@ object Icons {
     val Invert = icon("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18M12 7h5M12 12h8M12 17h5")
     val Subject = icon("M12 4a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM5 20c0-4 3-6.5 7-6.5s7 2.5 7 6.5")
     val Background = icon("M2 19l6.5-9 4.5 6 3-4 6 7zM17 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4z")
-    val Detail = icon("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z")
+    // Detail: a focus frame
+    val Detail = icon("M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M12 9a3 3 0 1 0 0 6 3 3 0 1 0 0-6z")
     val Blur = icon("M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11zM9 14a3 3 0 0 0 3 3")
-    val Sharpen = icon("M12 4l8.5 15h-17zM12 10v4")
+    val Sharpen = icon("M12 3l7 9-7 9-7-9zM12 8v8")
     val Depth = icon("M3 20h18M5.5 20L10 5M18.5 20L14 5M8.3 11h7.4")
+    val Push = icon("M4 12h14M13 7l5 5-5 5M4 8v8")
+    val Bloat = icon("M9 9L4 4M4 4v4M4 4h4M15 9l5-5M20 4h-4M20 4v4M15 15l5 5M20 20v-4M20 20h-4M9 15l-5 5M4 20v-4M4 20h4")
+    val Pinch = icon("M4 4l5 5M9 9V5M9 9H5M20 4l-5 5M15 9V5M15 9h4M20 20l-5-5M15 15v4M15 15h4M4 20l5-5M9 15v4M9 15H5")
+    val Motion = icon("M3 8h9M3 12h14M3 16h9M15 7l5 5-5 5")
+    val Zoom = icon("M12 12m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M4 4l4.5 4.5M20 4l-4.5 4.5M4 20l4.5-4.5M20 20l-4.5-4.5M12 2v4M12 18v4M2 12h4M18 12h4")
+    val Aperture = icon("M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zM14.5 3.4L10 11.5M20.6 10H11.5M18 18.3l-4.5-7.8M9.5 20.6L14 12.5M3.4 14h9.1M6 5.7l4.5 7.8")
+    // Crop's rotate 90°: a frame and the arrow turning it (Reset is a plain circular arrow)
+    val Turn = icon("M4 10h10v10H4zM8 6.5A8 8 0 0 1 19.5 10M20 5.5V10.5h-5")
+    val Restore = icon("M4 4h16v16H4zM4 12h16M12 4v16")
+    // Twirl: two separate arrows chasing round a circle, clockwise (y down: sweep 1)
+    val Twirl = icon("M5.42 9.61A7 7 0 0 1 18.58 9.61M19.61 6.79L18.58 9.61 15.98 8.11M18.58 14.39A7 7 0 0 1 5.42 14.39M4.39 17.21L5.42 14.39 8.02 15.89")
+    val RotateBack = icon("M4 12a8 8 0 1 0 2.3-5.7M4 3v4h4")
+    val Liquify = icon("M3 8c3-3 6 3 9 0s6-3 9 0M3 16c3-3 6 3 9 0s6-3 9 0")
     val Crop = icon("M6 2v16h16M2 6h16v16")
     val Rotate = icon("M20 12a8 8 0 1 1-2.3-5.7M20 3v4h-4")
     val Flip = icon("M12 3v18M9 7L4 17h5zM15 7l5 10h-5z")

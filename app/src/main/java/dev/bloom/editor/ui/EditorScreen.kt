@@ -58,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
@@ -72,6 +73,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -85,7 +87,9 @@ import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.LayerKind
+import dev.bloom.editor.model.WarpTool
 import dev.bloom.editor.ToolTouch
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.Color
@@ -113,7 +117,7 @@ class EditorState {
     var param by mutableStateOf(ColorParam.Exposure)
     var curvesOpen by mutableStateOf(false) // the Curves chip is selected instead of [param]
     var curveChannel by mutableIntStateOf(0) // 0 RGB, 1 R, 2 G, 3 B
-    var detailParam by mutableIntStateOf(0) // Sharpen's row: 0 Amount, 1 Radius, 2 Clarity
+    var detailMore by mutableStateOf(false) // Detail's More rows shown
     var comparing by mutableStateOf(false)
     var opacityPreview by mutableStateOf<Pair<Long, Float>?>(null)
     var bubble by mutableStateOf<Pair<Long, Float>?>(null) // layer id, thumbnail centre y (root px)
@@ -135,8 +139,21 @@ class EditorState {
 
     // The Crop tool edits [crop] (non-null while open) until ✓; it is a document setting, not a layer.
     var crop by mutableStateOf<Crop?>(null)
+
+    // Liquify brush settings (kept between layers)
+    var warpTool by mutableStateOf(WarpTool.Push)
+    var warpSize by mutableFloatStateOf(60f) // radius in dp on screen
+    var warpStrength by mutableFloatStateOf(50f)
+    var warpSoftness by mutableFloatStateOf(50f)
+    var warpMore by mutableStateOf(false) // Strength and Softness rows shown
+    var warpReverse by mutableStateOf(false) // Twirl counterclockwise
+
+    // A brush's size and softness shown mid-photo while their sliders move: radius dp, softness 0..100, and a tick to time it out
+    var ring by mutableStateOf<Pair<Float, Float>?>(null)
+    var ringTick by mutableIntStateOf(0)
+    fun showRing(sizeDp: Float, softness: Float) { ring = sizeDp to softness; ringTick++ }
     var cropRatio by mutableStateOf<Float?>(null) // locked output width / height; null = free
-    var cropParam by mutableIntStateOf(0) // 0 Straighten, 1 Vertical, 2 Horizontal
+    var cropMore by mutableStateOf(false) // Crop's perspective rows shown
 
     /** A Lens blur or a depth range step exists (applied or in the draft), so the depth map is needed. */
     val needsDepth: Boolean
@@ -163,7 +180,6 @@ class EditorState {
     /** Opens the tool for a new layer of [kind], or for [edit]. */
     fun openTool(kind: LayerKind = LayerKind.Color, edit: Layer? = null, mask: Boolean = false) {
         draft = edit ?: Layer(nextId++, kind = kind)
-        detailParam = 0
         editingId = edit?.id
         param = ColorParam.Exposure
         curvesOpen = false
@@ -235,7 +251,6 @@ class EditorState {
     fun openCrop() {
         crop = doc.crop
         cropRatio = null
-        cropParam = 0
         bubble = null
     }
 
@@ -339,18 +354,30 @@ fun EditorScreen(photoView: PhotoView) {
     }
     // Mask overlay and painting only in mask mode.
     val shownPreview = state.preview
-    // Loupe while painting or picking a color; brush ring only for the brush.
-    LaunchedEffect(state.maskMode, state.maskTool, state.brushSize) {
+    // derived, so a stroke or slider changing the draft doesn't restart these effects
+    // Lens focus and Zoom centre: one finger sets the point
+    val lensOpen by remember { derivedStateOf { state.draft?.let { it.kind == LayerKind.Blur && it.detail.hasPoint } == true } }
+    val liquifyOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Liquify && !state.maskMode } }
+    // Loupe while painting or picking a color; brush ring for the mask brush and Liquify.
+    LaunchedEffect(state.maskMode, state.maskTool, state.brushSize, liquifyOpen, state.warpSize, state.softness, state.warpSoftness) {
         photoView.loupe = state.maskMode && (state.maskTool == MaskTool.Brush || state.maskTool == MaskTool.Color)
-        photoView.brushRadiusPx = if (state.maskMode && state.maskTool == MaskTool.Brush) state.brushSize * density.density else 0f
+        photoView.brushRadiusPx = when {
+            liquifyOpen -> state.warpSize * density.density
+            state.maskMode && state.maskTool == MaskTool.Brush -> state.brushSize * density.density
+            else -> 0f
+        }
+        photoView.brushSoftness = (if (liquifyOpen) state.warpSoftness else state.softness) / 100f
     }
-    val lensOpen = state.draft?.let { it.kind == LayerKind.Blur && it.detail.lens } == true
+    // the preview ring fades out shortly after the slider stops
+    LaunchedEffect(state.ringTick) { if (state.ring != null) { kotlinx.coroutines.delay(700); state.ring = null } }
     val cropOpen by remember { derivedStateOf { state.crop != null } }
     LaunchedEffect(cropOpen) { photoView.margin = if (cropOpen) 32 * density.density else 0f }
-    LaunchedEffect(state.draft?.id, state.maskMode, shownPreview, lensOpen, cropOpen) {
+    LaunchedEffect(state.draft?.id, state.maskMode, shownPreview, lensOpen, cropOpen, liquifyOpen) {
         photoView.setOverlay(state.draft?.id?.takeIf { state.maskMode })
         photoView.onTool = if (cropOpen && shownPreview != null) {
             CropTouch(state, photoView, shownPreview.width.toFloat() / shownPreview.height, density.density)::on
+        } else if (liquifyOpen && shownPreview != null) {
+            LiquifyTouch(state, photoView, shownPreview.width.toFloat() / shownPreview.height, density.density)::on
         } else if (state.maskMode && shownPreview != null) {
             MaskTouch(state, photoView, shownPreview.width.toFloat() / shownPreview.height, density.density) { u, v, done ->
                 photoView.sample(state.below(), u, v, done)
@@ -437,8 +464,9 @@ fun EditorScreen(photoView: PhotoView) {
             if (state.maskMode && selGradient != null && selGradient.visible) GradientHandles(selGradient, photoView, transformTick)
             val selSubject = state.stepIndex?.let { state.draft?.mask?.steps?.getOrNull(it) } as? SubjectStep
             if (state.maskMode && selSubject != null) Pins(selSubject, photoView, transformTick)
-            state.draft?.takeIf { !state.maskMode && it.kind == LayerKind.Blur && it.detail.lens }?.let { FocusMark(it.detail, photoView, transformTick) }
+            state.draft?.takeIf { !state.maskMode && it.kind == LayerKind.Blur && it.detail.hasPoint }?.let { FocusMark(it.detail, photoView, transformTick) }
             if (cropOpen) CropOverlay(state, photoView, transformTick)
+            state.ring?.let { (size, soft) -> BrushRing(size, soft / 100f, photoView) }
             val preview = state.preview
             if (state.source == null || preview == null) {
                 // opaque, so a closed photo doesn't show through
@@ -599,7 +627,8 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
         val c = state.crop
         if (c != null) state.preview?.let { CropRows(state, c, it.width.toFloat() / it.height, box) }
         if (d != null && state.maskMode) MaskRows(state, box)
-        if (d != null && !state.maskMode && d.kind != LayerKind.Color) DetailRows(state, d, box)
+        if (d != null && !state.maskMode && d.kind == LayerKind.Liquify) LiquifyRows(state, box)
+        if (d != null && !state.maskMode && (d.kind == LayerKind.Blur || d.kind == LayerKind.Sharpen)) DetailRows(state, d, box)
         if (d != null && !state.maskMode && d.kind == LayerKind.Color && state.curvesOpen) CurvesRow(state, box)
         if (d != null && !state.maskMode && d.kind == LayerKind.Color && !state.curvesOpen) {
             val p = state.param
@@ -625,15 +654,18 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
                 // each tool joins the bar when it works
                 ToolButton("Color", Icons.Adjust, Modifier.weight(1f)) { state.openTool() }
                 ToolButton("Detail", Icons.Detail, Modifier.weight(1f)) { state.openTool(LayerKind.Blur) }
+                ToolButton("Liquify", Icons.Liquify, Modifier.weight(1f)) { state.openTool(LayerKind.Liquify) }
                 ToolButton("Crop", Icons.Crop, Modifier.weight(1f)) { state.openCrop() }
             } else if (state.maskMode) {
                 MaskBar(state)
+            } else if (d.kind == LayerKind.Liquify) {
+                LiquifyBar(state, d, onDiscard)
             } else if (d.kind != LayerKind.Color) {
                 ToolIcon(Icons.Detail, "Detail. Back to tools", onDiscard)
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     // Blur and Sharpen are separate layer kinds; an applied layer keeps its kind
                     for (k in listOf(LayerKind.Blur, LayerKind.Sharpen)) {
-                        Chip(k.label, d.kind == k, k.icon) { if (state.editingId == null && d.kind != k) state.draft = d.copy(kind = k, detail = Detail()) }
+                        ParamChip(k.icon, k.label, false, d.kind == k) { if (state.editingId == null && d.kind != k) state.draft = d.copy(kind = k, detail = Detail()) }
                     }
                 }
                 MaskButton(d.mask) { state.maskMode = true }
@@ -667,10 +699,11 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
 
 @Composable
 private fun ToolButton(label: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
-    Column(modifier.height(58.dp).clickable(role = Role.Button, onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Box(Modifier.size(44.dp, 30.dp), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Bloom.OnVariant) }
-        Text(label, fontSize = 11.sp, color = Bloom.OnVariant, fontWeight = FontWeight.Medium)
-    }
+    // icon only, like every other bar; the name is for screen readers
+    Box(
+        modifier.height(58.dp).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, null, Modifier.size(26.dp), tint = Bloom.On) }
 }
 
 /** Left slot of an open tool's bar: the tool's icon; tapping goes back to the tool list. */
@@ -696,6 +729,17 @@ private val sharpenParams = listOf(
     DetailParam("Radius", 0f..100f, { it.radius }, { d, v -> d.copy(radius = v) }),
     DetailParam("Clarity", -100f..100f, { it.clarity }, { d, v -> d.copy(clarity = v) }),
 )
+private val BlurType.icon get() = when (this) {
+    BlurType.Gaussian -> Icons.Blur
+    BlurType.Lens -> Icons.Aperture
+    BlurType.Motion -> Icons.Motion
+    BlurType.Zoom -> Icons.Zoom
+}
+
+private val motionParams = listOf(
+    DetailParam("Amount", 0f..100f, { it.amount }, { d, v -> d.copy(amount = v) }),
+    DetailParam("Angle", 0f..180f, { it.angle }, { d, v -> d.copy(angle = v) }),
+)
 private val gaussParams = listOf(DetailParam("Amount", 0f..100f, { it.amount }, { d, v -> d.copy(amount = v) }))
 private val lensParams = listOf(
     DetailParam("Amount", 0f..100f, { it.amount }, { d, v -> d.copy(amount = v) }),
@@ -704,8 +748,8 @@ private val lensParams = listOf(
 )
 
 /**
- * Rows above the Detail bar: a chip row (Blur: Gaussian / Lens and Lens's sliders; Sharpen: its sliders), then the
- * selected slider with its value and Reset.
+ * One box above the Detail bar, like Liquify's: the type (Gaussian, Lens or Sharpen) over Amount, and More for the
+ * rest (Blur: Gaussian or Lens, and Lens's Range and Highlights; Sharpen: Radius and Clarity).
  */
 @Composable
 private fun DetailRows(state: EditorState, d: Layer, box: Modifier) {
@@ -713,38 +757,47 @@ private fun DetailRows(state: EditorState, d: Layer, box: Modifier) {
     val params = when {
         d.kind == LayerKind.Sharpen -> sharpenParams
         det.lens -> lensParams
+        det.type == BlurType.Motion -> motionParams
         else -> gaussParams
     }
-    val which = state.detailParam.coerceIn(0, params.lastIndex)
-    Row(
-        box.height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (d.kind == LayerKind.Blur) {
-            Chip("Gaussian", !det.lens) { state.draft = d.copy(detail = det.copy(lens = false)); state.detailParam = 0 }
-            Chip("Lens", det.lens) { state.draft = d.copy(detail = det.copy(lens = true)); state.detailParam = 0 }
+    val set = { p: DetailParam, v: Float -> state.draft = d.copy(detail = p.set(det, v)) }
+    Column(box) {
+        if (state.detailMore) {
+            if (d.kind == LayerKind.Blur) Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Type", Modifier.width(84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+                for (t in BlurType.entries) ParamChip(t.icon, "${t.name} blur", false, det.type == t) { state.draft = d.copy(detail = det.copy(type = t)) }
+            }
+            for (p in params.drop(1)) SliderRow(p.name, p.get(det), p.range) { set(p, it) }
         }
-        if (params.size > 1) params.forEachIndexed { i, p ->
-            val v = p.get(det)
-            Chip(if (i == which) "${p.name} ${if (p.range.start < 0f) signed(v) else v.roundToInt()}" else p.name, i == which) { state.detailParam = i }
+        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+            val p = params[0]
+            val status = state.subjectStatus?.takeIf { det.lens && d.kind == LayerKind.Blur && state.depth == null }
+            if (status != null) {
+                if (status.startsWith("Couldn't")) TextButton({ state.subjectRetry++ }, Modifier.weight(1f)) { Text("$status. Tap to retry", fontSize = 12.sp, color = Bloom.On, maxLines = 2) }
+                else Row(Modifier.weight(1f).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+                    Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+                }
+            } else {
+                // reads as "Gaussian blur", "Lens blur"…
+                if (d.kind == LayerKind.Sharpen) ToolLabel("Sharpen", p.name) else ToolLabel(det.type.name, "Blur")
+                Slider(p.get(det), { set(p, it.roundToInt().toFloat()) }, Modifier.weight(1f), valueRange = p.range, colors = sliderColors())
+                Text("${p.get(det).roundToInt()}", Modifier.width(36.dp), fontSize = 14.sp, color = Bloom.On)
+            }
+            IconButton({ state.detailMore = !state.detailMore }) {
+                Icon(Icons.Up, if (state.detailMore) "Less" else "More settings", Modifier.rotate(if (state.detailMore) 180f else 0f), tint = Bloom.On)
+            }
         }
     }
-    Row(box.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-        val p = params[which]
-        val v = p.get(det)
-        val status = state.subjectStatus?.takeIf { det.lens && d.kind == LayerKind.Blur && state.depth == null }
-        if (status != null) {
-            if (status.startsWith("Couldn't")) TextButton({ state.subjectRetry++ }, Modifier.weight(1f)) { Text("$status. Tap to retry", fontSize = 12.sp, color = Bloom.On, maxLines = 2) }
-            else Row(Modifier.weight(1f).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.size(16.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
-                Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-            }
-        } else {
-            Text(p.name, Modifier.width(88.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-            Slider(v, { state.draft = d.copy(detail = p.set(det, it.roundToInt().toFloat())) }, Modifier.weight(1f), valueRange = p.range, colors = sliderColors())
-            Text(if (p.range.start < 0f) signed(v) else "${v.roundToInt()}", Modifier.width(44.dp), fontSize = 14.sp, color = Bloom.On)
-            IconButton({ state.draft = d.copy(detail = p.set(det, p.default)) }) { Icon(Icons.Reset, "Reset ${p.name}", tint = Bloom.On) }
-        }
+}
+
+/** Left label of a tool's main slider row: what is selected, and under it what the slider sets. */
+@Composable
+internal fun ToolLabel(title: String, slider: String, width: Dp = 84.dp) {
+    Column(Modifier.width(width).padding(start = 16.dp)) {
+        // the same style as every slider label (Color, mask); the second line a step quieter
+        Text(title, fontSize = 12.sp, lineHeight = 14.sp, color = Bloom.OnVariant)
+        Text(slider, fontSize = 11.sp, lineHeight = 13.sp, color = Bloom.OnVariant.copy(alpha = 0.7f))
     }
 }
 
@@ -775,7 +828,7 @@ private val ColorParam.icon get() = when (this) {
 
 /** Parameter in the bar: icon only. The slider row above names the selected one; a dot marks changed values. */
 @Composable
-private fun ParamChip(icon: ImageVector, desc: String, changed: Boolean, selected: Boolean, onClick: () -> Unit) {
+internal fun ParamChip(icon: ImageVector, desc: String, changed: Boolean, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.size(42.dp, 44.dp).clip(RoundedCornerShape(10.dp))
             .then(if (selected) Modifier.background(Bloom.SurfaceHigh).drawBehind {

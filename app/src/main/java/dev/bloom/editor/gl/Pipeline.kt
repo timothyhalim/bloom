@@ -6,12 +6,15 @@ import android.graphics.Matrix
 import android.opengl.GLES30.*
 import android.opengl.GLUtils
 import android.util.Half
+import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.BrushStep
+import dev.bloom.editor.model.Detail
 import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.LayerKind
+import dev.bloom.editor.model.WarpField
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.MaskStep
@@ -86,10 +89,16 @@ class Pipeline {
     private val combineProgram = link(PASS_VERTEX, COMBINE_FRAGMENT)
     private val gaussProgram = link(PASS_VERTEX, GAUSS_FRAGMENT)
     private val lensProgram = link(PASS_VERTEX, LENS_FRAGMENT)
+    private val streakProgram = link(PASS_VERTEX, STREAK_FRAGMENT)
     private var depth: SubjectMask? = null // the whole photo's depth map (255 = near), for lens blur
     private var depthTex = 0
     // Blur and Sharpen scratch: [0] half-blurred (with mipmaps), [1] small blur, [2] large blur. Texture + framebuffer.
     private var detail: List<Pair<Int, Int>>? = null
+    // Liquify: each layer's offset grid (kept between frames so a growing stroke only adds its new dabs) and its texture
+    private class WarpTex(val field: WarpField, val tex: Int) {
+        val buf: java.nio.FloatBuffer = ByteBuffer.allocateDirect(field.d.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+    }
+    private val warps = HashMap<Long, WarpTex>()
     private val params = FloatArray(ColorParam.entries.size)
     private val curveTex = genTexture().also {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -115,6 +124,7 @@ class Pipeline {
         glUniform1i(glGetUniformLocation(colorProgram, "uCurve"), 3)
         glUniform1i(glGetUniformLocation(colorProgram, "uF1"), 4)
         glUniform1i(glGetUniformLocation(colorProgram, "uF2"), 5)
+        glUniform1i(glGetUniformLocation(colorProgram, "uWarp"), 6)
         glUseProgram(gaussProgram)
         glUniform1i(glGetUniformLocation(gaussProgram, "uMask"), 1)
         glUseProgram(lensProgram)
@@ -220,6 +230,7 @@ class Pipeline {
         val active = layers.filter { it.visible && it.opacity > 0f }
         if (active == rendered) return result
         masks.keys.filter { id -> layers.none { it.id == id } }.forEach { id -> masks.remove(id)?.let(::delete) }
+        warps.keys.filter { id -> layers.none { it.id == id && it.kind == LayerKind.Liquify } }.forEach { id -> glDeleteTextures(1, intArrayOf(warps.remove(id)!!.tex), 0) }
         var input = source
         if (gain != null && active.isNotEmpty()) {
             val sdr = chain(source, active, sdrFbo to sdrKeep)
@@ -252,7 +263,7 @@ class Pipeline {
         var input = src
         active.forEachIndexed { i, l ->
             val m = if (l.mask.active) maskFor(l, input, active.subList(0, i)) else 0
-            if (l.kind != LayerKind.Color) detailPasses(l, input, m)
+            if (l.kind == LayerKind.Blur || l.kind == LayerKind.Sharpen) detailPasses(l, input, m)
             val out = i % 2
             val toLast = last != null && i == active.lastIndex
             glBindFramebuffer(GL_FRAMEBUFFER, if (toLast) last!!.first else fbo[out])
@@ -267,7 +278,13 @@ class Pipeline {
             glUniform1i(glGetUniformLocation(colorProgram, "uCurves"), if (l.kind == LayerKind.Color && l.curves.active) 1 else 0)
             glUniform1i(glGetUniformLocation(colorProgram, "uKind"), l.kind.ordinal)
             glUniform2f(glGetUniformLocation(colorProgram, "uDetail"), l.detail.amount / 50f, l.detail.clarity / 100f * 1.5f)
-            if (l.kind != LayerKind.Color) {
+            if (l.kind == LayerKind.Liquify) {
+                glActiveTexture(GL_TEXTURE6)
+                glBindTexture(GL_TEXTURE_2D, warpTexture(l))
+                setGeometry(colorProgram, toUpright)
+                glUniformMatrix3fv(glGetUniformLocation(colorProgram, "uUnmap"), 1, false, fromUpright, 0)
+            }
+            if (l.kind == LayerKind.Blur || l.kind == LayerKind.Sharpen) {
                 val d = detail!!
                 glActiveTexture(GL_TEXTURE4)
                 glBindTexture(GL_TEXTURE_2D, d[1].first)
@@ -290,6 +307,32 @@ class Pipeline {
         return input
     }
 
+    /** Layer [l]'s offset grid as an RG16F texture, brought up to date (only the changed cells are uploaded). */
+    private fun warpTexture(l: Layer): Int {
+        val aspect = geo[4]
+        val wt = warps[l.id]?.takeIf { it.field.aspect == aspect } ?: run {
+            warps.remove(l.id)?.let { glDeleteTextures(1, intArrayOf(it.tex), 0) }
+            val f = WarpField(aspect)
+            val t = genTexture()
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RG16F, f.w, f.h)
+            WarpTex(f, t).also { warps[l.id] = it }
+        }
+        wt.field.update(l.warp)
+        wt.field.takeDirty()?.let { (x0, y0, x1, y1) ->
+            val f = wt.field
+            wt.buf.position(0)
+            wt.buf.put(f.d, y0 * f.w * 2, (y1 - y0) * f.w * 2).position(0)
+            glBindTexture(GL_TEXTURE_2D, wt.tex)
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, f.w)
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, x0)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x0, y0, x1 - x0, y1 - y0, GL_RG, GL_FLOAT, wt.buf)
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0)
+        }
+        return wt.tex
+    }
+
     /**
      * Blur: [src] blurred into detail[1]. Sharpen: a small blur into detail[1] and, for clarity, a large one into detail[2].
      * A masked Blur only averages pixels inside its mask, so a blurred background doesn't pick up the subject's colors.
@@ -306,12 +349,37 @@ class Pipeline {
         }.also { detail = it }
         if (l.kind == LayerKind.Blur && l.detail.lens) {
             lens(src, l, if (l.mask.active) mask else 0, d[1].second)
+        } else if (l.kind == LayerKind.Blur && (l.detail.type == BlurType.Motion || l.detail.type == BlurType.Zoom)) {
+            streak(src, l.detail, d[1].second)
         } else if (l.kind == LayerKind.Blur) {
             gauss(src, l.detail.amount / 100f * BLUR_MAX * uprightHeight, if (l.mask.active) mask else 0, l.mask.invert, d[1].second)
         } else {
             gauss(src, (0.5f + 2.5f * l.detail.radius / 100f) / SHARPEN_SCALE * uprightHeight, 0, false, d[1].second)
             if (l.detail.clarity != 0f) gauss(src, CLARITY_RADIUS * uprightHeight, 0, false, d[2].second)
         }
+    }
+
+    /** Motion or Zoom blur of [src] into framebuffer [out]: averages along a line (see STREAK_FRAGMENT). */
+    private fun streak(src: Int, det: Detail, out: Int) {
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, src)
+        glGenerateMipmap(GL_TEXTURE_2D)
+        glBindFramebuffer(GL_FRAMEBUFFER, out)
+        glViewport(0, 0, width, height)
+        val p = streakProgram
+        glUseProgram(p)
+        setGeometry(p, toUpright)
+        glUniformMatrix3fv(glGetUniformLocation(p, "uUnmap"), 1, false, fromUpright, 0)
+        glUniform1f(glGetUniformLocation(p, "uHeight"), uprightHeight)
+        val zoom = det.type == BlurType.Zoom
+        glUniform1i(glGetUniformLocation(p, "uZoom"), if (zoom) 1 else 0)
+        // Motion: half the streak in upright 0..1 (y down, so a positive angle tilts up to the right)
+        val half = det.amount / 100f * MOTION_MAX / 2
+        val a = Math.toRadians(det.angle.toDouble())
+        glUniform2f(glGetUniformLocation(p, "uDir"), (half * kotlin.math.cos(a)).toFloat() / geo[4], -(half * kotlin.math.sin(a)).toFloat())
+        glUniform2f(glGetUniformLocation(p, "uCentre"), det.focusX, det.focusY)
+        glUniform1f(glGetUniformLocation(p, "uAmount"), det.amount / 100f * ZOOM_MAX)
+        drawQuad(src)
     }
 
     /** Depth-aware lens blur of [src] into framebuffer [out] (see LENS_FRAGMENT). */
@@ -446,6 +514,8 @@ class Pipeline {
 
     fun release() {
         glDeleteTextures(5, intArrayOf(raw, source, curveTex, gainTex, depthTex), 0)
+        warps.values.forEach { glDeleteTextures(1, intArrayOf(it.tex), 0) }
+        warps.clear()
         setSubjects(emptyMap())
         freeHdrTargets()
         glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
@@ -454,7 +524,7 @@ class Pipeline {
         glDeleteTextures(1, read, 0)
         glDeleteFramebuffers(1, read, 1)
         freeMasks()
-        listOf(colorProgram, copyProgram, warpProgram, maskProgram, dabProgram, blurProgram, prepareProgram, combineProgram).forEach(::glDeleteProgram)
+        listOf(colorProgram, copyProgram, warpProgram, streakProgram, lensProgram, gaussProgram, maskProgram, dabProgram, blurProgram, prepareProgram, combineProgram).forEach(::glDeleteProgram)
     }
 
     /** Writes 0.5 + 3/4 of a half-float step into an RGBA16F target and reads it back: 0.5 means the GPU truncates. */
@@ -861,10 +931,16 @@ uniform int uBlend;
 uniform bool uMasked;
 uniform bool uInvert;
 uniform bool uCurves;
-uniform int uKind; // LayerKind: 0 Color, 1 Blur, 2 Sharpen
+uniform int uKind; // LayerKind: 0 Color, 1 Blur, 2 Sharpen, 3 Liquify
 uniform sampler2D uF1; // Blur: the blurred layer input. Sharpen: its small blur
 uniform sampler2D uF2; // Sharpen: the large blur, for clarity
 uniform vec2 uDetail; // Sharpen: amount, clarity
+uniform sampler2D uWarp; // Liquify: where each upright point reads from, as an offset in photo heights
+uniform mat3 uMap; // Liquify: pipeline pixel (0..1 of the full image) -> upright 0..1
+uniform mat3 uUnmap; // and back
+uniform vec2 uOrigin;
+uniform vec2 uFull;
+uniform float uAspect;
 """ + HALF_ROUND + """
 uniform sampler2D uCurve; // CURVE_SIZE x 1 tone table, rgb = output per channel
 out vec4 outColor;
@@ -884,7 +960,16 @@ void main() {
     vec4 src = texelFetch(uTex, px, 0);
     vec3 p;
     if (uKind == 1) p = texelFetch(uF1, px, 0).rgb;
-    else if (uKind == 2) {
+    else if (uKind == 3) {
+        vec2 uv = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy;
+        vec2 o = texture(uWarp, uv).rg;
+        // untouched (or fully restored) places keep their exact pixel
+        if (o == vec2(0.0)) p = src.rgb;
+        else {
+            vec2 q = (uUnmap * vec3(uv + o / vec2(uAspect, 1.0), 1.0)).xy * uFull - uOrigin;
+            p = textureLod(uTex, q / vec2(textureSize(uTex, 0)), 0.0).rgb;
+        }
+    } else if (uKind == 2) {
         // unsharp mask, then clarity: midtone-weighted local contrast on brightness only
         p = src.rgb + uDetail.x * (src.rgb - texelFetch(uF1, px, 0).rgb);
         float l = dot(clamp(src.rgb, 0.0, 1.0), LUMA);
@@ -1061,6 +1146,39 @@ void main() {
         // disc reaches this pixel, so sharp areas stay sharp and blur grows with depth. A tap
         // farther away than this pixel can blur no more than this pixel does, so the background never smears over a
         // sharp foreground. Bright taps weigh more (uBloom): highlights turn into discs like a real lens.
+        // Motion / Zoom: STREAK_TAPS samples along a line through the pixel (Motion) or toward the centre (Zoom), each
+        // from the mip level as wide as the gap between samples, so long streaks stay smooth.
+        const val STREAK_FRAGMENT = """#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform mat3 uMap;
+uniform mat3 uUnmap;
+uniform vec2 uOrigin;
+uniform vec2 uFull;
+uniform float uAspect;
+uniform float uHeight; // upright height in px
+uniform bool uZoom;
+uniform vec2 uDir; // Motion: half the streak, upright 0..1
+uniform vec2 uCentre; // Zoom: centre, upright 0..1
+uniform float uAmount; // Zoom: share of the way to the centre the streak reaches
+out vec4 outColor;
+const int N = """ + STREAK_TAPS + """;
+void main() {
+    vec2 uv = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy;
+    vec2 span = uZoom ? (uCentre - uv) * uAmount : 2.0 * uDir; // the streak, upright 0..1
+    vec2 start = uZoom ? uv : uv - uDir;
+    float gap = length(span * vec2(uAspect, 1.0)) * uHeight / float(N);
+    float lod = log2(max(gap, 1.0));
+    vec2 size = vec2(textureSize(uTex, 0));
+    vec3 acc = vec3(0.0);
+    for (int i = 0; i < N; i++) {
+        vec2 q = start + span * (float(i) + 0.5) / float(N);
+        vec2 px = (uUnmap * vec3(q, 1.0)).xy * uFull - uOrigin;
+        acc += textureLod(uTex, px / size, lod).rgb;
+    }
+    outColor = vec4(acc / float(N), 1.0);
+}"""
+
         const val LENS_FRAGMENT = """#version 300 es
 precision highp float;
 uniform sampler2D uTex;
@@ -1138,6 +1256,9 @@ void main() {
 private const val GAUSS_TAPS = 16
 private const val BLUR_MAX = 0.02f // Blur at 100: sigma = 2% of the upright image height
 private const val LENS_MAX = 0.04f // Lens blur at 100: a disc with a radius of 4% of the upright image height
+private const val MOTION_MAX = 0.1f // Motion blur at 100: a streak 10% of the upright image height long
+private const val ZOOM_MAX = 0.3f // Zoom blur at 100: streaks reach 30% of the way to the centre
+private const val STREAK_TAPS = 48
 private const val SHARPEN_SCALE = 3000f // Sharpen radius 0..100 = sigma 0.5..3 px on a 3000 px tall photo
 private const val CLARITY_RADIUS = 0.015f // of the image height
 
@@ -1146,6 +1267,9 @@ fun detailReach(l: Layer): Float = when {
     !l.visible -> 0f
     // taps reach the radius, and each reads a mip texel about a quarter of it wide
     l.kind == LayerKind.Blur && l.detail.lens -> 1.3f * LENS_MAX * l.detail.amount / 100f
+    // half the streak plus a mip texel; Zoom from the farthest corner (at most ~1.8 heights away on a 16:9 photo)
+    l.kind == LayerKind.Blur && l.detail.type == BlurType.Motion -> 0.6f * MOTION_MAX * l.detail.amount / 100f
+    l.kind == LayerKind.Blur && l.detail.type == BlurType.Zoom -> 2f * ZOOM_MAX * l.detail.amount / 100f
     l.kind == LayerKind.Blur -> 3f * BLUR_MAX * l.detail.amount / 100f
     l.kind == LayerKind.Sharpen -> 3f * if (l.detail.clarity != 0f) CLARITY_RADIUS else 3f / SHARPEN_SCALE
     else -> 0f

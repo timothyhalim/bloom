@@ -173,7 +173,7 @@ fun MaskRows(state: EditorState, box: Modifier) {
             MaskActions(state)
             when (state.maskTool) {
                 MaskTool.Brush -> {
-                    SliderRow("Softness", state.softness, 0f..100f) { state.softness = it }
+                    SliderRow("Softness", state.softness, 0f..100f) { state.softness = it; state.showRing(state.brushSize, it) }
                     SliderRow("Flow", state.flow, 1f..100f) { state.flow = it }
                 }
                 MaskTool.Color -> (sel as? ColorStep)?.let { c ->
@@ -188,7 +188,7 @@ fun MaskRows(state: EditorState, box: Modifier) {
             when (state.maskTool) {
                 MaskTool.Brush -> {
                     Text("Size", Modifier.width(36.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-                    Slider(state.brushSize, { state.brushSize = it.roundToInt().toFloat() }, Modifier.weight(1f), valueRange = 4f..150f, colors = sliderColors())
+                    Slider(state.brushSize, { state.brushSize = it.roundToInt().toFloat(); state.showRing(state.brushSize, state.softness) }, Modifier.weight(1f), valueRange = 4f..150f, colors = sliderColors())
                     Text("${state.brushSize.roundToInt()}", Modifier.width(36.dp), fontSize = 14.sp, color = Bloom.On)
                 }
                 MaskTool.Gradient -> Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -356,7 +356,7 @@ private fun SignToggle(state: EditorState) {
 }
 
 @Composable
-private fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+internal fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
     // lines up with the Size row below: label after the 48dp sign button, value column, then the More button's width
     Row(Modifier.fillMaxWidth().height(48.dp).padding(end = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.width(84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)

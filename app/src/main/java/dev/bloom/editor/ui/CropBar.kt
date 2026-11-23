@@ -5,6 +5,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.draw.rotate
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,6 +32,7 @@ import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bloom.editor.PhotoView
@@ -41,14 +45,28 @@ import kotlin.math.roundToInt
 /** Aspect presets as landscape width / height; null = free, 0 = the photo's own. Tapping the selected one turns it. */
 private val ratios = listOf("Free" to null, "Original" to 0f, "1:1" to 1f, "4:5" to 5f / 4f, "3:2" to 1.5f, "16:9" to 16f / 9f)
 
-/** Straighten and keystone sliders: name, range, read, write. */
+/** Rotate (straighten) and perspective sliders: name, range, read, write. */
 private class CropParam(val name: String, val range: ClosedFloatingPointRange<Float>, val get: (Crop) -> Float, val set: (Crop, Float) -> Crop)
 
 private val cropParams = listOf(
-    CropParam("Straighten", -45f..45f, { it.angle }, { c, v -> c.copy(angle = v) }),
+    CropParam("Rotate", -45f..45f, { it.angle }, { c, v -> c.copy(angle = v) }),
     CropParam("Vertical", -100f..100f, { it.vertical }, { c, v -> c.copy(vertical = v) }),
     CropParam("Horizontal", -100f..100f, { it.horizontal }, { c, v -> c.copy(horizontal = v) }),
 )
+
+/** One Crop slider row, ending in space the width of the More button so it lines up with the row below. */
+@Composable
+private fun CropSlider(state: EditorState, c: Crop, aspect: Float, p: CropParam) {
+    val degrees = p.range.endInclusive < 50f
+    Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(p.name, Modifier.width(100.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+        // straightening or perspective resets the crop to the largest that fits, at the locked ratio or the crop's own
+        val set = { v: Float -> state.crop = p.set(c, v).maximized(aspect, state.cropRatio ?: c.size(aspect).let { (w, h) -> w / h }) }
+        Slider(p.get(c), { set(if (degrees) (it * 10).roundToInt() / 10f else it.roundToInt().toFloat()) }, Modifier.weight(1f), valueRange = p.range, colors = sliderColors())
+        Text(if (degrees) "%.1f°".format(p.get(c)) else signed(p.get(c)), Modifier.width(48.dp), fontSize = 14.sp, color = Bloom.On)
+        Spacer(Modifier.width(48.dp))
+    }
+}
 
 /**
  * Drags on the photo while the Crop tool shows the whole frame: corners, edges (when no ratio is locked), or inside
@@ -153,12 +171,16 @@ fun CropOverlay(state: EditorState, photoView: PhotoView, transformTick: Int) {
     }
 }
 
-/** Rows above the Crop bar: aspect presets, then Straighten / Vertical / Horizontal (tap the name to switch). */
+/** The box above the Crop bar: aspect presets, and More for Rotate (straighten) and Vertical / Horizontal perspective. */
 @Composable
 fun CropRows(state: EditorState, c: Crop, aspect: Float, box: Modifier) {
     val frame = c.frame(aspect).let { (fw, fh) -> fw / fh }
+    // one box like the other tools
+    Column(box) {
+        if (state.cropMore) for (p in cropParams) CropSlider(state, c, aspect, p)
+        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
     Row(
-        box.height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp),
+        Modifier.weight(1f).padding(start = 6.dp).scrollFade(),
         horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
     ) {
         for ((name, landscape) in ratios) {
@@ -183,19 +205,10 @@ fun CropRows(state: EditorState, c: Crop, aspect: Float, box: Modifier) {
             }
         }
     }
-    val p = cropParams[state.cropParam]
-    Row(box.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-        TextButton({ state.cropParam = (state.cropParam + 1) % cropParams.size }, Modifier.width(104.dp).semantics { contentDescription = "${p.name}. Tap for the next slider" }) {
-            Text(p.name, fontSize = 12.sp, color = Bloom.On)
+            IconButton({ state.cropMore = !state.cropMore }) {
+                Icon(Icons.Up, if (state.cropMore) "Less" else "Rotate and perspective", Modifier.rotate(if (state.cropMore) 180f else 0f), tint = Bloom.On)
+            }
         }
-        // straightening or keystoning resets the crop to the largest that fits, at the locked ratio or the crop's own
-        val set = { v: Float -> state.crop = p.set(c, v).maximized(aspect, state.cropRatio ?: c.size(aspect).let { (w, h) -> w / h }) }
-        Slider(
-            p.get(c), { set(if (p.range.endInclusive > 50f) it.roundToInt().toFloat() else (it * 10).roundToInt() / 10f) }, Modifier.weight(1f),
-            valueRange = p.range, colors = sliderColors(),
-        )
-        Text(if (p.range.endInclusive > 50f) signed(p.get(c)) else "%.1f°".format(p.get(c)), Modifier.width(48.dp), fontSize = 14.sp, color = Bloom.On)
-        IconButton({ set(0f) }) { Icon(Icons.Reset, "Reset ${p.name}", tint = Bloom.On) }
     }
 }
 
@@ -203,10 +216,10 @@ fun CropRows(state: EditorState, c: Crop, aspect: Float, box: Modifier) {
 @Composable
 fun RowScope.CropBar(state: EditorState, c: Crop, onDiscard: () -> Unit) {
     ToolIcon(Icons.Crop, "Crop. Back to tools", onDiscard)
-    IconButton({ state.crop = c.turned(); state.cropRatio = state.cropRatio?.let { 1f / it } }) { Icon(Icons.Rotate, "Rotate 90° clockwise", tint = Bloom.On) }
+    IconButton({ state.crop = c.turned(); state.cropRatio = state.cropRatio?.let { 1f / it } }) { Icon(Icons.Turn, "Rotate 90° clockwise", tint = Bloom.On) }
     IconButton({ state.crop = c.flipped() }) { Icon(Icons.Flip, "Flip horizontally", tint = Bloom.On) }
     Spacer(Modifier.weight(1f))
-    TextButton({ state.crop = Crop(); state.cropRatio = null }, enabled = !c.isIdentity) { Text("Reset", color = if (c.isIdentity) Bloom.Outline else Bloom.On) }
+    IconButton({ state.crop = Crop(); state.cropRatio = null }, enabled = !c.isIdentity) { Icon(Icons.Reset, "Reset crop", tint = if (c.isIdentity) Bloom.Outline else Bloom.On) }
     IconButton(state::applyCrop) { Icon(Icons.Check, "Apply crop", tint = Bloom.Pollen) }
 }
 

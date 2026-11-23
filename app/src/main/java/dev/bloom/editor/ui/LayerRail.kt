@@ -274,11 +274,13 @@ val LayerKind.label get() = when (this) {
     LayerKind.Color -> "Color"
     LayerKind.Blur -> "Blur"
     LayerKind.Sharpen -> "Sharpen"
+    LayerKind.Liquify -> "Liquify"
 }
 val LayerKind.icon get() = when (this) {
     LayerKind.Color -> Icons.Adjust
     LayerKind.Blur -> Icons.Blur
     LayerKind.Sharpen -> Icons.Sharpen
+    LayerKind.Liquify -> Icons.Liquify
 }
 
 /** Bubble id of the Photo layer; Color layer ids start at 1. */

@@ -10,8 +10,12 @@ import android.graphics.Matrix
 import dev.bloom.editor.model.Blend
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
+import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Curves
+import dev.bloom.editor.model.WarpField
+import dev.bloom.editor.model.WarpStroke
+import dev.bloom.editor.model.WarpTool
 import dev.bloom.editor.model.Detail
 import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.ColorStep
@@ -21,6 +25,7 @@ import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.Stroke
 import dev.bloom.editor.model.SubjectStep
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -312,6 +317,98 @@ class PipelineTest {
         }
     }
 
+    // --- Liquify (M5) ---
+
+    private fun liquify(vararg strokes: WarpStroke) = Layer(1, kind = LayerKind.Liquify, warp = strokes.toList())
+
+    private fun push(aspect: Float, vararg xy: Float): WarpStroke {
+        var st = WarpStroke(WarpTool.Push, listOf(xy[0], xy[1]), 0.15f, 1f)
+        for (k in 1 until xy.size / 2) st = st.lineTo(xy[2 * k], xy[2 * k + 1], aspect)
+        return st
+    }
+
+    @Test
+    fun liquifyWithoutOffsetsAndAfterFullRestoreKeepsExactPixels() {
+        val w = 300
+        val h = 200
+        val src = pattern(w, h)
+        val inp = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
+        val sweep = mutableListOf<Float>()
+        for (y in 0..20) for (x in 0..20) { sweep += x / 20f; sweep += y / 20f }
+        val restore = WarpStroke(WarpTool.Restore, sweep, 0.2f, 1f)
+        val pushed = push(1.5f, 0.3f, 0.5f, 0.6f, 0.4f)
+        // no offsets: the input (within the 8-bit readback's dither)
+        val none = pixels(src, listOf(liquify())) { p, b -> p.deband = false; p.setSource(b) }
+        for (i in inp.indices step 7) for (sh in listOf(16, 8, 0)) assertNear("$i", (inp[i] shr sh) and 0xFF, (none[i] shr sh) and 0xFF, 1)
+        // pushed, then fully restored: exactly the same pixels as no offsets
+        val restored = pixels(src, listOf(liquify(pushed, restore, restore, restore))) { p, b -> p.deband = false; p.setSource(b) }
+        assertArrayEquals(none, restored)
+        // and the push alone does move pixels
+        val moved = pixels(src, listOf(liquify(pushed))) { p, b -> p.deband = false; p.setSource(b) }
+        assertTrue(!moved.contentEquals(none))
+    }
+
+    @Test
+    fun liquifyReadsWhereTheGridPoints() {
+        val w = 400
+        val h = 300
+        val aspect = w.toFloat() / h
+        val src = smooth(w, h)
+        val st = push(aspect, 0.3f, 0.5f, 0.55f, 0.5f)
+        val out = pixels(src, listOf(liquify(st))) { p, b -> p.deband = false; p.setSource(b) }
+        val f = WarpField(aspect).apply { update(listOf(st)) }
+        val px = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
+        val at = { x: Int, y: Int -> Color.red(px[y.coerceIn(0, h - 1) * w + x.coerceIn(0, w - 1)]).toDouble() }
+        fun bilinear(g: FloatArray, gw: Int, gh: Int, x: Double, y: Double, c: Int): Double {
+            val gx = (x - 0.5).coerceIn(0.0, gw - 1.0)
+            val gy = (y - 0.5).coerceIn(0.0, gh - 1.0)
+            val x0 = minOf(gx.toInt(), gw - 2)
+            val y0 = minOf(gy.toInt(), gh - 2)
+            val fx = gx - x0
+            val fy = gy - y0
+            val v = { i: Int, j: Int -> g[((y0 + j) * gw + x0 + i) * 2 + c].toDouble() }
+            return (v(0, 0) * (1 - fx) + v(1, 0) * fx) * (1 - fy) + (v(0, 1) * (1 - fx) + v(1, 1) * fx) * fy
+        }
+        var worst = 0.0
+        for (y in 0 until h step 3) for (x in 0 until w step 3) {
+            val u = (x + 0.5) / w
+            val v = (y + 0.5) / h
+            val ox = bilinear(f.d, f.w, f.h, u * f.w, v * f.h, 0)
+            val oy = bilinear(f.d, f.w, f.h, u * f.w, v * f.h, 1)
+            val sx = (u + ox / aspect) * w - 0.5
+            val sy = (v + oy) * h - 0.5
+            val x0 = Math.floor(sx).toInt()
+            val y0 = Math.floor(sy).toInt()
+            val fx = sx - x0
+            val fy = sy - y0
+            val e = (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy
+            worst = maxOf(worst, Math.abs(e - Color.red(out[y * w + x])))
+        }
+        // half-float offsets (~1e-3 relative) on a smooth photo
+        assertTrue("worst difference $worst levels", worst <= 3.0)
+    }
+
+    @Test
+    fun liquifiedExportTileMatchesTheFullRender() {
+        val n = 400
+        val src = pattern(n, n)
+        val st = push(1f, 0.25f, 0.5f, 0.45f, 0.5f)
+        val layers = listOf(liquify(st))
+        val full = pixels(src, layers) { p, b -> p.deband = false; p.setSource(b) }
+        // a tile right of the push, padded by the largest offset as ImageIo does
+        val pad = ((WarpField(1f).apply { update(listOf(st)) }.maxOffset() + 0.002f) * n).toInt() + 2
+        val x0 = 192
+        val y0 = 128
+        val tile = Bitmap.createBitmap(src, x0 - pad, y0 - pad, 128 + 2 * pad, 128 + 2 * pad)
+        val part = pixels(tile, layers) { p, b -> p.deband = false; p.setSource(b, x0 - pad, y0 - pad, n, n) }
+        val tw = 128 + 2 * pad
+        for (y in y0 until y0 + 128) for (x in x0 until x0 + 128) {
+            val a = full[y * n + x]
+            val b = part[(y - y0 + pad) * tw + (x - x0 + pad)]
+            for (sh in listOf(16, 8, 0)) assertNear("($x,$y)", (a shr sh) and 0xFF, (b shr sh) and 0xFF, 1)
+        }
+    }
+
     // --- camera raw (M2.5c) ---
 
     @Test
@@ -391,7 +488,7 @@ class PipelineTest {
         // a small bright spot on black, no depth map: every pixel blurs by the full radius (4% of 400 = 16 px)
         val n = 400
         val src = gray(n, n) { x, y -> if (hypot((x - n / 2).toDouble(), (y - n / 2).toDouble()) <= 3.0) 255 else 0 }
-        val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(lens = true, amount = 100f))
+        val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Lens, amount = 100f))
         val out = pixels(src, listOf(lens)) { p, b -> p.deband = false; p.setSource(b) }
         val lit = { x: Int, y: Int -> Color.red(out[(n / 2 + y) * n + n / 2 + x]) > 3 }
         assertTrue("lit inside the disc", lit(0, 8) && lit(8, 0) && lit(-8, 0) && lit(0, -8))
@@ -408,7 +505,7 @@ class PipelineTest {
         val h = 300
         val src = gray(w, h) { x, y -> if (x < w / 2) (if (y % 4 < 2) 40 else 200) else (if (x % 6 < 3) 60 else 220) }
         val depth = SubjectMask(64, 64, ByteArray(64 * 64) { if (it % 64 < 32) -1 else 0 })
-        val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(lens = true, amount = 100f, bloom = 0f, focusX = 0.25f, focusY = 0.5f, range = 0f))
+        val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Lens, amount = 100f, bloom = 0f, focusX = 0.25f, focusY = 0.5f, range = 0f))
         val out = pixels(src, listOf(lens)) { p, b -> p.deband = false; p.setSource(b); p.setDepth(depth) }
         val inp = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
         // the near half (up to a few px from the edge, where the depth map is smoothed) is untouched
@@ -429,6 +526,29 @@ class PipelineTest {
     }
 
     @Test
+    fun motionBlurStreaksAlongItsAngleAndZoomKeepsItsCentre() {
+        // a bright dot on black: Motion at 100 draws a 40 px streak (10% of 400) along the angle
+        val n = 400
+        val src = gray(n, n) { x, y -> if (x in 199..200 && y in 199..200) 255 else 0 }
+        for (angle in listOf(0f, 90f)) {
+            val out = pixels(src, listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Motion, amount = 100f, angle = angle)))) { p, b -> p.deband = false; p.setSource(b) }
+            val lit = { dx: Int, dy: Int -> Color.red(out[(200 + dy) * n + 200 + dx]) > 0 }
+            val along = if (angle == 0f) lit(15, 0) && lit(-15, 0) else lit(0, 15) && lit(0, -15)
+            val across = if (angle == 0f) lit(0, 8) || lit(0, -8) else lit(8, 0) || lit(-8, 0)
+            assertTrue("angle $angle: streak along", along)
+            assertTrue("angle $angle: nothing across", !across)
+            assertTrue("angle $angle: ends at half the streak", !lit(if (angle == 0f) 26 else 0, if (angle == 0f) 0 else 26))
+        }
+        // Zoom: stripes everywhere; the centre (on pixel 200's middle) keeps its pixel, far away the stripes smear
+        val stripes = gray(n, n) { x, _ -> if (x % 8 < 4) 40 else 220 }
+        val z = pixels(stripes, listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Zoom, amount = 100f, focusX = 200.5f / n, focusY = 200.5f / n)))) { p, b -> p.deband = false; p.setSource(b) }
+        val sp = IntArray(n * n).also { stripes.getPixels(it, 0, n, 0, 0, n, n) }
+        assertNear("centre", Color.red(sp[200 * n + 200]), Color.red(z[200 * n + 200]), 1)
+        val edge = (20 until 60).map { Color.red(z[200 * n + it]) }
+        assertTrue("edge smeared: ${edge.min()}..${edge.max()}", edge.max() - edge.min() < 60)
+    }
+
+    @Test
     fun blurredExportTileMatchesTheFullRender() {
         val n = 400
         val src = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888).apply {
@@ -437,7 +557,10 @@ class PipelineTest {
         for ((layers, pad) in listOf(
             listOf(blur(100f)) to 64,
             // lens with depth: radius 16 px, reach 1.3 x 16 + 2 rounded up to 64, as ImageIo pads
-            listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(lens = true, amount = 100f, range = 0f))) to 64,
+            listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Lens, amount = 100f, range = 0f))) to 64,
+            // motion: half a 40 px streak plus a mip texel; zoom at 30: 0.18 of the height (72 px), both rounded up to 64
+            listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Motion, amount = 100f, angle = 30f))) to 64,
+            listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Zoom, amount = 30f, focusX = 0.2f, focusY = 0.3f))) to 128,
         )) {
         val depth = SubjectMask(64, 64, ByteArray(64 * 64) { ((it % 64) * 4).toByte() })
         val full = pixels(src, layers) { p, b -> p.deband = false; p.setSource(b); p.setDepth(depth) }
@@ -447,7 +570,7 @@ class PipelineTest {
         for (y in 128 until 256) for (x in 128 until 256) {
             val a = full[y * n + x]
             val b = part[(y - 128 + pad) * tw + (x - 128 + pad)]
-            for (sh in listOf(16, 8, 0)) assertNear("${layers[0].detail.lens} ($x,$y)", (a shr sh) and 0xFF, (b shr sh) and 0xFF, 2)
+            for (sh in listOf(16, 8, 0)) assertNear("${layers[0].detail.type} ($x,$y)", (a shr sh) and 0xFF, (b shr sh) and 0xFF, 2)
         }
         }
     }
