@@ -98,6 +98,10 @@ object Icons {
     val Brush = icon("M15 4l5 5-9 9H6v-5l9-9z")
     val Up = icon("M7 14l5-5 5 5")
     val Down = icon("M7 10l5 5 5-5")
+    val MoveUp = icon("M12 19V5M6 11l6-6 6 6")
+    val MoveDown = icon("M12 5v14M6 13l6 6 6-6")
+    val Group = icon("M3 6h6l2 2h10v11H3z")
+    val Ungroup = icon("M3 6h6l2 2h10v11H3zM4 4l16 16")
     val Image = icon("M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4")
     // Color parameters
     val Exposure = icon("M4 4h16v16H4zM4 20L20 4M6.5 8h4M8.5 6v4M13.5 16h4")

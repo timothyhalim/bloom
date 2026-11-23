@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -76,6 +77,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.bloom.editor.ImageIo
 import dev.bloom.editor.PhotoView
+import dev.bloom.editor.Project
+import dev.bloom.editor.model.ColorEffect
 import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Document
@@ -87,11 +90,15 @@ import dev.bloom.editor.model.SubjectStep
 import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.Patch
+import dev.bloom.editor.model.RetouchEffect
+import dev.bloom.editor.model.WarpEffect
 import dev.bloom.editor.model.WarpTool
 import dev.bloom.editor.ToolTouch
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.Color
 import dev.bloom.editor.model.Detail
+import dev.bloom.editor.model.DetailEffect
+import dev.bloom.editor.model.Effect
 import dev.bloom.editor.ModelStore
 import dev.bloom.editor.Segment
 import dev.bloom.editor.SubjectMask
@@ -103,6 +110,20 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -110,13 +131,19 @@ import kotlin.math.roundToInt
 class EditorState {
     var source by mutableStateOf<Uri?>(null)
     var preview by mutableStateOf<Bitmap?>(null)
-    var history by mutableStateOf(History())
+    var history by mutableStateOf(History(current = Document()))
+    var project: Project? = null // where the photo autosaves
+    var opened: Document? = null // the project's document as opened; null for a new one
     var draft by mutableStateOf<Layer?>(null)
+    // The open tool's own undo steps: the draft (or crop) after each gesture. ✓ then commits the session as one document step.
+    var steps by mutableStateOf(History<Pair<Layer?, Crop?>>(current = null to null))
     var editingId by mutableStateOf<Long?>(null)
     var param by mutableStateOf<ColorParam?>(ColorParam.Exposure) // null = the Curves chip
     var curveChannel by mutableIntStateOf(0) // 0 RGB, 1 R, 2 G, 3 B
     var detailMore by mutableStateOf(false) // Detail's More rows shown
     var comparing by mutableStateOf(false)
+    // Latched by a swipe on the rail's layers pill: a view setting, not saved or undone, unlike a layer's own visibility
+    var layersHidden by mutableStateOf(false)
     var opacityPreview by mutableStateOf<Pair<Long, Float>?>(null)
     var bubble by mutableStateOf<Pair<Long, Float>?>(null) // layer id, thumbnail centre y (root px)
 
@@ -158,7 +185,7 @@ class EditorState {
     /** A Lens blur or a depth range step exists (applied or in the draft), so the depth map is needed. */
     val needsDepth: Boolean
         get() = (doc.layers + listOfNotNull(draft)).any { l ->
-            l.kind == LayerKind.Blur && l.detail.lens || l.mask.steps.any { it is LuminanceStep && it.depth }
+            l.effect.let { it is DetailEffect && !it.sharpen && it.detail.lens } || l.mask.steps.any { it is LuminanceStep && it.depth }
         }
 
     /** Pin sets of every Subject or Background step (applied layers and the draft): the masks needed. */
@@ -168,18 +195,24 @@ class EditorState {
 
     val doc: Document get() = history.current
 
-    /** What the preview renders: committed layers, live opacity drag, then the draft. */
+    /** What the preview renders: committed layers (none while [layersHidden]), live opacity drag, then the draft. */
     fun rendered(): List<Layer> {
         if (comparing) return emptyList()
-        var ls = doc.layers
-        opacityPreview?.let { (id, o) -> ls = ls.map { if (it.id == id) it.copy(opacity = o) else it } }
-        draft?.let { d -> ls = if (editingId != null) ls.map { if (it.id == d.id) d else it } else ls + d }
-        return ls
+        var d = doc
+        opacityPreview?.let { (id, o) ->
+            d = d.copy(layers = d.layers.map { if (it.id == id) it.copy(opacity = o) else it }, groups = d.groups.map { if (it.id == id) it.copy(opacity = o) else it })
+        }
+        val dr = draft
+        if (dr != null && editingId != null) d = d.replace(dr)
+        val ls = d.rendered().filter { !layersHidden || it.id == dr?.id }
+        return if (dr != null && editingId == null) ls + dr else ls
     }
 
-    /** Opens the tool for a new layer of [kind], or for [edit]. */
-    fun openTool(kind: LayerKind = LayerKind.Color, edit: Layer? = null, mask: Boolean = false) {
-        draft = edit ?: Layer(nextId++, kind = kind)
+    fun newId() = nextId++
+
+    /** Opens the tool for a new layer of [effect], or for [edit]. */
+    fun openTool(effect: Effect = ColorEffect(), edit: Layer? = null, mask: Boolean = false) {
+        draft = edit ?: Layer(newId(), effect = effect)
         editingId = edit?.id
         param = ColorParam.Exposure
         curveChannel = 0
@@ -187,6 +220,30 @@ class EditorState {
         maskMode = mask
         maskTool = MaskTool.Brush
         stepIndex = null
+        steps = History(current = draft to crop)
+    }
+
+    /** Records the draft as a step if it changed; called once every finger is up, so one gesture = one step. */
+    fun commitStep() {
+        steps = steps.push(draft to crop)
+    }
+
+    fun undoStep() {
+        commitStep() // a change no gesture recorded yet (an async color sample) is the one to undo
+        steps = steps.undo()
+        restoreStep()
+    }
+
+    fun redoStep() {
+        commitStep()
+        steps = steps.redo()
+        restoreStep()
+    }
+
+    private fun restoreStep() {
+        draft = steps.current.first
+        crop = steps.current.second
+        stepIndex = stepIndex?.takeIf { it < (draft?.mask?.steps?.size ?: 0) }
     }
 
     fun setMask(m: Mask) {
@@ -251,6 +308,7 @@ class EditorState {
         crop = doc.crop
         cropRatio = null
         bubble = null
+        steps = History(current = draft to crop)
     }
 
     fun applyCrop() {
@@ -264,21 +322,29 @@ class EditorState {
         draft = null
         editingId = null
         maskMode = false
+        steps = History(current = draft to crop)
     }
 
     fun edit(f: (Document) -> Document) {
         history = history.push(f(doc))
     }
 
-    /** Opens a photo, or with nulls closes it; either way drops the last photo's edits and AI masks. */
-    fun load(uri: Uri?, bmp: Bitmap?) {
+    /**
+     * Opens a photo into [project], with [saved] its document when the project was opened before, or with nulls closes
+     * it; either way drops the last photo's edits and AI masks.
+     */
+    fun load(uri: Uri?, bmp: Bitmap?, project: Project? = null, saved: Document? = null) {
         source = uri
         preview = bmp
+        this.project = project
+        opened = saved
         subjects = emptyMap()
         subjectStatus = null
         depth = null
         depthStatus = null
-        history = History()
+        history = History(current = saved ?: Document())
+        nextId = ((saved?.layers.orEmpty().map { it.id } + saved?.groups.orEmpty().map { it.id }).maxOrNull() ?: 0L) + 1
+        layersHidden = false
         close()
         bubble = null
     }
@@ -389,7 +455,7 @@ fun EditorScreen(photoView: PhotoView) {
         }
     }
     // Lens focus and Zoom centre: one finger sets the point
-    val lensOpen by remember { derivedStateOf { state.draft?.let { it.kind == LayerKind.Blur && it.detail.hasPoint } == true } }
+    val lensOpen by remember { derivedStateOf { state.draft?.effect.let { it is DetailEffect && !it.sharpen && it.detail.hasPoint } } }
     val liquifyOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Liquify && !state.maskMode } }
     // AI Erase: one finger paints the layer's mask directly, with the mask's red tint showing
     val eraseOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Retouch && !state.maskMode } }
@@ -421,23 +487,82 @@ fun EditorScreen(photoView: PhotoView) {
             lensOpen -> { t, u, v ->
                 // Lens focus or Zoom centre: tap or drag on the photo to move it
                 val d = state.draft
-                if (d != null && (t == ToolTouch.Down || t == ToolTouch.Move)) state.draft = d.copy(detail = d.detail.copy(focusX = u.coerceIn(0f, 1f), focusY = v.coerceIn(0f, 1f)))
+                val e = d?.effect
+                if (d != null && e is DetailEffect && (t == ToolTouch.Down || t == ToolTouch.Move)) {
+                    state.draft = d.copy(effect = e.copy(detail = e.detail.copy(focusX = u.coerceIn(0f, 1f), focusY = v.coerceIn(0f, 1f))))
+                }
             }
             else -> null
         }
     }
 
+    // A photo opens from its project's copy: the picker's permission to the original doesn't outlive the app.
     fun open(uri: android.net.Uri?) {
         if (uri != null) scope.launch {
-            runCatching { withContext(Dispatchers.IO) { ImageIo.loadPreview(context.contentResolver, uri) } }
-                .onSuccess { state.load(uri, it); photoView.setImage(it) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val p = Project.create(context.contentResolver, context.filesDir, uri)
+                    runCatching { p to ImageIo.loadPreview(context.contentResolver, Uri.fromFile(p.original)) }.onFailure { p.delete() }.getOrThrow()
+                }
+            }
+                .onSuccess { (p, bmp) -> state.load(Uri.fromFile(p.original), bmp, p); photoView.setImage(bmp) }
                 .onFailure { snackbar.showSnackbar("Can't open image: ${it.message ?: it}") }
+        }
+    }
+
+    fun openProject(dir: File) {
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val (p, doc) = Project.open(dir)
+                    Triple(p, doc, ImageIo.loadPreview(context.contentResolver, Uri.fromFile(p.original)))
+                }
+            }
+                .onSuccess { (p, doc, bmp) -> state.load(Uri.fromFile(p.original), bmp, p, doc); photoView.setImage(bmp) }
+                .onFailure { android.util.Log.e("Bloom", "open project failed", it); snackbar.showSnackbar("Can't open project: ${it.message ?: it}") }
+        }
+    }
+
+    var recents by remember { mutableStateOf(emptyList<Project.Recent>()) }
+    var recentsTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(state.source == null, recentsTick) {
+        if (state.source == null) recents = withContext(Dispatchers.IO) { Project.list(context.filesDir) }
+    }
+
+    suspend fun save(p: Project, doc: Document, photo: Bitmap, subjects: Map<List<Float>, SubjectMask>, depth: SubjectMask?) {
+        runCatching { withContext(Dispatchers.IO) { p.save(doc, photo, subjects, depth) } }.onFailure {
+            if (it is CancellationException) throw it
+            android.util.Log.e("Bloom", "save failed", it)
+            snackbar.showSnackbar("Couldn't save the project: ${it.message ?: it}")
+        }
+    }
+
+    // Autosave: the committed document (not an open tool's draft), 2 s after it last changed, and when the app leaves the screen.
+    suspend fun autosave() {
+        val p = state.project ?: return
+        save(p, state.doc, state.preview ?: return, state.subjects, state.depth)
+    }
+    LaunchedEffect(state.source) { snapshotFlow { state.doc }.drop(1).collectLatest { delay(2000); autosave() } }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { scope.launch { autosave() } }
+
+    // Back to Home. Keep saves the project (one with no edits is removed); Discard removes a new project, or takes an
+    // opened one back to how it was when opened.
+    fun closeProject(keep: Boolean) {
+        val p = state.project
+        val doc = if (keep) state.doc else state.opened
+        val photo = state.preview
+        val subjects = state.subjects
+        val depth = state.depth
+        state.load(null, null)
+        if (p != null && photo != null) scope.launch {
+            if (doc?.edited == true) save(p, doc, photo, subjects, depth) else withContext(Dispatchers.IO) { p.delete() }
+            recentsTick++
         }
     }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), ::open)
     // Files the photo picker doesn't list, e.g. CR3 raws (Android has no MIME type for them, so they show as octet-stream)
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::open)
-    // AI Erase: fill the layer's mask from the photo with MI-GAN, then keep it as a Retouch layer above the photo
+    // AI Erase: fill the layer's mask from the photo with LaMa, then keep it as a Retouch layer above the photo
     fun erase() {
         val d = state.draft ?: return
         val photo = state.preview ?: return
@@ -464,7 +589,7 @@ fun EditorScreen(photoView: PhotoView) {
                 if (state.draft?.id != d.id) return@launch
                 val w = photo.width.toFloat()
                 val h = photo.height.toFloat()
-                val done = state.draft!!.copy(patch = Patch(box[0] / w, box[1] / h, box[2] / w, box[3] / h, px))
+                val done = state.draft!!.copy(effect = RetouchEffect(Patch(box[0] / w, box[1] / h, box[2] / w, box[3] / h, px)))
                 // a new Retouch layer goes right above the photo, so every other layer still applies to the filled area
                 if (state.editingId != null) state.edit { it.replace(done) } else state.edit { it.copy(layers = listOf(done) + it.layers) }
                 state.close()
@@ -476,7 +601,7 @@ fun EditorScreen(photoView: PhotoView) {
     fun export(dst: android.net.Uri?, png: Boolean) {
         val src = state.source
         if (dst == null || src == null) return
-        val layers = state.doc.layers
+        val layers = state.doc.rendered()
         val crop = state.doc.crop
         val scale = exportScale
         val deband = state.doc.deband
@@ -499,17 +624,22 @@ fun EditorScreen(photoView: PhotoView) {
     fun toggle(l: Layer) {
         state.edit { it.replace(l.copy(visible = !l.visible)) }
         if (toggleToasts++ < 3) scope.launch {
-            if (snackbar.showSnackbar("${l.kind.label} layer ${if (l.visible) "hidden" else "shown"}", "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
+            if (snackbar.showSnackbar("${l.title} layer ${if (l.visible) "hidden" else "shown"}", "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
                 // only this layer's visibility: other edits may have come since
                 state.doc.layers.firstOrNull { it.id == l.id }?.let { cur -> state.edit { it.replace(cur.copy(visible = l.visible)) } }
             }
         }
     }
 
-    // Closing the photo loses every edit, an open tool's included.
+    var keepAsk by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<Project.Recent?>(null) }
+    // Closing asks only when this visit changed something; an open tool's changes are discarded first (asking).
     val closePhoto = {
-        if (state.doc.layers.isEmpty() && state.doc.crop.isIdentity && !state.dirty) state.load(null, null)
-        else confirm = "Close photo? Your edits will be lost." to { state.load(null, null) }
+        val ask = {
+            state.close()
+            if (state.history.canUndo && state.doc.edited) keepAsk = true else closeProject(keep = true)
+        }
+        if (state.dirty) confirm = "Discard changes?" to ask else ask()
     }
     val leaveTool = { if (state.dirty) confirm = "Discard changes?" to state::close else state.close() }
     // System back: mask mode returns to its tool, a tool closes (asking first if changed), then the photo closes (asking first).
@@ -525,11 +655,18 @@ fun EditorScreen(photoView: PhotoView) {
 
     // the selected mask step, only when it has handles on the photo
     val sel by remember { derivedStateOf { state.stepIndex?.let { state.draft?.mask?.steps?.getOrNull(it) }?.takeIf { state.maskMode && (it is GradientStep || it is SubjectStep) } } }
-    val focus by remember { derivedStateOf { state.draft?.detail?.takeIf { lensOpen && !state.maskMode }?.let { it.focusX to it.focusY } } }
+    val focus by remember { derivedStateOf { (state.draft?.effect as? DetailEffect)?.detail?.takeIf { lensOpen && !state.maskMode }?.let { it.focusX to it.focusY } } }
     val pending by remember { derivedStateOf { state.draft?.takeIf { state.editingId == null }?.kind } }
     val noRipple = remember { MutableInteractionSource() }
 
-    Column(Modifier.fillMaxSize().background(Bloom.Canvas)) {
+    Column(
+        Modifier.fillMaxSize().background(Bloom.Canvas).pointerInput(Unit) {
+            // One gesture = one tool undo step. Posted: the photo view handles the touch after this pass.
+            awaitPointerEventScope {
+                while (true) if (awaitPointerEvent(PointerEventPass.Final).changes.none { it.pressed }) photoView.post(state::commitStep)
+            }
+        },
+    ) {
         TopBar(
             state, exporting, exportScale, { exportScale = it },
             onBack = closePhoto,
@@ -551,20 +688,13 @@ fun EditorScreen(photoView: PhotoView) {
             val preview = state.preview
             if (state.source == null || preview == null) {
                 // opaque, so a closed photo doesn't show through
-                Box(Modifier.fillMaxSize().background(Bloom.Canvas)) { EmptyState(openPicker, { pickFile.launch(arrayOf("image/*", "application/octet-stream")) }, Modifier.align(Alignment.Center)) }
+                Box(Modifier.fillMaxSize().background(Bloom.Canvas)) {
+                    EmptyState(
+                        recents, openPicker, { pickFile.launch(arrayOf("image/*", "application/octet-stream")) },
+                        onRecent = { openProject(it.dir) }, onDelete = { deleting = it }, modifier = Modifier.align(Alignment.Center),
+                    )
+                }
             } else {
-                val top = state.doc.layers.reversed()
-                LayerRail(
-                    layers = top,
-                    pending = pending,
-                    activeId = state.bubble?.first ?: state.editingId,
-                    preview = preview,
-                    onTap = { l, y -> state.bubble = if (state.bubble?.first == l.id) null else l.id to y },
-                    onToggle = ::toggle,
-                    onMove = { l, to -> state.edit { it.move(l.id, top.size - 1 - to) } },
-                    onPhotoTap = { y -> state.bubble = if (state.bubble?.first == PHOTO_ID) null else PHOTO_ID to y },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(bottom = with(density) { chromePx.toDp() } + 8.dp),
-                )
                 viewport?.let { v ->
                     val shownCrop = state.crop ?: state.doc.crop
                     val full = state.crop != null
@@ -586,12 +716,34 @@ fun EditorScreen(photoView: PhotoView) {
                     },
                 )
                 state.bubble?.let { (id, y) ->
-                    val l = state.doc.layers.firstOrNull { it.id == id }
-                    if (l == null && id != PHOTO_ID) return@let
+                    val doc = state.doc
+                    val l = doc.layers.firstOrNull { it.id == id }
+                    val g = doc.groups.firstOrNull { it.id == id }
+                    if (l == null && g == null && id != PHOTO_ID) return@let
                     // tap outside closes the bubble and does nothing else
                     Box(Modifier.fillMaxSize().clickable(noRipple, null) { state.bubble = null })
                     val at = Modifier.align(Alignment.TopEnd).padding(end = 52.dp)
                         .offset { IntOffset(0, (y - canvasTop - 40.dp.toPx()).roundToInt().coerceAtLeast(0)) }
+                    val opacity = state.opacityPreview?.takeIf { it.first == id }?.second
+                    if (g != null) {
+                        GroupBubble(
+                            opacity?.let { g.copy(opacity = it) } ?: g,
+                            onRename = { name -> state.edit { it.replace(g.copy(name = name)) } },
+                            onVisible = { state.edit { it.replace(g.copy(visible = !g.visible)) } },
+                            onOpacity = { state.opacityPreview = id to it },
+                            onOpacityDone = {
+                                state.opacityPreview?.let { (_, o) -> state.edit { it.replace(g.copy(opacity = o)) } }
+                                state.opacityPreview = null
+                            },
+                            canUp = doc.stepGroup(id, true) != doc,
+                            canDown = doc.stepGroup(id, false) != doc,
+                            onStep = { up -> state.edit { it.stepGroup(id, up) } },
+                            onCollapse = { state.edit { it.replace(g.copy(collapsed = !g.collapsed)) } },
+                            onUngroup = { state.edit { it.ungroup(id) }; state.bubble = null },
+                            modifier = at,
+                        )
+                        return@let
+                    }
                     if (l == null) {
                         PhotoBubble(
                             state.doc.deband, deep = preview.config == Bitmap.Config.RGBA_F16,
@@ -600,22 +752,51 @@ fun EditorScreen(photoView: PhotoView) {
                         )
                         return@let
                     }
-                    val shown = state.opacityPreview?.takeIf { it.first == id }?.let { l.copy(opacity = it.second) } ?: l
                     LayerBubble(
-                        shown,
+                        opacity?.let { l.copy(opacity = it) } ?: l,
+                        onRename = { name -> state.edit { it.replace(l.copy(name = name)) } },
                         onVisible = { toggle(l) },
                         onOpacity = { state.opacityPreview = id to it },
                         onOpacityDone = {
                             state.opacityPreview?.let { (_, o) -> state.edit { d -> d.replace(l.copy(opacity = o)) } }
                             state.opacityPreview = null
                         },
-                        onEdit = { state.openTool(l.kind, l) },
-                        onEditMask = { state.openTool(l.kind, l, mask = true) },
+                        onEdit = { state.openTool(edit = l) },
+                        onEditMask = { state.openTool(edit = l, mask = true) },
                         onBlend = { b -> state.edit { d -> d.replace(l.copy(blend = b)) } },
                         onDelete = { state.edit { it.remove(id) }; state.bubble = null },
+                        canUp = doc.step(id, true) != doc,
+                        canDown = doc.step(id, false) != doc,
+                        onStep = { up -> state.edit { it.step(id, up) } },
+                        grouped = l.group != null,
+                        canGroup = doc.groupWithBelow(id, 0) != doc,
+                        onGroup = { l.group?.let { g -> state.edit { it.ungroup(g) } } ?: state.edit { it.groupWithBelow(id, state.newId()) } },
                         modifier = at,
                     )
                 }
+                // after the bubble's tap-outside layer, so the rail still scrolls, swipes and drags while a bubble is open
+                LayerRail(
+                    doc = state.doc,
+                    pending = pending,
+                    activeId = state.bubble?.first ?: state.editingId,
+                    preview = preview,
+                    layersHidden = state.layersHidden,
+                    onHideLayers = { state.layersHidden = !state.layersHidden },
+                    onTap = { id, y -> state.bubble = if (state.bubble?.first == id) null else id to y },
+                    onActiveY = { y -> state.bubble = state.bubble?.let { (id, _) -> id to y } },
+                    onToggle = { id ->
+                        val g = state.doc.groups.firstOrNull { it.id == id }
+                        if (g != null) state.edit { it.replace(g.copy(visible = !g.visible)) } else state.doc.layers.firstOrNull { it.id == id }?.let(::toggle)
+                    },
+                    // one step per row dragged, from the document as it is at the drop
+                    onMove = { id, rows ->
+                        state.bubble = null
+                        val group = state.doc.groups.any { it.id == id }
+                        state.edit { d -> (1..abs(rows)).fold(d) { acc, _ -> if (group) acc.stepGroup(id, rows > 0) else acc.step(id, rows > 0) } }
+                    },
+                    onPhotoTap = { y -> state.bubble = if (state.bubble?.first == PHOTO_ID) null else PHOTO_ID to y },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(bottom = with(density) { chromePx.toDp() } + 8.dp),
+                )
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = with(density) { chromePx.toDp() }))
         }
@@ -630,17 +811,47 @@ fun EditorScreen(photoView: PhotoView) {
             containerColor = Bloom.SurfaceHigh,
         )
     }
+    if (keepAsk) AlertDialog(
+        onDismissRequest = { keepAsk = false },
+        text = { Text(if (state.opened == null) "Keep this project? Discard deletes it." else "Keep your changes? Discard takes the project back to how it was when you opened it.") },
+        confirmButton = { TextButton({ keepAsk = false; closeProject(keep = true) }) { Text("Keep project") } },
+        dismissButton = {
+            Row {
+                TextButton({ keepAsk = false }) { Text("Cancel") }
+                TextButton({ keepAsk = false; closeProject(keep = false) }) { Text("Discard") }
+            }
+        },
+        containerColor = Bloom.SurfaceHigh,
+    )
+    deleting?.let { r ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            text = { Text("Delete ${r.name}? Its edits can't be brought back. The photo in your gallery stays.") },
+            confirmButton = {
+                TextButton({
+                    deleting = null
+                    scope.launch { withContext(Dispatchers.IO) { r.dir.deleteRecursively() }; recentsTick++ }
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton({ deleting = null }) { Text("Cancel") } },
+            containerColor = Bloom.SurfaceHigh,
+        )
+    }
 }
 
 @Composable
 private fun TopBar(state: EditorState, exporting: Float?, scale: Float, onScale: (Float) -> Unit, onBack: () -> Unit, onExport: (png: Boolean) -> Unit) {
     val busy = exporting != null
     val open = state.source != null
-    val idle = state.draft == null && state.crop == null // undo/redo cover applied edits; inside a tool, Cancel covers the draft
+    val idle = state.draft == null && state.crop == null // inside a tool, undo/redo step through the tool's own gestures
     Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         BarIcon(Icons.Back, "Close photo", open, onBack)
-        BarIcon(Icons.Undo, "Undo", open && idle && state.history.canUndo) { state.history = state.history.undo() }
-        BarIcon(Icons.Redo, "Redo", open && idle && state.history.canRedo) { state.history = state.history.redo() }
+        BarIcon(Icons.Undo, "Undo", open && if (idle) state.history.canUndo else state.steps.canUndo) {
+            if (idle) state.history = state.history.undo() else state.undoStep()
+        }
+        BarIcon(Icons.Redo, "Redo", open && if (idle) state.history.canRedo else state.steps.canRedo) {
+            if (idle) state.history = state.history.redo() else state.redoStep()
+        }
         Box(
             Modifier.size(48.dp).semantics { contentDescription = "Compare. Hold to see the original" }
                 .then(if (open) Modifier.pointerInput(Unit) {
@@ -678,11 +889,38 @@ private fun BarIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, desc:
     IconButton(onClick, enabled = enabled) { Icon(icon, desc, tint = if (enabled) Bloom.On else Bloom.Outline) }
 }
 
+/** Home: the first-run text, or the grid of recent projects (tap opens, long-press deletes); then the open buttons. */
 @Composable
-private fun EmptyState(onOpen: () -> Unit, onOpenFile: () -> Unit, modifier: Modifier) {
-    Column(modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+private fun EmptyState(
+    recents: List<Project.Recent>, onOpen: () -> Unit, onOpenFile: () -> Unit,
+    onRecent: (Project.Recent) -> Unit, onDelete: (Project.Recent) -> Unit, modifier: Modifier,
+) {
+    if (recents.isNotEmpty()) Column(modifier.fillMaxSize().navigationBarsPadding().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("Bloom", fontSize = 28.sp, fontWeight = FontWeight.Medium, color = Bloom.On)
+        LazyVerticalGrid(
+            GridCells.Fixed(3), Modifier.weight(1f).fillMaxWidth().padding(vertical = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(recents, key = { it.dir.path }) { r ->
+                val thumb = remember(r) { r.thumb?.asImageBitmap() }
+                Box(
+                    Modifier.aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(Bloom.SurfaceHigh)
+                        .combinedClickable(onClickLabel = "Open", onLongClickLabel = "Delete", onLongClick = { onDelete(r) }) { onRecent(r) }
+                        .semantics { contentDescription = r.name },
+                ) { thumb?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } }
+            }
+        }
+        OpenButtons(onOpen, onOpenFile)
+    } else Column(modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Bloom", fontSize = 28.sp, fontWeight = FontWeight.Medium, color = Bloom.On)
         Text("Edit in layers. Everything runs on your phone.", Modifier.padding(top = 8.dp, bottom = 24.dp), color = Bloom.OnVariant)
+        OpenButtons(onOpen, onOpenFile)
+    }
+}
+
+@Composable
+private fun OpenButtons(onOpen: () -> Unit, onOpenFile: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Row(
             Modifier.height(52.dp).clip(RoundedCornerShape(20.dp, 6.dp, 20.dp, 6.dp)).background(Bloom.Pollen)
                 .clickable(role = Role.Button, onClick = onOpen).padding(horizontal = 28.dp),
@@ -711,11 +949,11 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
             c != null -> state.preview?.let { CropRows(state, c, it.width.toFloat() / it.height, box) }
             d == null -> Unit
             state.maskMode -> MaskRows(state, box)
-            else -> when (d.kind) {
-                LayerKind.Color -> ColorRows(state, d, box)
-                LayerKind.Blur, LayerKind.Sharpen -> DetailRows(state, d, box)
-                LayerKind.Liquify -> LiquifyRows(state, box)
-                LayerKind.Retouch -> EraseRows(state, box)
+            else -> when (val e = d.effect) {
+                is ColorEffect -> ColorRows(state, d, e, box)
+                is DetailEffect -> DetailRows(state, d, e, box)
+                is WarpEffect -> LiquifyRows(state, box)
+                is RetouchEffect -> EraseRows(state, box)
             }
         }
         Row(
@@ -728,17 +966,17 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
                 c != null -> CropBar(state, c, onDiscard)
                 d == null -> {
                     ToolButton("Color", Icons.Adjust, Modifier.weight(1f)) { state.openTool() }
-                    ToolButton("Detail", Icons.Detail, Modifier.weight(1f)) { state.openTool(LayerKind.Blur) }
-                    ToolButton("Liquify", Icons.Liquify, Modifier.weight(1f)) { state.openTool(LayerKind.Liquify) }
+                    ToolButton("Detail", Icons.Detail, Modifier.weight(1f)) { state.openTool(DetailEffect()) }
+                    ToolButton("Liquify", Icons.Liquify, Modifier.weight(1f)) { state.openTool(WarpEffect()) }
                     ToolButton("Crop", Icons.Crop, Modifier.weight(1f)) { state.openCrop() }
-                    ToolButton("AI", Icons.Sparkle, Modifier.weight(1f)) { state.openTool(LayerKind.Retouch) }
+                    ToolButton("AI", Icons.Sparkle, Modifier.weight(1f)) { state.openTool(RetouchEffect()) }
                 }
                 state.maskMode -> MaskBar(state)
-                else -> when (d.kind) {
-                    LayerKind.Color -> ColorBar(state, d, onDiscard)
-                    LayerKind.Blur, LayerKind.Sharpen -> DetailBar(state, d, onDiscard)
-                    LayerKind.Liquify -> LiquifyBar(state, d, onDiscard)
-                    LayerKind.Retouch -> EraseBar(state, d, onDiscard, onErase)
+                else -> when (val e = d.effect) {
+                    is ColorEffect -> ColorBar(state, d, e, onDiscard)
+                    is DetailEffect -> DetailBar(state, d, onDiscard)
+                    is WarpEffect -> LiquifyBar(state, d, onDiscard)
+                    is RetouchEffect -> EraseBar(state, d, onDiscard, onErase)
                 }
             }
         }
@@ -747,7 +985,7 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
 
 /** The row above the Color bar: the selected parameter's slider and Reset, or the Curves graph. */
 @Composable
-private fun ColorRows(state: EditorState, d: Layer, box: Modifier) {
+private fun ColorRows(state: EditorState, d: Layer, c: ColorEffect, box: Modifier) {
     val p = state.param
     if (p == null) {
         CurvesRow(state, box)
@@ -756,23 +994,23 @@ private fun ColorRows(state: EditorState, d: Layer, box: Modifier) {
     Row(box.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(p.name, Modifier.width(92.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
         Slider(
-            value = d[p], onValueChange = { state.draft = d.with(p, snap(p, it)) },
+            value = c[p], onValueChange = { state.draft = d.copy(effect = c.with(p, snap(p, it))) },
             valueRange = -100f..100f, modifier = Modifier.weight(1f), colors = sliderColors(),
         )
-        Text(shown(p, d[p]), Modifier.width(44.dp), fontSize = 14.sp, color = Bloom.On)
-        IconButton({ state.draft = d.with(p, 0f) }) { Icon(Icons.Reset, "Reset ${p.name}", tint = Bloom.On) }
+        Text(shown(p, c[p]), Modifier.width(44.dp), fontSize = 14.sp, color = Bloom.On)
+        IconButton({ state.draft = d.copy(effect = c.with(p, 0f)) }) { Icon(Icons.Reset, "Reset ${p.name}", tint = Bloom.On) }
     }
 }
 
 /** The Color bar: back, the parameters and Curves, mask, apply. */
 @Composable
-private fun RowScope.ColorBar(state: EditorState, d: Layer, onDiscard: () -> Unit) {
+private fun RowScope.ColorBar(state: EditorState, d: Layer, c: ColorEffect, onDiscard: () -> Unit) {
     ToolIcon(Icons.Adjust, "Color. Back to tools", onDiscard)
     Row(Modifier.weight(1f).scrollFade(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         ColorParam.entries.forEach { p ->
             // Curves sits with the tone controls, before color
-            if (p == ColorParam.Temp) ParamChip(Icons.Curves, "Curves" + if (d.curves.active) ", edited" else "", d.curves.active, state.param == null) { state.param = null }
-            ParamChip(p.icon, "${p.name} ${shown(p, d[p])}" + if (p == ColorParam.Exposure) " stops" else "", d[p] != 0f, p == state.param) { state.param = p }
+            if (p == ColorParam.Temp) ParamChip(Icons.Curves, "Curves" + if (c.curves.active) ", edited" else "", c.curves.active, state.param == null) { state.param = null }
+            ParamChip(p.icon, "${p.name} ${shown(p, c[p])}" + if (p == ColorParam.Exposure) " stops" else "", c[p] != 0f, p == state.param) { state.param = p }
         }
     }
     MaskAndApply(state, d)
@@ -785,7 +1023,7 @@ private fun RowScope.DetailBar(state: EditorState, d: Layer, onDiscard: () -> Un
     Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         // Blur and Sharpen are separate layer kinds; an applied layer keeps its kind
         for (k in listOf(LayerKind.Blur, LayerKind.Sharpen)) {
-            ParamChip(k.icon, k.label, false, d.kind == k) { if (state.editingId == null && d.kind != k) state.draft = d.copy(kind = k, detail = Detail()) }
+            ParamChip(k.icon, k.label, false, d.kind == k) { if (state.editingId == null && d.kind != k) state.draft = d.copy(effect = DetailEffect(sharpen = k == LayerKind.Sharpen)) }
         }
     }
     MaskAndApply(state, d)
@@ -842,27 +1080,27 @@ private val lensParams = listOf(
  * Motion or Zoom, then its other sliders; Sharpen: Radius and Clarity).
  */
 @Composable
-private fun DetailRows(state: EditorState, d: Layer, box: Modifier) {
-    val det = d.detail
+private fun DetailRows(state: EditorState, d: Layer, e: DetailEffect, box: Modifier) {
+    val det = e.detail
     val params = when {
-        d.kind == LayerKind.Sharpen -> sharpenParams
+        e.sharpen -> sharpenParams
         det.lens -> lensParams
         det.type == BlurType.Motion -> motionParams
         else -> gaussParams
     }
-    val set = { p: DetailParam, v: Float -> state.draft = d.copy(detail = p.set(det, v)) }
+    val set = { p: DetailParam, v: Float -> state.draft = d.copy(effect = e.copy(detail = p.set(det, v))) }
     ToolBox(state.detailMore, { state.detailMore = !state.detailMore }, box, moreRows = {
-        if (d.kind == LayerKind.Blur) Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (!e.sharpen) Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Type", Modifier.width(84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-            for (t in BlurType.entries) ParamChip(t.icon, "${t.name} blur", false, det.type == t) { state.draft = d.copy(detail = det.copy(type = t)) }
+            for (t in BlurType.entries) ParamChip(t.icon, "${t.name} blur", false, det.type == t) { state.draft = d.copy(effect = e.copy(detail = det.copy(type = t))) }
         }
         for (p in params.drop(1)) SliderRow(p.name, p.get(det), p.range) { set(p, it) }
     }) {
         val p = params[0]
-        val status = state.depthStatus?.takeIf { det.lens && d.kind == LayerKind.Blur && state.depth == null }
+        val status = state.depthStatus?.takeIf { det.lens && !e.sharpen && state.depth == null }
         if (status != null) StatusRow(status, { state.aiRetry++ }, start = 16.dp)
         // reads as "Gaussian blur", "Lens blur"…
-        else if (d.kind == LayerKind.Sharpen) MainSlider("Sharpen", p.name, p.get(det), p.range) { set(p, it) }
+        else if (e.sharpen) MainSlider("Sharpen", p.name, p.get(det), p.range) { set(p, it) }
         else MainSlider(det.type.name, "Blur", p.get(det), p.range) { set(p, it) }
     }
 }

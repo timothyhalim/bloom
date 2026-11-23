@@ -235,6 +235,7 @@ private fun MaskActions(state: EditorState) {
                         menu = false
                         state.setMask(l.mask)
                         state.stepIndex = null
+                        state.commitStep() // the menu is a popup: its taps don't reach the editor's gesture watch
                     })
                 }
             }

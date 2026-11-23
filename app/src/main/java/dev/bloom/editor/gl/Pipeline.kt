@@ -9,16 +9,21 @@ import android.util.Half
 import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.Detail
+import dev.bloom.editor.model.DetailEffect
+import dev.bloom.editor.model.ColorEffect
 import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.LayerKind
+import dev.bloom.editor.model.WarpEffect
 import dev.bloom.editor.model.WarpField
+import dev.bloom.editor.model.WarpStroke
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.MaskStep
 import dev.bloom.editor.model.Patch
+import dev.bloom.editor.model.RetouchEffect
 import dev.bloom.editor.model.SubjectStep
 import dev.bloom.editor.SubjectMask
 import kotlin.math.ln
@@ -228,7 +233,7 @@ class Pipeline {
         if (active == rendered) return result
         masks.keys.filter { id -> layers.none { it.id == id } }.forEach { id -> masks.remove(id)?.let(::delete) }
         warps.keys.filter { id -> layers.none { it.id == id && it.kind == LayerKind.Liquify } }.forEach { id -> glDeleteTextures(1, intArrayOf(warps.remove(id)!!.tex), 0) }
-        patches.keys.filter { id -> layers.none { it.id == id && it.patch === patches[id]!!.first } }.forEach { id -> glDeleteTextures(1, intArrayOf(patches.remove(id)!!.second), 0) }
+        patches.keys.filter { id -> layers.none { it.id == id && (it.effect as? RetouchEffect)?.patch === patches[id]!!.first } }.forEach { id -> glDeleteTextures(1, intArrayOf(patches.remove(id)!!.second), 0) }
         rendered = active
         result = source
         if (active.isEmpty()) return result
@@ -257,48 +262,50 @@ class Pipeline {
         var input = src
         active.forEachIndexed { i, l ->
             val m = if (l.mask.active) maskFor(l, input, active.subList(0, i)) else 0
-            val detailed = l.kind == LayerKind.Blur || l.kind == LayerKind.Sharpen
-            val curves = l.kind == LayerKind.Color && l.curves.active
-            if (detailed) detailPasses(l, input, m)
+            val e = l.effect
+            val color = e as? ColorEffect
+            val det = (e as? DetailEffect)?.detail ?: Detail()
+            val curves = color?.curves?.takeIf { it.active }
+            if (e is DetailEffect) detailPasses(l, e, input, m)
             val out = i % 2
             val toLast = last != null && i == active.lastIndex
             glBindFramebuffer(GL_FRAMEBUFFER, if (toLast) last!!.first else fbo[out])
             glViewport(0, 0, width, height)
             glUseProgram(colorProgram)
-            for (p in params.indices) params[p] = l.values[p] / 100f
+            for (p in params.indices) params[p] = (color?.values?.get(p) ?: 0f) / 100f
             glUniform1fv(glGetUniformLocation(colorProgram, "uP"), params.size, params, 0)
             glUniform1f(glGetUniformLocation(colorProgram, "uOpacity"), l.opacity)
             glUniform1i(glGetUniformLocation(colorProgram, "uBlend"), l.blend.ordinal)
             glUniform1i(glGetUniformLocation(colorProgram, "uMasked"), if (m != 0) 1 else 0)
             glUniform1i(glGetUniformLocation(colorProgram, "uInvert"), if (l.mask.invert) 1 else 0)
-            glUniform1i(glGetUniformLocation(colorProgram, "uCurves"), if (curves) 1 else 0)
+            glUniform1i(glGetUniformLocation(colorProgram, "uCurves"), if (curves != null) 1 else 0)
             glUniform1i(glGetUniformLocation(colorProgram, "uKind"), l.kind.ordinal)
-            glUniform2f(glGetUniformLocation(colorProgram, "uDetail"), l.detail.amount / 50f, l.detail.clarity / 100f * 1.5f)
+            glUniform2f(glGetUniformLocation(colorProgram, "uDetail"), det.amount / 50f, det.clarity / 100f * 1.5f)
             setGeometry(colorProgram, toUpright)
             glUniformMatrix3fv(glGetUniformLocation(colorProgram, "uUnmap"), 1, false, fromUpright, 0)
-            if (l.kind == LayerKind.Retouch) {
-                val pt = l.patch
+            if (e is RetouchEffect) {
+                val pt = e.patch
                 glActiveTexture(GL_TEXTURE7)
                 glBindTexture(GL_TEXTURE_2D, if (pt != null) patchTexture(l.id, pt) else 0)
                 glUniform4f(glGetUniformLocation(colorProgram, "uRect"), pt?.left ?: 0f, pt?.top ?: 0f, pt?.right ?: 0f, pt?.bottom ?: 0f)
             }
-            if (l.kind == LayerKind.Liquify) {
+            if (e is WarpEffect) {
                 glActiveTexture(GL_TEXTURE6)
-                glBindTexture(GL_TEXTURE_2D, warpTexture(l))
+                glBindTexture(GL_TEXTURE_2D, warpTexture(l.id, e.strokes))
             }
-            if (detailed) {
+            if (e is DetailEffect) {
                 val d = detail!!
                 glActiveTexture(GL_TEXTURE4)
                 glBindTexture(GL_TEXTURE_2D, d[1].first)
                 glActiveTexture(GL_TEXTURE5)
                 glBindTexture(GL_TEXTURE_2D, d[2].first)
             }
-            if (curves) {
+            if (curves != null) {
                 // one shared table, refilled per layer; 16 KB, and only when the layers change
                 glActiveTexture(GL_TEXTURE3)
                 glBindTexture(GL_TEXTURE_2D, curveTex)
                 curveData.position(0)
-                curveData.put(l.curves.lut(CURVE_SIZE)).position(0)
+                curveData.put(curves.lut(CURVE_SIZE)).position(0)
                 glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CURVE_SIZE, 1, GL_RGBA, GL_FLOAT, curveData)
             }
             glActiveTexture(GL_TEXTURE1)
@@ -329,18 +336,18 @@ class Pipeline {
         return ByteArray(width * height) { buf.get(it * 4) }
     }
 
-    /** Layer [l]'s offset grid as an RG16F texture, brought up to date (only the changed cells are uploaded). */
-    private fun warpTexture(l: Layer): Int {
+    /** Layer [id]'s offset grid for [strokes] as an RG16F texture, brought up to date (only the changed cells are uploaded). */
+    private fun warpTexture(id: Long, strokes: List<WarpStroke>): Int {
         val aspect = geo[4]
-        val wt = warps[l.id]?.takeIf { it.field.aspect == aspect } ?: run {
-            warps.remove(l.id)?.let { glDeleteTextures(1, intArrayOf(it.tex), 0) }
+        val wt = warps[id]?.takeIf { it.field.aspect == aspect } ?: run {
+            warps.remove(id)?.let { glDeleteTextures(1, intArrayOf(it.tex), 0) }
             val f = WarpField(aspect)
             val t = genTexture()
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
             glTexStorage2D(GL_TEXTURE_2D, 1, GL_RG16F, f.w, f.h)
-            WarpTex(f, t).also { warps[l.id] = it }
+            WarpTex(f, t).also { warps[id] = it }
         }
-        wt.field.update(l.warp)
+        wt.field.update(strokes)
         wt.field.takeDirty()?.let { (x0, y0, x1, y1) ->
             val f = wt.field
             wt.buf.position(0)
@@ -359,16 +366,17 @@ class Pipeline {
      * Blur: [src] blurred into detail[1]. Sharpen: a small blur into detail[1] and, for clarity, a large one into detail[2].
      * A masked Blur only averages pixels inside its mask, so a blurred background doesn't pick up the subject's colors.
      */
-    private fun detailPasses(l: Layer, src: Int, mask: Int) {
+    private fun detailPasses(l: Layer, e: DetailEffect, src: Int, mask: Int) {
         val d = detail ?: List(3) { i -> target(levels = if (i == 0) mipLevels() else 1) }.also { detail = it }
+        val det = e.detail
         when {
-            l.kind == LayerKind.Sharpen -> {
-                gauss(src, (0.5f + 2.5f * l.detail.radius / 100f) / SHARPEN_SCALE * uprightHeight, 0, false, d[1].second)
-                if (l.detail.clarity != 0f) gauss(src, CLARITY_RADIUS * uprightHeight, 0, false, d[2].second)
+            e.sharpen -> {
+                gauss(src, (0.5f + 2.5f * det.radius / 100f) / SHARPEN_SCALE * uprightHeight, 0, false, d[1].second)
+                if (det.clarity != 0f) gauss(src, CLARITY_RADIUS * uprightHeight, 0, false, d[2].second)
             }
-            l.detail.lens -> lens(src, l, mask, d[1].second)
-            l.detail.type == BlurType.Motion || l.detail.type == BlurType.Zoom -> streak(src, l.detail, d[1].second)
-            else -> gauss(src, l.detail.amount / 100f * BLUR_MAX * uprightHeight, mask, l.mask.invert, d[1].second)
+            det.lens -> lens(src, det, l.mask.invert, mask, d[1].second)
+            det.type == BlurType.Motion || det.type == BlurType.Zoom -> streak(src, det, d[1].second)
+            else -> gauss(src, det.amount / 100f * BLUR_MAX * uprightHeight, mask, l.mask.invert, d[1].second)
         }
     }
 
@@ -396,8 +404,7 @@ class Pipeline {
     }
 
     /** Depth-aware lens blur of [src] into framebuffer [out] (see LENS_FRAGMENT). */
-    private fun lens(src: Int, l: Layer, mask: Int, out: Int) {
-        val det = l.detail
+    private fun lens(src: Int, det: Detail, invert: Boolean, mask: Int, out: Int) {
         val radius = det.amount / 100f * LENS_MAX * uprightHeight
         val dm = depth
         val focus = dm?.let { (it.alpha[(det.focusY * (it.h - 1)).toInt() * it.w + (det.focusX * (it.w - 1)).toInt()].toInt() and 0xFF) / 255f } ?: 0f
@@ -411,7 +418,7 @@ class Pipeline {
         setGeometry(p, toUpright)
         glUniform1i(glGetUniformLocation(p, "uHasDepth"), if (dm != null) 1 else 0)
         glUniform1i(glGetUniformLocation(p, "uWeighted"), if (mask != 0) 1 else 0)
-        glUniform1i(glGetUniformLocation(p, "uInvert"), if (l.mask.invert) 1 else 0)
+        glUniform1i(glGetUniformLocation(p, "uInvert"), if (invert) 1 else 0)
         glUniform1f(glGetUniformLocation(p, "uRadius"), radius)
         glUniform1f(glGetUniformLocation(p, "uFocus"), focus)
         glUniform1f(glGetUniformLocation(p, "uRange"), det.range / 100f * 0.5f)
@@ -1214,16 +1221,19 @@ private const val SHARPEN_SCALE = 3000f // Sharpen radius 0..100 = sigma 0.5..3 
 private const val CLARITY_RADIUS = 0.015f // of the image height
 
 /** How far (fraction of the upright height) a layer reads around a pixel; export tiles overlap by this. */
-fun detailReach(l: Layer): Float = when {
-    !l.visible -> 0f
-    // taps reach the radius, and each reads a mip texel about a quarter of it wide
-    l.kind == LayerKind.Blur && l.detail.lens -> 1.3f * LENS_MAX * l.detail.amount / 100f
-    // half the streak plus a mip texel; Zoom from the farthest corner (at most ~1.8 heights away on a 16:9 photo)
-    l.kind == LayerKind.Blur && l.detail.type == BlurType.Motion -> 0.6f * MOTION_MAX * l.detail.amount / 100f
-    l.kind == LayerKind.Blur && l.detail.type == BlurType.Zoom -> 2f * ZOOM_MAX * l.detail.amount / 100f
-    l.kind == LayerKind.Blur -> 3f * BLUR_MAX * l.detail.amount / 100f
-    l.kind == LayerKind.Sharpen -> 3f * if (l.detail.clarity != 0f) CLARITY_RADIUS else 3f / SHARPEN_SCALE
-    else -> 0f
+fun detailReach(l: Layer): Float {
+    val e = l.effect
+    if (!l.visible || e !is DetailEffect) return 0f
+    val d = e.detail
+    return when {
+        e.sharpen -> 3f * if (d.clarity != 0f) CLARITY_RADIUS else 3f / SHARPEN_SCALE
+        // taps reach the radius, and each reads a mip texel about a quarter of it wide
+        d.lens -> 1.3f * LENS_MAX * d.amount / 100f
+        // half the streak plus a mip texel; Zoom from the farthest corner (at most ~1.8 heights away on a 16:9 photo)
+        d.type == BlurType.Motion -> 0.6f * MOTION_MAX * d.amount / 100f
+        d.type == BlurType.Zoom -> 2f * ZOOM_MAX * d.amount / 100f
+        else -> 3f * BLUR_MAX * d.amount / 100f
+    }
 }
 
 /** For passes that write RGBA16F: with uTrunc, add half a half-float step so the GPU's truncation rounds to nearest. */

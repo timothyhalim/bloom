@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.net.Uri
+import android.webkit.MimeTypeMap
 import dev.bloom.editor.model.Curves
 
 /** Camera raw files (DNG, CR3, NEF, ARW, ...) through LibRaw. */
@@ -13,7 +14,9 @@ object Raw {
     // Formats Android decodes itself; anything else is tried as raw first.
     private val PLAIN = setOf("image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/avif", "image/gif", "image/bmp")
 
-    fun isRaw(cr: ContentResolver, uri: Uri) = loaded && cr.getType(uri) !in PLAIN
+    // A project's copy is a file, which has no MIME type: its extension tells.
+    fun isRaw(cr: ContentResolver, uri: Uri) =
+        loaded && (cr.getType(uri) ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(uri.path?.substringAfterLast('.', "")?.lowercase())) !in PLAIN
 
     /** Lightroom's "Medium Contrast" point curve: raws open with roughly a camera JPEG's contrast instead of flat. */
     private val TONE = Curves(rgb = listOf(0, 0, 32, 22, 64, 56, 128, 128, 192, 196, 255, 255).map { it / 255f })

@@ -1,5 +1,6 @@
 package dev.bloom.editor.model
 
+import kotlinx.serialization.Serializable
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -14,6 +15,7 @@ enum class WarpTool { Push, Bloat, Pinch, Twirl, Restore }
  * height, [strength] and [softness] 0..1 (0: full strength to the edge; 1: fades from the centre, as the mask brush).
  * Push moves pixels along the stroke; the others act around each dab.
  */
+@Serializable
 data class WarpStroke(
     val tool: WarpTool, val points: List<Float>, val radius: Float, val strength: Float, val softness: Float = 0.5f,
     val reverse: Boolean = false, // Twirl: counterclockwise

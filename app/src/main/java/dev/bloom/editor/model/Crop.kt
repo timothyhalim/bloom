@@ -1,5 +1,6 @@
 package dev.bloom.editor.model
 
+import kotlinx.serialization.Serializable
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -10,6 +11,7 @@ import kotlin.math.sin
  * -100..100), then straightened by [angle] degrees. The frame is the box around the result, so all of the photo
  * can be reached; [left]..[bottom] is the crop inside it (0..1), kept on the photo.
  */
+@Serializable
 data class Crop(
     val turns: Int = 0, val flip: Boolean = false, val angle: Float = 0f,
     val vertical: Float = 0f, val horizontal: Float = 0f,

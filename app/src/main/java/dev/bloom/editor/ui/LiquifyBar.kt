@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.sp
 import dev.bloom.editor.PhotoView
 import dev.bloom.editor.ToolTouch
 import dev.bloom.editor.model.Layer
-import dev.bloom.editor.model.LayerKind
+import dev.bloom.editor.model.WarpEffect
 import dev.bloom.editor.model.WarpStroke
 import dev.bloom.editor.model.WarpTool
 
@@ -35,16 +35,18 @@ class LiquifyTouch(private val state: EditorState, private val photoView: PhotoV
     private val hold = object : Runnable {
         override fun run() {
             // stop if the tool changed mid-hold: Up then goes to another handler
-            val d = state.draft?.takeIf { it.kind == LayerKind.Liquify && !state.maskMode } ?: return
-            val last = d.warp.lastOrNull() ?: return
+            val d = state.draft?.takeIf { !state.maskMode } ?: return
+            val warp = (d.effect as? WarpEffect)?.strokes ?: return
+            val last = warp.lastOrNull() ?: return
             val n = last.points.size
-            state.draft = d.copy(warp = d.warp.dropLast(1) + last.copy(points = last.points + last.points[n - 2] + last.points[n - 1]))
+            state.draft = d.copy(effect = WarpEffect(warp.dropLast(1) + last.copy(points = last.points + last.points[n - 2] + last.points[n - 1])))
             handler.postDelayed(this, HOLD_MS)
         }
     }
 
     fun on(t: ToolTouch, u: Float, v: Float) {
         val d = state.draft ?: return
+        val warp = (d.effect as? WarpEffect)?.strokes.orEmpty()
         when (t) {
             ToolTouch.Down -> {
                 handler.removeCallbacks(hold)
@@ -53,12 +55,12 @@ class LiquifyTouch(private val state: EditorState, private val photoView: PhotoV
                     state.warpTool, listOf(u, v), state.warpSize * density / photoView.imageHeightPx, state.warpStrength / 100f,
                     state.warpSoftness / 100f, reverse = state.warpReverse,
                 )
-                state.draft = d.copy(warp = d.warp + s)
+                state.draft = d.copy(effect = WarpEffect(warp + s))
             }
             ToolTouch.Move -> {
-                val last = d.warp.lastOrNull() ?: return
+                val last = warp.lastOrNull() ?: return
                 val next = last.lineTo(u, v, aspect)
-                if (next !== last) state.draft = d.copy(warp = d.warp.dropLast(1) + next)
+                if (next !== last) state.draft = d.copy(effect = WarpEffect(warp.dropLast(1) + next))
             }
             ToolTouch.Up, ToolTouch.Cancel -> handler.removeCallbacks(hold)
         }

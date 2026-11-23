@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import dev.bloom.editor.model.ColorEffect
 import dev.bloom.editor.model.Curves
 import dev.bloom.editor.model.curveAt
 import kotlin.math.hypot
@@ -39,20 +40,23 @@ private const val MIN_GAP = 0.01f // points keep this far apart in x, so the cur
 @Composable
 fun CurvesRow(state: EditorState, box: Modifier) {
     val d = state.draft ?: return
+    val c = d.effect as? ColorEffect ?: return
     val ch = state.curveChannel
-    val pts = d.curves[ch]
+    val pts = c.curves[ch]
     Column(box.height(170.dp).padding(horizontal = 8.dp)) {
         Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
             channels.forEachIndexed { i, name ->
-                Chip(name, i == ch, desc = "$name curve" + if (d.curves[i] != Curves.LINE) ", edited" else "") { state.curveChannel = i }
+                Chip(name, i == ch, desc = "$name curve" + if (c.curves[i] != Curves.LINE) ", edited" else "") { state.curveChannel = i }
             }
             Spacer(Modifier.weight(1f))
-            IconButton({ state.draft = d.copy(curves = d.curves.with(ch, Curves.LINE)) }) {
+            IconButton({ state.draft = d.copy(effect = c.copy(curves = c.curves.with(ch, Curves.LINE))) }) {
                 Icon(Icons.Reset, "Reset ${channels[ch]} curve", tint = Bloom.On)
             }
         }
         CurveGraph(pts, channelColors[ch], channels[ch], Modifier.fillMaxWidth().height(120.dp)) {
-            state.draft = state.draft?.let { l -> l.copy(curves = l.curves.with(ch, it)) }
+            val l = state.draft ?: return@CurveGraph
+            val lc = l.effect as? ColorEffect ?: return@CurveGraph
+            state.draft = l.copy(effect = lc.copy(curves = lc.curves.with(ch, it)))
         }
     }
 }

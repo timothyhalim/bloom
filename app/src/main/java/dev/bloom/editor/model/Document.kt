@@ -1,5 +1,8 @@
 package dev.bloom.editor.model
 
+import kotlinx.serialization.Contextual
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlin.math.hypot
 import kotlin.math.sqrt
 
@@ -13,6 +16,7 @@ enum class Blend(val label: String) { Normal("Normal"), Multiply("Multiply"), Sc
  * One brush stroke. [points] are dab centres as x,y pairs in upright image coordinates (0..1, top-left origin).
  * [radius] is a fraction of the image height; [softness] and [flow] are 0..1.
  */
+@Serializable
 data class Stroke(val points: List<Float>, val radius: Float, val softness: Float, val flow: Float) {
     /** Adds dabs from the last one toward (x, y), a quarter radius apart; this stroke itself when none fit. */
     fun lineTo(x: Float, y: Float, aspect: Float) =
@@ -43,18 +47,21 @@ fun List<Float>.dabsTo(x: Float, y: Float, aspect: Float, step: Float): List<Flo
  * One mask step. Add: mask = max(mask, step). Remove: mask = mask × (1 − step).
  * [feather] (0..1) blurs the step's edge before it is combined; 1 = a radius of 3% of the image height.
  */
+@Serializable
 sealed interface MaskStep {
     val add: Boolean
     val visible: Boolean
     val feather: Float
 }
 
+@Serializable @SerialName("brush")
 data class BrushStep(
     val strokes: List<Stroke> = emptyList(),
     override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
 ) : MaskStep
 
 /** Linear: full at (x0, y0), fading to none at (x1, y1). Radial: centre (x0, y0), edge at (x1, y1). Upright image coordinates. */
+@Serializable @SerialName("gradient")
 data class GradientStep(
     val radial: Boolean, val x0: Float, val y0: Float, val x1: Float, val y1: Float,
     override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
@@ -64,6 +71,7 @@ data class GradientStep(
  * Selects colors of the layers below close to any of [samples] (r, g, b triples, sRGB 0..1, at most [MAX_SAMPLES]).
  * [range] widens the match, [smooth] softens its edge; both 0..1.
  */
+@Serializable @SerialName("color")
 data class ColorStep(
     val samples: List<Float> = emptyList(), val range: Float = 0.3f, val smooth: Float = 0.5f,
     override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
@@ -77,6 +85,7 @@ data class ColorStep(
  * Selects by brightness of the layers below, or with [depth] by distance (the photo's depth map, 0 = far, 1 = near):
  * rises from [a] to [b], full to [c], falls to none at [d] (0..1, a ≤ b ≤ c ≤ d).
  */
+@Serializable @SerialName("luminance")
 data class LuminanceStep(
     val a: Float, val b: Float, val c: Float, val d: Float, val depth: Boolean = false,
     override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
@@ -96,6 +105,7 @@ data class LuminanceStep(
  * upright photo, label 1 = include / 0 = exclude, as triples) it is the object the pins point at instead.
  * The mask itself is not stored here: it is computed once per photo and pin set, and cached by the editor.
  */
+@Serializable @SerialName("subject")
 data class SubjectStep(
     val background: Boolean = false,
     val pins: List<Float> = emptyList(),
@@ -111,6 +121,7 @@ fun MaskStep.with(add: Boolean = this.add, visible: Boolean = this.visible, feat
 }
 
 /** Ordered steps, evaluated first to last from empty, then [invert]. */
+@Serializable
 data class Mask(val steps: List<MaskStep> = emptyList(), val invert: Boolean = false) {
     /** A mask with no visible steps leaves the whole layer on. */
     val active: Boolean get() = steps.any { it.visible }
@@ -129,6 +140,7 @@ data class Mask(val steps: List<MaskStep> = emptyList(), val invert: Boolean = f
  * Tone curves on the sRGB-encoded value: [rgb] first, then each channel's own. Each is control points as x,y pairs
  * in 0..1, sorted by x, at least two.
  */
+@Serializable
 data class Curves(
     val rgb: List<Float> = LINE,
     val r: List<Float> = LINE,
@@ -207,10 +219,7 @@ private fun tangents(p: List<Float>): FloatArray {
     return m
 }
 
-/**
- * What a layer does. Color uses [Layer.values] and [Layer.curves]; Blur and Sharpen use [Layer.detail]; Liquify
- * [Layer.warp]; Retouch [Layer.patch]. The shader reads the ordinal (uKind), so don't reorder.
- */
+/** What a layer does, derived from its [Effect]. The shader reads the ordinal (uKind), so don't reorder. */
 enum class LayerKind { Color, Blur, Sharpen, Liquify, Retouch }
 
 /** A Retouch layer's filled pixels (AI eraser) and where they go: upright 0..1, right / bottom exclusive. */
@@ -222,6 +231,7 @@ class Patch(val left: Float, val top: Float, val right: Float, val bottom: Float
  * (upright 0..1) sharp, plus [range] around it; [bloom] makes highlights into bright discs. Sharpen: [amount] is the strength, [radius] 0 = fine to 100 = coarse, [clarity]
  * -100..100 is midtone local contrast.
  */
+@Serializable
 data class Detail(
     val type: BlurType = BlurType.Gaussian, val amount: Float = 0f, val radius: Float = 30f, val clarity: Float = 0f,
     val focusX: Float = 0.5f, val focusY: Float = 0.5f, val range: Float = 10f, val bloom: Float = 30f,
@@ -239,53 +249,161 @@ data class Detail(
  */
 enum class BlurType { Gaussian, Lens, Motion, Zoom }
 
-/** One layer. Color [values] are slider units (-100..100), indexed by [ColorParam.ordinal]. */
-data class Layer(
-    val id: Long,
-    val values: List<Float> = List(ColorParam.entries.size) { 0f },
-    val opacity: Float = 1f,
-    val visible: Boolean = true,
-    val mask: Mask = Mask(),
-    val blend: Blend = Blend.Normal,
-    val curves: Curves = Curves(),
-    val kind: LayerKind = LayerKind.Color,
-    val detail: Detail = Detail(),
-    val warp: List<WarpStroke> = emptyList(),
-    val patch: Patch? = null,
-) {
-    /** Whether the layer changes the photo at all (mask and blend aside). */
-    val edited: Boolean get() = when (kind) {
-        LayerKind.Color -> values.any { it != 0f } || curves.active
-        LayerKind.Blur -> detail.amount > 0f
-        LayerKind.Sharpen -> detail.amount > 0f || detail.clarity != 0f
-        LayerKind.Liquify -> warp.isNotEmpty()
-        LayerKind.Retouch -> patch != null
-    }
+/** What a layer does and its settings. */
+@Serializable
+sealed interface Effect
+
+/** Color [values] are slider units (-100..100), indexed by [ColorParam.ordinal]. */
+@Serializable @SerialName("color")
+data class ColorEffect(val values: List<Float> = List(ColorParam.entries.size) { 0f }, val curves: Curves = Curves()) : Effect {
     operator fun get(p: ColorParam) = values[p.ordinal]
     fun with(p: ColorParam, v: Float) = copy(values = values.toMutableList().also { it[p.ordinal] = v })
 }
 
-/** Layers bottom to top, the order they render in. [deband] smooths 8-bit banding in the photo itself. [crop] applies after all layers. */
-data class Document(val layers: List<Layer> = emptyList(), val deband: Boolean = true, val crop: Crop = Crop()) {
-    fun replace(l: Layer) = copy(layers = layers.map { if (it.id == l.id) l else it })
-    fun remove(id: Long) = copy(layers = layers.filterNot { it.id == id })
-    fun move(id: Long, toIndex: Int): Document {
-        val l = layers.first { it.id == id }
-        val rest = layers.filterNot { it.id == id }
-        return copy(layers = rest.toMutableList().apply { add(toIndex.coerceIn(0, rest.size), l) })
+/** Blur, or Sharpen when [sharpen]. */
+@Serializable @SerialName("detail")
+data class DetailEffect(val sharpen: Boolean = false, val detail: Detail = Detail()) : Effect
+
+/** Liquify. */
+@Serializable @SerialName("warp")
+data class WarpEffect(val strokes: List<WarpStroke> = emptyList()) : Effect
+
+/** AI eraser fill; null until erased. */
+@Serializable @SerialName("retouch")
+data class RetouchEffect(@Contextual val patch: Patch? = null) : Effect
+
+/** One layer. [name] is the user's name for it, empty if none. [group] is the id of the [Group] it belongs to. */
+@Serializable
+data class Layer(
+    val id: Long,
+    val name: String = "",
+    val effect: Effect = ColorEffect(),
+    val opacity: Float = 1f,
+    val visible: Boolean = true,
+    val mask: Mask = Mask(),
+    val blend: Blend = Blend.Normal,
+    val group: Long? = null,
+) {
+    val kind: LayerKind get() = when (effect) {
+        is ColorEffect -> LayerKind.Color
+        is DetailEffect -> if (effect.sharpen) LayerKind.Sharpen else LayerKind.Blur
+        is WarpEffect -> LayerKind.Liquify
+        is RetouchEffect -> LayerKind.Retouch
+    }
+
+    /** Whether the layer changes the photo at all (mask and blend aside). */
+    val edited: Boolean get() = when (effect) {
+        is ColorEffect -> effect.values.any { it != 0f } || effect.curves.active
+        is DetailEffect -> effect.detail.amount > 0f || effect.sharpen && effect.detail.clarity != 0f
+        is WarpEffect -> effect.strokes.isNotEmpty()
+        is RetouchEffect -> effect.patch != null
     }
 }
 
-/** Undo/redo over immutable snapshots; snapshots share unchanged layers (and Retouch patch bitmaps), so they are cheap. */
-data class History(
-    val past: List<Document> = emptyList(),
-    val current: Document = Document(),
-    val future: List<Document> = emptyList(),
+/** Layers that hide, fade and move together. Its ids share the layers' id space. [collapsed] hides its members on the rail. */
+@Serializable
+data class Group(val id: Long, val name: String = "", val opacity: Float = 1f, val visible: Boolean = true, val collapsed: Boolean = false)
+
+/**
+ * Layers bottom to top, the order they render in. [deband] smooths 8-bit banding in the photo itself. [crop] applies after all layers.
+ * A group's members are always next to each other; every operation here keeps it so, and drops groups left empty.
+ */
+@Serializable
+data class Document(
+    val layers: List<Layer> = emptyList(),
+    val deband: Boolean = true,
+    val crop: Crop = Crop(),
+    val groups: List<Group> = emptyList(),
+) {
+    /** Anything changed from the photo as opened. */
+    val edited: Boolean get() = layers.isNotEmpty() || !deband || !crop.isIdentity
+
+    /** Layers as they render: a hidden group hides its members, and its opacity scales theirs. */
+    // ponytail: group opacity scales each layer, not the group's composite; render the group to its own target if blends look off
+    fun rendered(): List<Layer> = layers.map { l ->
+        val g = groups.firstOrNull { it.id == l.group }
+        if (g == null || g.visible && g.opacity == 1f) l else l.copy(visible = l.visible && g.visible, opacity = l.opacity * g.opacity)
+    }
+
+    fun replace(l: Layer) = copy(layers = layers.map { if (it.id == l.id) l else it })
+    fun replace(g: Group) = copy(groups = groups.map { if (it.id == g.id) g else it })
+    fun remove(id: Long) = copy(layers = layers.filterNot { it.id == id }).pruned()
+
+    /** Moves layer [id] to [toIndex]: inside another group's run it joins that group, away from its own it leaves it. */
+    fun move(id: Long, toIndex: Int): Document {
+        val l = layers.first { it.id == id }
+        val rest = layers.filterNot { it.id == id }
+        val at = toIndex.coerceIn(0, rest.size)
+        val below = rest.getOrNull(at - 1)?.group
+        val above = rest.getOrNull(at)?.group
+        val group = if (below == above) below else l.group?.takeIf { it == below || it == above }
+        return copy(layers = rest.toMutableList().apply { add(at, l.copy(group = group)) }).pruned()
+    }
+
+    /**
+     * One step up (toward the top) or down for layer [id]: at its group's edge it leaves the group, next to a group it
+     * joins it (or skips it whole when collapsed), otherwise it swaps with its neighbour. This document when there's no step.
+     */
+    fun step(id: Long, up: Boolean): Document {
+        val i = layers.indexOfFirst { it.id == id }
+        val l = layers[i]
+        val next = layers.getOrNull(if (up) i + 1 else i - 1)
+        val g = next?.group
+        return when {
+            l.group != null && g != l.group -> replace(l.copy(group = null)).pruned()
+            next == null -> this
+            g == l.group -> move(id, if (up) i + 1 else i - 1)
+            groups.none { it.id == g && it.collapsed } -> replace(l.copy(group = g))
+            else -> move(id, if (up) layers.indexOfLast { it.group == g } else layers.indexOfFirst { it.group == g })
+        }
+    }
+
+    /** Swaps group [id]'s run with the layer or group run next to it, up or down. */
+    fun stepGroup(id: Long, up: Boolean): Document {
+        val first = layers.indexOfFirst { it.group == id }
+        val last = layers.indexOfLast { it.group == id }
+        val next = layers.getOrNull(if (up) last + 1 else first - 1) ?: return this
+        val other = if (next.group == null) listOf(next) else layers.filter { it.group == next.group }
+        val run = layers.subList(first, last + 1)
+        val rest = layers.filter { it !in run && it !in other }
+        val at = if (up) first else first - other.size
+        return copy(layers = rest.take(at) + (if (up) other + run else run + other) + rest.drop(at))
+    }
+
+    /**
+     * Groups layer [id] with the one below it: into a new group [newId] when neither is grouped, else into the group
+     * one of them is in. This document when it is the bottom layer or both are grouped.
+     */
+    fun groupWithBelow(id: Long, newId: Long): Document {
+        val i = layers.indexOfFirst { it.id == id }
+        val a = layers.getOrNull(i - 1) ?: return this
+        val b = layers[i]
+        if (a.group != null && b.group != null) return this
+        val g = a.group ?: b.group ?: newId
+        return copy(
+            layers = layers.map { if (it === a || it === b) it.copy(group = g) else it },
+            groups = if (groups.any { it.id == g }) groups else groups + Group(g),
+        )
+    }
+
+    fun ungroup(id: Long) = copy(layers = layers.map { if (it.group == id) it.copy(group = null) else it }, groups = groups.filterNot { it.id == id })
+
+    private fun pruned() = copy(groups = groups.filter { g -> layers.any { it.group == g.id } })
+}
+
+/**
+ * Undo/redo over immutable snapshots: documents, or an open tool's draft. Snapshots share unchanged layers (and Retouch
+ * patch bitmaps), so they are cheap.
+ */
+data class History<T>(
+    val past: List<T> = emptyList(),
+    val current: T,
+    val future: List<T> = emptyList(),
 ) {
     val canUndo: Boolean get() = past.isNotEmpty()
     val canRedo: Boolean get() = future.isNotEmpty()
 
-    fun push(doc: Document) = if (doc == current) this else History((past + current).takeLast(LIMIT), doc)
+    fun push(x: T) = if (x == current) this else History((past + current).takeLast(LIMIT), x)
     fun undo() = if (!canUndo) this else History(past.dropLast(1), past.last(), listOf(current) + future)
     fun redo() = if (!canRedo) this else History(past + current, future.first(), future.drop(1))
 

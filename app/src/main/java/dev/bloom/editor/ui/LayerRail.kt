@@ -13,6 +13,8 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Switch
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Box
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -41,6 +44,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +58,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
@@ -66,9 +73,23 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.bloom.editor.model.Document
+import dev.bloom.editor.model.Group
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.Blend
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -76,19 +97,24 @@ import kotlin.math.roundToInt
 private enum class Gesture { Tap, Swipe, Scroll, Hold }
 
 /**
- * The only layers UI. Top layer first, Photo last.
+ * The only layers UI. Top layer first, Photo last; a group's header sits above its members.
  * Tap = settings bubble, sideways swipe = hide/show, hold then drag = reorder, vertical drag = scroll.
- * [onTap] gets the layer and the thumbnail's vertical centre in root coordinates.
+ * Layer and group ids share one space, so the callbacks take either: [onTap] gets the id and the thumbnail's vertical
+ * centre in root coordinates, [onMove] the id and the rows dragged up (negative = down).
+ * Tapping the layers pill collapses the rail; swiping it hides or shows all layers ([layersHidden]).
  */
 @Composable
 fun LayerRail(
-    layers: List<Layer>, // top first
+    doc: Document,
     pending: LayerKind?, // kind of the draft layer when it is new
     activeId: Long?,
     preview: Bitmap,
-    onTap: (Layer, Float) -> Unit,
-    onToggle: (Layer) -> Unit,
-    onMove: (Layer, Int) -> Unit, // new top-first index
+    layersHidden: Boolean,
+    onHideLayers: () -> Unit,
+    onTap: (Long, Float) -> Unit,
+    onActiveY: (Float) -> Unit, // the active thumbnail moved (reordered or scrolled), so its bubble can follow
+    onToggle: (Long) -> Unit,
+    onMove: (Long, Int) -> Unit,
     onPhotoTap: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -97,6 +123,7 @@ fun LayerRail(
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     val rowPx = with(LocalDensity.current) { 48.dp.toPx() }
+    val hideLayers by rememberUpdatedState(onHideLayers)
 
     if (collapsed) {
         Box(
@@ -109,21 +136,60 @@ fun LayerRail(
     }
     Column(modifier.padding(top = 8.dp, end = 4.dp).width(44.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(
-            Modifier.height(48.dp).clickable { collapsed = true }.semantics { contentDescription = "Hide layers" },
+            Modifier.height(48.dp).systemGestureExclusion()
+                .semantics {
+                    contentDescription = "Hide layers panel" + if (layersHidden) ". All layers hidden" else ""
+                    customActions = listOf(CustomAccessibilityAction(if (layersHidden) "Show all layers" else "Hide all layers") { hideLayers(); true })
+                }
+                .clickable { collapsed = true }
+                // after clickable, so it sees the swipe consumed and doesn't count it as a tap
+                .pointerInput(Unit) {
+                    var total = 0f
+                    detectHorizontalDragGestures(onDragStart = { total = 0f }) { c, dx ->
+                        c.consume()
+                        val past = abs(total) > 24.dp.toPx()
+                        total += dx
+                        if (!past && abs(total) > 24.dp.toPx()) hideLayers()
+                    }
+                },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
-                Modifier.height(28.dp).background(Bloom.SurfaceContainer, CircleShape).border(1.dp, Bloom.Outline, CircleShape).padding(horizontal = 4.dp),
+                Modifier.height(28.dp).background(if (layersHidden) Bloom.PollenContainer else Bloom.SurfaceContainer, CircleShape)
+                    .border(1.dp, if (layersHidden) Bloom.Pollen else Bloom.Outline, CircleShape).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Layers, null, Modifier.size(14.dp), tint = Bloom.On)
-                Text("${layers.size}", fontSize = 11.sp, color = Bloom.On)
+                Icon(if (layersHidden) Icons.EyeOff else Icons.Layers, null, Modifier.size(14.dp), tint = Bloom.On)
+                Text("${doc.layers.size}", fontSize = 11.sp, color = Bloom.On)
             }
         }
         Box(Modifier.weight(1f, fill = false)) {
             Column(Modifier.verticalScroll(scroll)) {
                 if (pending != null) Thumb(pending = true, desc = "New ${pending.label} layer, not applied yet") { Icon(pending.icon, null, Modifier.size(18.dp), tint = Bloom.On) }
-                layers.forEachIndexed { i, l -> RailItem(l, i, layers.size, l.id == activeId, rowPx, onTap, onToggle, onMove) }
+                Column(Modifier.graphicsLayer { alpha = if (layersHidden) 0.45f else 1f }) {
+                    val top = doc.layers.reversed()
+                    top.forEachIndexed { i, l ->
+                        val g = doc.groups.firstOrNull { it.id == l.group }
+                        if (g != null && top.getOrNull(i - 1)?.group != g.id) key(g.id) {
+                            RailItem(
+                                g.id, Icons.Group,
+                                (if (g.name.isEmpty()) "Group" else "${g.name}, group") + " of ${top.count { it.group == g.id }} layers" + (if (g.collapsed) ", collapsed" else "") + if (g.visible) "" else ", hidden",
+                                if (g.visible) "Hide group" else "Show group",
+                                g.id == activeId, hidden = !g.visible, masked = false, member = false, rowPx, onTap, onActiveY, onToggle, onMove,
+                            )
+                        }
+                        if (g == null || !g.collapsed) key(l.id) {
+                            RailItem(
+                                l.id, l.kind.icon,
+                                (if (l.name.isEmpty()) "" else "${l.name}, ") + "${l.kind.label} layer" + (if (g != null) " in ${g.title}" else "") +
+                                    (if (l.mask.active) ", has mask" else "") + if (l.visible) "" else ", hidden",
+                                if (l.visible) "Hide layer" else "Show layer",
+                                l.id == activeId, hidden = !l.visible || g?.visible == false, masked = l.mask.active, member = g != null,
+                                rowPx, onTap, onActiveY, onToggle, onMove,
+                            )
+                        }
+                    }
+                }
                 Thumb(
                     Modifier.onGloballyPositioned { photoY = it.positionInRoot().y + it.size.height / 2f }
                         .clickable(role = Role.Button) { onPhotoTap(photoY) },
@@ -142,34 +208,29 @@ fun LayerRail(
     }
 }
 
+/** One layer, or a group's header, on the rail. */
 @Composable
 private fun RailItem(
-    l: Layer, index: Int, count: Int, active: Boolean, rowPx: Float,
-    onTap: (Layer, Float) -> Unit, onToggle: (Layer) -> Unit, onMove: (Layer, Int) -> Unit,
+    id: Long, icon: ImageVector, desc: String, toggleLabel: String, active: Boolean, hidden: Boolean, masked: Boolean, member: Boolean, rowPx: Float,
+    onTap: (Long, Float) -> Unit, onActiveY: (Float) -> Unit, onToggle: (Long) -> Unit, onMove: (Long, Int) -> Unit,
 ) {
     var dx by remember { mutableFloatStateOf(0f) }
     var dy by remember { mutableFloatStateOf(0f) }
     var lifted by remember { mutableStateOf(false) }
     var centerY by remember { mutableFloatStateOf(0f) }
-    // The gesture loop is keyed on the id only, so a toggle mid-swipe doesn't restart it; read fresh values through these.
-    val layer by rememberUpdatedState(l)
-    val idx by rememberUpdatedState(index)
-    val n by rememberUpdatedState(count)
-    val name = "${l.kind.label} layer"
+    val haptic = LocalHapticFeedback.current
     Thumb(
-        active = active, hidden = !l.visible, masked = l.mask.active,
-        desc = name + (if (l.mask.active) ", has mask" else "") + if (l.visible) "" else ", hidden",
+        active = active, hidden = hidden, masked = masked, member = member, desc = desc,
         modifier = Modifier
-            .onGloballyPositioned { centerY = it.positionInRoot().y + it.size.height / 2f }
-            .graphicsLayer {
-                translationX = dx
-                translationY = dy
-                if (lifted) { scaleX = 1.15f; scaleY = 1.15f; shadowElevation = 12f }
+            .onGloballyPositioned {
+                centerY = it.positionInRoot().y + it.size.height / 2f
+                if (active) onActiveY(centerY)
             }
-            .semantics {
-                customActions = listOf(CustomAccessibilityAction(if (l.visible) "Hide layer" else "Show layer") { onToggle(l); true })
-            }
-            .pointerInput(l.id) {
+            .zIndex(if (lifted) 1f else 0f)
+            .systemGestureExclusion() // the rail is on the right edge: the back gesture would take its sideways swipes
+            .semantics { customActions = listOf(CustomAccessibilityAction(toggleLabel) { onToggle(id); true }) }
+            // before graphicsLayer: drags are measured unmoved and unscaled, not in the lifted thumbnail's own coordinates
+            .pointerInput(id) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     var total = Offset.Zero
@@ -188,48 +249,55 @@ private fun RailItem(
                         }
                         r
                     } ?: Gesture.Hold
-                    val l = layer
                     when (g) {
-                        Gesture.Tap -> onTap(l, centerY)
+                        Gesture.Tap -> onTap(id, centerY)
                         Gesture.Scroll -> Unit // left unconsumed so the rail's scroll picks it up
                         Gesture.Swipe -> {
                             var done = false
                             while (true) {
                                 val c = awaitPointerEvent().changes.first { it.id == down.id }
                                 if (!c.pressed) break
+                                total += c.positionChange() // before consume(): a consumed change reads as zero
                                 c.consume()
-                                total += c.positionChange()
                                 dx = (total.x * 0.3f).coerceIn(-10.dp.toPx(), 10.dp.toPx()) // follows with resistance
-                                if (!done && abs(total.x) > 24.dp.toPx()) { done = true; onToggle(l) }
+                                if (!done && abs(total.x) > 24.dp.toPx()) { done = true; onToggle(id) }
                             }
                             dx = 0f
                         }
                         Gesture.Hold -> {
                             lifted = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             while (true) {
                                 val c = awaitPointerEvent().changes.first { it.id == down.id }
                                 if (!c.pressed) break
-                                c.consume()
                                 dy += c.positionChange().y
+                                c.consume()
                             }
-                            val to = (idx + (dy / rowPx).roundToInt()).coerceIn(0, n - 1)
+                            val rows = -(dy / rowPx).roundToInt()
                             lifted = false
                             dy = 0f
-                            if (to != idx) onMove(l, to)
+                            if (rows != 0) onMove(id, rows)
                         }
                     }
                 }
+            }
+            .graphicsLayer {
+                translationX = dx
+                translationY = dy
+                if (lifted) { scaleX = 1.15f; scaleY = 1.15f; shadowElevation = 12f }
             },
-    ) { Icon(l.kind.icon, null, Modifier.size(18.dp), tint = Bloom.On) }
+    ) { Icon(icon, null, Modifier.size(18.dp), tint = Bloom.On) }
 }
 
 @Composable
 private fun Thumb(
     modifier: Modifier = Modifier, active: Boolean = false, pending: Boolean = false, hidden: Boolean = false, masked: Boolean = false,
-    desc: String = "", content: @Composable () -> Unit,
+    member: Boolean = false, desc: String = "", content: @Composable () -> Unit,
 ) {
     val shape = RoundedCornerShape(8.dp)
     Box(modifier.size(44.dp, 48.dp).semantics { if (desc.isNotEmpty()) contentDescription = desc }, contentAlignment = Alignment.Center) {
+        // a line down the left joins a group's members under its header
+        if (member) Box(Modifier.align(Alignment.CenterStart).padding(start = 1.dp).size(2.dp, 48.dp).background(Bloom.Outline))
         Box(
             Modifier.size(36.dp).clip(shape).background(Bloom.SurfaceContainer)
                 .then(if (pending) Modifier else Modifier.border(if (active) 2.dp else 1.dp, if (active) Bloom.Pollen else Bloom.Outline, shape))
@@ -272,6 +340,8 @@ private fun Arrow(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: S
 
 /** How each kind of layer is named and drawn on the rail and in its bubble. */
 val LayerKind.label get() = name
+val Layer.title get() = name.ifEmpty { kind.label }
+val Group.title get() = name.ifEmpty { "Group" }
 val LayerKind.icon get() = when (this) {
     LayerKind.Color -> Icons.Adjust
     LayerKind.Blur -> Icons.Blur
@@ -315,10 +385,55 @@ fun PhotoBubble(deband: Boolean, deep: Boolean, onDeband: (Boolean) -> Unit, mod
     }
 }
 
-/** Settings bubble for one layer, pointing at its thumbnail on the rail. */
+/** A bubble's first row: the name (tap to rename; empty = [default]) and the visibility toggle. */
+@Composable
+private fun TitleRow(name: String, default: String, visible: Boolean, what: String, onRename: (String) -> Unit, onVisible: () -> Unit, extra: @Composable () -> Unit = {}) {
+    var editing by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (editing) {
+            var text by remember { mutableStateOf(TextFieldValue(name, TextRange(name.length))) }
+            val focus = remember { FocusRequester() }
+            BasicTextField(
+                text, { text = it }, Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = "$what name" },
+                singleLine = true, textStyle = TextStyle(color = Bloom.On, fontSize = 16.sp), cursorBrush = SolidColor(Bloom.Pollen),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { editing = false; onRename(text.text.trim()) }),
+                decorationBox = { field -> Box { if (text.text.isEmpty()) Text(default, color = Bloom.Outline); field() } },
+            )
+            LaunchedEffect(Unit) { focus.requestFocus() }
+        } else {
+            Text(
+                name.ifEmpty { default }, Modifier.weight(1f).clickable(onClickLabel = "Rename") { editing = true }.padding(vertical = 12.dp),
+                color = Bloom.On, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        extra()
+        IconButton(onClick = onVisible) {
+            Icon(if (visible) Icons.Eye else Icons.EyeOff, if (visible) "Hide $what" else "Show $what", tint = Bloom.On)
+        }
+    }
+}
+
+@Composable
+private fun OpacityRow(opacity: Float, onOpacity: (Float) -> Unit, onOpacityDone: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Opacity", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+        Slider(
+            value = opacity * 100f, onValueChange = { onOpacity(it.roundToInt() / 100f) }, onValueChangeFinished = onOpacityDone,
+            valueRange = 0f..100f, modifier = Modifier.weight(1f), colors = sliderColors(),
+        )
+        Text("${(opacity * 100).roundToInt()}%", Modifier.width(40.dp).padding(start = 4.dp), fontSize = 13.sp, color = Bloom.On)
+    }
+}
+
+/**
+ * Settings bubble for one layer, pointing at its thumbnail on the rail. [onStep] moves it one step up or down (enabled
+ * by [canUp] / [canDown]); [onGroup] groups it with the layer below, or ungroups its group when [grouped].
+ */
 @Composable
 fun LayerBubble(
     layer: Layer,
+    onRename: (String) -> Unit,
     onVisible: () -> Unit,
     onOpacity: (Float) -> Unit,
     onOpacityDone: () -> Unit,
@@ -326,24 +441,18 @@ fun LayerBubble(
     onEditMask: () -> Unit,
     onBlend: (Blend) -> Unit,
     onDelete: () -> Unit,
+    canUp: Boolean,
+    canDown: Boolean,
+    onStep: (up: Boolean) -> Unit,
+    grouped: Boolean,
+    canGroup: Boolean,
+    onGroup: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var blendMenu by remember { mutableStateOf(false) }
     Bubble(modifier) {
-        Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(layer.kind.label, Modifier.weight(1f), color = Bloom.On)
-            IconButton(onClick = onVisible) {
-                Icon(if (layer.visible) Icons.Eye else Icons.EyeOff, if (layer.visible) "Hide layer" else "Show layer", tint = Bloom.On)
-            }
-        }
-        Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Opacity", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-            Slider(
-                value = layer.opacity * 100f, onValueChange = { onOpacity(it.roundToInt() / 100f) }, onValueChangeFinished = onOpacityDone,
-                valueRange = 0f..100f, modifier = Modifier.weight(1f), colors = sliderColors(),
-            )
-            Text("${(layer.opacity * 100).roundToInt()}%", Modifier.width(40.dp).padding(start = 4.dp), fontSize = 13.sp, color = Bloom.On)
-        }
+        TitleRow(layer.name, layer.kind.label, layer.visible, "layer", onRename, onVisible)
+        OpacityRow(layer.opacity, onOpacity, onOpacityDone)
         Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Blend", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
             Box {
@@ -364,17 +473,54 @@ fun LayerBubble(
             BubbleAction(Icons.Mask, "Edit mask", Modifier.weight(1f), onEditMask)
             BubbleAction(Icons.Trash, "Delete", Modifier.weight(1f), onDelete)
         }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+            BubbleAction(Icons.MoveUp, "Move up", Modifier.weight(1f), { onStep(true) }, canUp)
+            BubbleAction(Icons.MoveDown, "Move down", Modifier.weight(1f), { onStep(false) }, canDown)
+            if (grouped) BubbleAction(Icons.Ungroup, "Ungroup", Modifier.weight(1f), onGroup)
+            else BubbleAction(Icons.Group, "Group below", Modifier.weight(1f), onGroup, canGroup)
+        }
+    }
+}
+
+/** Settings bubble for a group, pointing at its header on the rail. */
+@Composable
+fun GroupBubble(
+    group: Group,
+    onRename: (String) -> Unit,
+    onVisible: () -> Unit,
+    onOpacity: (Float) -> Unit,
+    onOpacityDone: () -> Unit,
+    canUp: Boolean,
+    canDown: Boolean,
+    onStep: (up: Boolean) -> Unit,
+    onCollapse: () -> Unit,
+    onUngroup: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Bubble(modifier) {
+        TitleRow(group.name, "Group", group.visible, "group", onRename, onVisible) {
+            IconButton(onClick = onCollapse) {
+                Icon(if (group.collapsed) Icons.Down else Icons.Up, if (group.collapsed) "Expand group" else "Collapse group", tint = Bloom.On)
+            }
+        }
+        OpacityRow(group.opacity, onOpacity, onOpacityDone)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+            BubbleAction(Icons.MoveUp, "Move up", Modifier.weight(1f), { onStep(true) }, canUp)
+            BubbleAction(Icons.MoveDown, "Move down", Modifier.weight(1f), { onStep(false) }, canDown)
+            BubbleAction(Icons.Ungroup, "Ungroup", Modifier.weight(1f), onUngroup)
+        }
     }
 }
 
 @Composable
-private fun BubbleAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {
+private fun BubbleAction(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit, enabled: Boolean = true) {
+    val tint = if (enabled) Bloom.On else Bloom.Outline
     Column(
-        modifier.height(52.dp).clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick),
+        modifier.height(52.dp).clip(RoundedCornerShape(8.dp)).clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
     ) {
-        Icon(icon, null, Modifier.size(20.dp), tint = Bloom.On)
-        Text(label, fontSize = 11.sp, color = Bloom.On)
+        Icon(icon, null, Modifier.size(20.dp), tint = tint)
+        Text(label, fontSize = 11.sp, color = tint)
     }
 }
 

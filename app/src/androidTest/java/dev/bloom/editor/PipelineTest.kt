@@ -9,16 +9,19 @@ import dev.bloom.editor.gl.Pipeline
 import android.graphics.Matrix
 import dev.bloom.editor.model.Blend
 import dev.bloom.editor.model.BrushStep
+import dev.bloom.editor.model.ColorEffect
 import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Patch
+import dev.bloom.editor.model.RetouchEffect
 import dev.bloom.editor.model.Curves
+import dev.bloom.editor.model.WarpEffect
 import dev.bloom.editor.model.WarpField
 import dev.bloom.editor.model.WarpStroke
 import dev.bloom.editor.model.WarpTool
 import dev.bloom.editor.model.Detail
-import dev.bloom.editor.model.LayerKind
+import dev.bloom.editor.model.DetailEffect
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.GradientStep
@@ -68,33 +71,33 @@ class PipelineTest {
     fun exposurePlusOneStopDoublesLinearLight() {
         // Exposure spans +-3 stops over +-100, so 100/3 is +1 stop.
         val expected = 255 * linearToSrgb(2 * srgbToLinear(128 / 255.0))
-        assertEquals(expected, run(listOf(Layer(1).with(ColorParam.Exposure, 100f / 3))).toDouble(), 2.0)
+        assertEquals(expected, run(listOf(Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 100f / 3)))).toDouble(), 2.0)
     }
 
     @Test
     fun halfOpacityIsHalfway() {
-        val full = run(listOf(Layer(1).with(ColorParam.Exposure, 100f / 3)))
-        val half = run(listOf(Layer(1).with(ColorParam.Exposure, 100f / 3).copy(opacity = 0.5f)))
+        val full = run(listOf(Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 100f / 3))))
+        val half = run(listOf(Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 100f / 3)).copy(opacity = 0.5f)))
         assertEquals((128 + full) / 2.0, half.toDouble(), 2.0)
     }
 
     @Test
     fun ditherKeepsFractionalLevelsOnAverage() {
-        val reds = redsOf(gray(8, 8) { _, _ -> 128 }, listOf(Layer(1).with(ColorParam.Exposure, 100f / 3)))
+        val reds = redsOf(gray(8, 8) { _, _ -> 128 }, listOf(Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 100f / 3))))
         val expected = 255 * linearToSrgb(2 * srgbToLinear(128 / 255.0)) // ~177.3, between two 8-bit levels
         assertEquals(expected, reds.average(), 0.3)
         assertEquals(2, reds.distinct().size)
     }
 
     @Test
-    fun hiddenLayerIsSkipped() = assertEquals(128, run(listOf(Layer(1).with(ColorParam.Exposure, 100f).copy(visible = false))))
+    fun hiddenLayerIsSkipped() = assertEquals(128, run(listOf(Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 100f)).copy(visible = false))))
 
     @Test
     fun curvesMatchTheReferenceTableWithinOneLevel() {
         // M1.5 exit test: an S-curve on RGB plus a red curve, over every 8-bit input level
         val c = Curves(rgb = listOf(0f, 0f, 0.25f, 0.15f, 0.75f, 0.85f, 1f, 1f), r = listOf(0f, 0.1f, 0.5f, 0.6f, 1f, 0.95f))
         // a plain layer on top checks the table is per layer
-        val out = pixels(gray(256, 1) { x, _ -> x }, listOf(Layer(1).copy(curves = c), Layer(2)))
+        val out = pixels(gray(256, 1) { x, _ -> x }, listOf(Layer(1, effect = ColorEffect(curves = c)), Layer(2)))
         val lut = c.lut(4096)
         val bad = (0..255).flatMap { i ->
             val px = out[i]
@@ -114,7 +117,7 @@ class PipelineTest {
         setPixels(IntArray(w * h) { val g = v(it % w, it / w); Color.rgb(g, g, g) }, 0, w, 0, 0, w, h)
     }
 
-    private val contrast = Layer(1).with(ColorParam.Contrast, 100f) // doubles every step
+    private val contrast = Layer(1, effect = ColorEffect().with(ColorParam.Contrast, 100f)) // doubles every step
 
     @Test
     fun debandSmoothsEightBitStepsUnderAHardPush() {
@@ -299,7 +302,7 @@ class PipelineTest {
 
     // --- Liquify (M5) ---
 
-    private fun liquify(vararg strokes: WarpStroke) = Layer(1, kind = LayerKind.Liquify, warp = strokes.toList())
+    private fun liquify(vararg strokes: WarpStroke) = Layer(1, effect = WarpEffect(strokes.toList()))
 
     private fun push(aspect: Float, vararg xy: Float): WarpStroke {
         var st = WarpStroke(WarpTool.Push, listOf(xy[0], xy[1]), 0.15f, 1f)
@@ -394,15 +397,15 @@ class PipelineTest {
     fun rawHighlightsAboveWhiteComeBackWithExposure() {
         // Raw decodes are linear F16 with the brightest 1% above 1.0; one stop down must bring 2.0 back to white, not grey.
         val src = f16(32, 32, android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB, 2f)
-        assertEquals(255.0, redsOf(src, listOf(Layer(1).with(ColorParam.Exposure, -100f / 3))).average(), 1.0)
+        assertEquals(255.0, redsOf(src, listOf(Layer(1, effect = ColorEffect().with(ColorParam.Exposure, -100f / 3)))).average(), 1.0)
         // a Curves layer on top of the raw must not cut that range off
-        val curved = Layer(1).copy(curves = Curves(rgb = listOf(0f, 0f, 0.5f, 0.6f, 1f, 1f)))
-        assertEquals(255.0, redsOf(src, listOf(curved, Layer(2).with(ColorParam.Exposure, -100f / 3))).average(), 1.0)
+        val curved = Layer(1, effect = ColorEffect(curves = Curves(rgb = listOf(0f, 0f, 0.5f, 0.6f, 1f, 1f))))
+        assertEquals(255.0, redsOf(src, listOf(curved, Layer(2, effect = ColorEffect().with(ColorParam.Exposure, -100f / 3)))).average(), 1.0)
     }
 
     // --- Detail: Blur and Sharpen (M4) ---
 
-    private fun blur(amount: Float) = Layer(1, kind = LayerKind.Blur, detail = Detail(amount = amount))
+    private fun blur(amount: Float) = Layer(1, effect = DetailEffect(detail = Detail(amount = amount)))
 
     /** An n×n subject or depth mask: full on the left half, none on the right. */
     private fun leftHalf(n: Int) = SubjectMask(n, n, ByteArray(n * n) { if (it % n < n / 2) -1 else 0 })
@@ -451,7 +454,7 @@ class PipelineTest {
     @Test
     fun sharpenRaisesEdgeContrastAndLeavesFlatAreas() {
         val w = 200
-        val sharpen = Layer(1, kind = LayerKind.Sharpen, detail = Detail(amount = 100f, radius = 100f))
+        val sharpen = Layer(1, effect = DetailEffect(sharpen = true, detail = Detail(amount = 100f, radius = 100f)))
         val out = profile(redsOf(gray(w, 200) { x, _ -> if (x < w / 2) 100 else 150 }, listOf(sharpen), deband = false), w, 200)
         assertTrue("dark side darker at the edge: ${out[w / 2 - 1]}", out[w / 2 - 1] < 95)
         assertTrue("bright side brighter at the edge: ${out[w / 2]}", out[w / 2] > 155)
@@ -464,7 +467,7 @@ class PipelineTest {
         // a small bright spot on black, no depth map: every pixel blurs by the full radius (4% of 400 = 16 px)
         val n = 400
         val src = gray(n, n) { x, y -> if (hypot((x - n / 2).toDouble(), (y - n / 2).toDouble()) <= 3.0) 255 else 0 }
-        val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Lens, amount = 100f))
+        val lens = Layer(1, effect = DetailEffect(detail = Detail(BlurType.Lens, amount = 100f)))
         val out = pixels(src, listOf(lens), deband = false)
         val lit = { x: Int, y: Int -> Color.red(out[(n / 2 + y) * n + n / 2 + x]) > 3 }
         assertTrue("lit inside the disc", lit(0, 8) && lit(8, 0) && lit(-8, 0) && lit(0, -8))
@@ -480,7 +483,7 @@ class PipelineTest {
         val w = 300
         val h = 300
         val src = gray(w, h) { x, y -> if (x < w / 2) (if (y % 4 < 2) 40 else 200) else (if (x % 6 < 3) 60 else 220) }
-        val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Lens, amount = 100f, bloom = 0f, focusX = 0.25f, focusY = 0.5f, range = 0f))
+        val lens = Layer(1, effect = DetailEffect(detail = Detail(BlurType.Lens, amount = 100f, bloom = 0f, focusX = 0.25f, focusY = 0.5f, range = 0f)))
         val out = pixels(src, listOf(lens), deband = false) { setSource(it); setDepth(leftHalf(64)) }
         val inp = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
         // the near half (up to a few px from the edge, where the depth map is smoothed) is untouched
@@ -493,7 +496,7 @@ class PipelineTest {
     @Test
     fun depthRangeStepSelectsTheNearHalf() {
         // depth map: left half near (255), right half far (0); a Near step brightens only the left
-        val layer = Layer(1, mask = Mask(listOf(LuminanceStep.Near))).with(ColorParam.Exposure, 50f)
+        val layer = Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 50f), mask = Mask(listOf(LuminanceStep.Near)))
         val out = pixels(gray(64, 32) { _, _ -> 100 }, listOf(layer), deband = false) { setSource(it); setDepth(leftHalf(64)) }
         assertTrue("near half brightened (${Color.red(out[16 * 64 + 8])})", Color.red(out[16 * 64 + 8]) > 140)
         assertEquals("far half untouched", 100.0, Color.red(out[16 * 64 + 56]).toDouble(), 1.0)
@@ -505,7 +508,7 @@ class PipelineTest {
         val n = 400
         val src = gray(n, n) { x, y -> if (x in 199..200 && y in 199..200) 255 else 0 }
         for (angle in listOf(0f, 90f)) {
-            val out = pixels(src, listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Motion, amount = 100f, angle = angle))), deband = false)
+            val out = pixels(src, listOf(Layer(1, effect = DetailEffect(detail = Detail(BlurType.Motion, amount = 100f, angle = angle)))), deband = false)
             val lit = { dx: Int, dy: Int -> Color.red(out[(200 + dy) * n + 200 + dx]) > 0 }
             val along = if (angle == 0f) lit(15, 0) && lit(-15, 0) else lit(0, 15) && lit(0, -15)
             val across = if (angle == 0f) lit(0, 8) || lit(0, -8) else lit(8, 0) || lit(-8, 0)
@@ -515,7 +518,7 @@ class PipelineTest {
         }
         // Zoom: stripes everywhere; the centre (on pixel 200's middle) keeps its pixel, far away the stripes smear
         val stripes = gray(n, n) { x, _ -> if (x % 8 < 4) 40 else 220 }
-        val z = pixels(stripes, listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Zoom, amount = 100f, focusX = 200.5f / n, focusY = 200.5f / n))), deband = false)
+        val z = pixels(stripes, listOf(Layer(1, effect = DetailEffect(detail = Detail(BlurType.Zoom, amount = 100f, focusX = 200.5f / n, focusY = 200.5f / n)))), deband = false)
         val sp = IntArray(n * n).also { stripes.getPixels(it, 0, n, 0, 0, n, n) }
         assertNear("centre", Color.red(sp[200 * n + 200]), Color.red(z[200 * n + 200]), 1)
         val edge = (20 until 60).map { Color.red(z[200 * n + it]) }
@@ -531,13 +534,13 @@ class PipelineTest {
         for ((layers, pad) in listOf(
             listOf(blur(100f)) to 64,
             // lens with depth: radius 16 px, reach 1.3 x 16 + 2 rounded up to 64, as ImageIo pads
-            listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Lens, amount = 100f, range = 0f))) to 64,
+            listOf(Layer(1, effect = DetailEffect(detail = Detail(BlurType.Lens, amount = 100f, range = 0f)))) to 64,
             // motion: half a 40 px streak plus a mip texel; zoom at 30: 0.18 of the height (72 px), both rounded up to 64
-            listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Motion, amount = 100f, angle = 30f))) to 64,
-            listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Zoom, amount = 30f, focusX = 0.2f, focusY = 0.3f))) to 128,
+            listOf(Layer(1, effect = DetailEffect(detail = Detail(BlurType.Motion, amount = 100f, angle = 30f)))) to 64,
+            listOf(Layer(1, effect = DetailEffect(detail = Detail(BlurType.Zoom, amount = 30f, focusX = 0.2f, focusY = 0.3f)))) to 128,
         )) {
             val depth = SubjectMask(64, 64, ByteArray(64 * 64) { ((it % 64) * 4).toByte() })
-            assertTileMatchesFull(src, layers, 128, 128, 128, pad, 2, label = "${layers[0].detail.type} ") { setDepth(depth) }
+            assertTileMatchesFull(src, layers, 128, 128, 128, pad, 2, label = "${(layers[0].effect as DetailEffect).detail.type} ") { setDepth(depth) }
         }
     }
 
@@ -551,12 +554,12 @@ class PipelineTest {
         val src = gray(n, n) { _, _ -> 100 }
         val patch = Patch(0.25f, 0.25f, 0.75f, 0.75f, redPatch(50, 50))
         // no mask: the whole rectangle
-        val plain = pixels(src, listOf(Layer(1, kind = LayerKind.Retouch, patch = patch)), deband = false)
+        val plain = pixels(src, listOf(Layer(1, effect = RetouchEffect(patch))), deband = false)
         assertNear("inside", 220, Color.red(plain[200 * n + 200]), 2)
         assertNear("outside", 100, Color.red(plain[50 * n + 50]), 1)
         // painted mask: only under the stroke
         val stroke = Stroke(listOf(0.5f, 0.5f), 0.08f, 0f, 1f)
-        val masked = Layer(1, kind = LayerKind.Retouch, patch = patch, mask = Mask(listOf(BrushStep(listOf(stroke)))))
+        val masked = Layer(1, effect = RetouchEffect(patch), mask = Mask(listOf(BrushStep(listOf(stroke)))))
         val out = pixels(src, listOf(masked), deband = false)
         assertNear("under the stroke", 220, Color.red(out[200 * n + 200]), 2)
         assertNear("in the rectangle, off the stroke", 100, Color.red(out[120 * n + 120]), 1)
@@ -566,7 +569,7 @@ class PipelineTest {
     fun retouchedExportTileMatchesTheFullRender() {
         val n = 400
         val src = pattern(n, n)
-        val layers = listOf(Layer(1, kind = LayerKind.Retouch, patch = Patch(0.3f, 0.3f, 0.6f, 0.6f, pattern(37, 37)),
+        val layers = listOf(Layer(1, effect = RetouchEffect(Patch(0.3f, 0.3f, 0.6f, 0.6f, pattern(37, 37))),
             mask = Mask(listOf(BrushStep(listOf(Stroke(listOf(0.45f, 0.45f), 0.1f, 0.5f, 1f)))))))
         assertTileMatchesFull(src, layers, 128, 128, 128, 16, 2)
     }
@@ -618,7 +621,7 @@ class PipelineTest {
         // subject = left half of the upright image; brighten the subject, then the background
         val mask = leftHalf(Segment.SIZE)
         for (background in listOf(false, true)) {
-            val layer = Layer(1, mask = Mask(listOf(SubjectStep(background = background)))).with(ColorParam.Exposure, 50f)
+            val layer = Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 50f), mask = Mask(listOf(SubjectStep(background = background))))
             val out = redsOf(gray(64, 32) { _, _ -> 100 }, listOf(layer)) { setSource(it); setSubjects(mapOf(emptyList<Float>() to mask)) }
             val a = out[16 * 64 + 8]
             val b = out[16 * 64 + 56]
@@ -656,7 +659,7 @@ class PipelineTest {
     private fun hdrReds(layers: List<Layer>, gain: HdrGain?, level: Int = 250) =
         redsOf(gray(32, 32) { _, _ -> level }, layers) { setSource(it); setGainmap(gain) }
 
-    private val minusTwo = Layer(1).with(ColorParam.Exposure, -200f / 3)
+    private val minusTwo = Layer(1, effect = ColorEffect().with(ColorParam.Exposure, -200f / 3))
 
     @Test
     fun ultraHdrBringsBackHighlightsWhenDarkened() {
@@ -677,7 +680,7 @@ class PipelineTest {
         assertEquals(250.0, hdrReds(emptyList(), g).average(), 0.6)
         assertEquals(250.0, hdrReds(listOf(Layer(1)), g).average(), 0.6)
         // brightening edits use the normal photo too
-        val up = Layer(1).with(ColorParam.Exposure, 20f)
+        val up = Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 20f))
         assertEquals(hdrReds(listOf(up), null, 120).average(), hdrReds(listOf(up), g, 120).average(), 0.6)
     }
 
@@ -702,7 +705,7 @@ class PipelineTest {
 
     // --- masks and blend modes (M2) ---
 
-    private val plusOne = Layer(1).with(ColorParam.Exposure, 100f / 3)
+    private val plusOne = Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 100f / 3))
     private val plusOneValue = 255 * linearToSrgb(2 * srgbToLinear(128 / 255.0))
     private fun dab(x: Float, y: Float, r: Float, add: Boolean = true) =
         BrushStep(listOf(Stroke(listOf(x, y), r, softness = 0f, flow = 1f)), add)
@@ -837,7 +840,7 @@ class PipelineTest {
     @Test
     fun luminanceFollowsEarlierLayers() {
         // gray 128 (luma 0.5) is outside 0.6..0.8 until the layer below brightens it to ~0.69
-        val b = Layer(2).with(ColorParam.Exposure, 100f / 3).copy(mask = Mask(listOf(LuminanceStep(0.6f, 0.6f, 0.8f, 0.8f))))
+        val b = Layer(2, effect = ColorEffect().with(ColorParam.Exposure, 100f / 3)).copy(mask = Mask(listOf(LuminanceStep(0.6f, 0.6f, 0.8f, 0.8f))))
         assertEquals(128, reds(listOf(b), 8, 8)[0])
         val twice = 255 * linearToSrgb(4 * srgbToLinear(128 / 255.0))
         assertEquals(twice, reds(listOf(plusOne, b), 8, 8)[0].toDouble(), 2.0)
