@@ -168,6 +168,53 @@ class PipelineTest {
         }
     }
 
+    // --- 16-bit PNG export (M2.5c) ---
+
+    private val ctx get() = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+
+    private fun exportPng(src: java.io.File, layers: List<Layer>): Pair<ByteArray, Bitmap> {
+        val dst = java.io.File(ctx.cacheDir, "t_out.png")
+        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(src), android.net.Uri.fromFile(dst), ctx.cacheDir, layers, false, png = true)
+        val bytes = dst.readBytes()
+        return bytes to android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }
+
+    @Test
+    fun pngExportKeepsLevelsBetweenEightBitSteps() {
+        val src = Bitmap.createBitmap(64, 48, Bitmap.Config.RGBA_F16, false, android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
+        // 128.5: halfway between 8-bit steps; each 16-bit PNG decode to half floats rounds down ~0.12 levels
+        val h = android.util.Half.toHalf((128.5 / 255).toFloat())
+        val one = android.util.Half.toHalf(1f)
+        val buf = java.nio.ByteBuffer.allocateDirect(64 * 48 * 8).order(java.nio.ByteOrder.nativeOrder())
+        repeat(64 * 48) { buf.putShort(h).putShort(h).putShort(h).putShort(one) }
+        src.copyPixelsFromBuffer(buf.rewind())
+        val f = java.io.File(ctx.cacheDir, "t_in.png").apply { outputStream().use { src.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+        assertEquals("source PNG bit depth", 16, f.readBytes()[24].toInt())
+        for (layers in listOf(listOf(Layer(1)), emptyList())) {
+            val (bytes, out) = exportPng(f, layers)
+            assertEquals("PNG bit depth", 16, bytes[24].toInt())
+            val srgb = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
+            assertEquals("${layers.size} layers", 128.5, 255.0 * out.getColor(10, 10).convert(srgb).red(), 0.3)
+        }
+    }
+
+    @Test
+    fun pngExportIsUpright() {
+        // 8x16 sensor pixels, dark top half, tagged "rotate 90": upright it is 16x8 with the dark half on the right
+        val src = gray(8, 16) { _, y -> if (y < 8) 20 else 220 }
+        val f = java.io.File(ctx.cacheDir, "t_in.jpg").apply { outputStream().use { src.compress(Bitmap.CompressFormat.JPEG, 100, it) } }
+        androidx.exifinterface.media.ExifInterface(f).apply {
+            setAttribute(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90.toString())
+            saveAttributes()
+        }
+        val (_, out) = exportPng(f, listOf(Layer(1)))
+        assertEquals(16, out.width)
+        assertEquals(8, out.height)
+        assertTrue("dark half on the right", out.getColor(14, 4).red() < 0.2f && out.getColor(1, 4).red() > 0.7f)
+        val dst = java.io.File(ctx.cacheDir, "t_out.png")
+        assertEquals(0, androidx.exifinterface.media.ExifInterface(dst).rotationDegrees)
+    }
+
     // --- Ultra HDR (M2.5c) ---
 
     /** A flat gain map: every pixel says "g of the way from ratioMin to ratioMax" (ratios 1 and 4 = up to 2 stops). */

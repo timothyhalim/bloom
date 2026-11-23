@@ -31,6 +31,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -259,19 +261,21 @@ fun EditorScreen(photoView: PhotoView) {
                 .onFailure { snackbar.showSnackbar("Can't open image: ${it.message ?: it}") }
         }
     }
-    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/jpeg")) { dst ->
+    fun export(dst: android.net.Uri?, png: Boolean) {
         val src = state.source
-        if (dst == null || src == null) return@rememberLauncherForActivityResult
+        if (dst == null || src == null) return
         val layers = state.doc.layers
         val deband = state.doc.deband
         scope.launch {
             busy = true
-            val r = runCatching { withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband) } }
+            val r = runCatching { withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png) } }
             busy = false
             r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "export failed", it) }
             snackbar.showSnackbar(r.fold({ "Saved" }, { "Export failed: ${it.message ?: it}" }))
         }
     }
+    val saveJpeg = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/jpeg")) { export(it, false) }
+    val savePng = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { export(it, true) }
     val openPicker = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
 
     fun toggle(l: Layer) {
@@ -290,7 +294,10 @@ fun EditorScreen(photoView: PhotoView) {
                 if (state.doc.layers.isEmpty()) state.source = null
                 else confirm = "Close photo? Your edits will be lost." to { state.source = null; state.history = History(); state.bubble = null }
             },
-            onExport = { save.launch("bloom_${System.currentTimeMillis()}.jpg") },
+            onExport = { png ->
+                val name = "bloom_${System.currentTimeMillis()}"
+                if (png) savePng.launch("$name.png") else saveJpeg.launch("$name.jpg")
+            },
         )
         Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { canvasTop = it.positionInRoot().y; canvasBottom = canvasTop + it.size.height }) {
             AndroidView({ photoView }, Modifier.fillMaxSize())
@@ -376,7 +383,7 @@ fun EditorScreen(photoView: PhotoView) {
 }
 
 @Composable
-private fun TopBar(state: EditorState, busy: Boolean, onBack: () -> Unit, onExport: () -> Unit) {
+private fun TopBar(state: EditorState, busy: Boolean, onBack: () -> Unit, onExport: (png: Boolean) -> Unit) {
     val open = state.source != null
     val idle = state.draft == null // undo/redo cover applied edits; inside a tool, Cancel covers the draft
     Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -391,14 +398,21 @@ private fun TopBar(state: EditorState, busy: Boolean, onBack: () -> Unit, onExpo
             contentAlignment = Alignment.Center,
         ) { Icon(Icons.Compare, null, tint = if (open) Bloom.On else Bloom.Outline) }
         Spacer(Modifier.weight(1f))
-        Box(
-            Modifier.padding(end = 8.dp).height(40.dp).clip(Bloom.Petal)
-                .background(if (open && idle && !busy) Bloom.Pollen else Bloom.SurfaceHigh)
-                .clickable(enabled = open && idle && !busy, role = Role.Button, onClick = onExport).padding(horizontal = 18.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
-            else Text("Export", color = if (open && idle) Bloom.OnPollen else Bloom.Outline, fontWeight = FontWeight.Medium)
+        var menu by remember { mutableStateOf(false) }
+        Box {
+            Box(
+                Modifier.padding(end = 8.dp).height(40.dp).clip(Bloom.Petal)
+                    .background(if (open && idle && !busy) Bloom.Pollen else Bloom.SurfaceHigh)
+                    .clickable(enabled = open && idle && !busy, role = Role.Button) { menu = true }.padding(horizontal = 18.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+                else Text("Export", color = if (open && idle) Bloom.OnPollen else Bloom.Outline, fontWeight = FontWeight.Medium)
+            }
+            DropdownMenu(menu, { menu = false }, Modifier.background(Bloom.SurfaceHigh)) {
+                DropdownMenuItem({ Text("JPEG", color = Bloom.On) }, { menu = false; onExport(false) })
+                DropdownMenuItem({ Text("16-bit PNG (larger, for further editing)", color = Bloom.On) }, { menu = false; onExport(true) })
+            }
         }
     }
 }

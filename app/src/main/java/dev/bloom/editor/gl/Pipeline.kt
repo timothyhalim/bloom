@@ -5,6 +5,7 @@ import android.graphics.ColorSpace
 import android.graphics.Matrix
 import android.opengl.GLES30.*
 import android.opengl.GLUtils
+import android.util.Half
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.ColorStep
@@ -52,9 +53,10 @@ class Pipeline {
         }
     private val tex = IntArray(2)
     private val fbo = IntArray(2)
-    private val read = IntArray(2) // RGBA8 texture + framebuffer for glReadPixels, made on first export
+    private val read = IntArray(2) // texture + framebuffer for glReadPixels, made on first export
     private var readW = 0
     private var readH = 0
+    private var readFormat = 0
     private var rendered: List<Layer>? = null
     private var result = 0
 
@@ -229,13 +231,31 @@ class Pipeline {
     /** The mask texture of layer [id] from the last [render], or 0. Same pixel grid as the result. */
     fun maskTexture(id: Long): Int = masks[id]?.takeIf { it.mask != null }?.tex ?: 0
 
-    /** Renders [layers] and reads the result back as an 8-bit bitmap (export). */
-    fun renderToBitmap(layers: List<Layer>): Bitmap {
-        copyToRead(render(layers))
-        val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
-        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buf)
+    /** Renders [layers] and reads the result back (export): 8-bit, or with [deep] a 16-bit float sRGB bitmap, opaque. */
+    fun renderToBitmap(layers: List<Layer>, deep: Boolean = false): Bitmap {
+        val t = render(layers)
+        if (!deep) {
+            copyToRead(t)
+            val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
+            glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buf)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+            return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { copyPixelsFromBuffer(buf.rewind()) }
+        }
+        // Float buffers only promise GL_FLOAT readback; halve on the CPU, clamped like the PNG encoder would.
+        copyToRead(t, GL_RGBA16F)
+        val f = ByteBuffer.allocateDirect(width * height * 16).order(ByteOrder.nativeOrder())
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_FLOAT, f)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { copyPixelsFromBuffer(buf.rewind()) }
+        val fl = f.asFloatBuffer()
+        val h = ByteBuffer.allocateDirect(width * height * 8).order(ByteOrder.nativeOrder())
+        val hs = h.asShortBuffer()
+        val one = Half.toHalf(1f)
+        for (i in 0 until width * height) {
+            for (c in 0..2) hs.put(Half.toHalf(fl.get(i * 4 + c).coerceIn(0f, 1f)))
+            hs.put(one)
+        }
+        return Bitmap.createBitmap(width, height, Bitmap.Config.RGBA_F16, false, ColorSpace.get(ColorSpace.Named.SRGB))
+            .apply { copyPixelsFromBuffer(h) }
     }
 
     /** Eyedropper: the color of [layers] at upright (u, v), averaged over 3×3 pixels, as sRGB 0..1. Preview only (no tile offset). */
@@ -249,19 +269,20 @@ class Pipeline {
         return FloatArray(3) { c -> (0 until 9).sumOf { buf.get(it * 4 + c).toInt() and 0xFF } / 9f / 255f }
     }
 
-    /** Copies [t] into the RGBA8 read target and leaves that framebuffer bound for glReadPixels. */
-    private fun copyToRead(t: Int) {
-        if (readW != width || readH != height) {
+    /** Copies [t] into the read target of [format] and leaves that framebuffer bound for glReadPixels. */
+    private fun copyToRead(t: Int, format: Int = GL_RGBA8) {
+        if (readW != width || readH != height || readFormat != format) {
             glDeleteTextures(1, read, 0)
             glDeleteFramebuffers(1, read, 1)
             read[0] = genTexture()
-            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, width, height)
+            glTexStorage2D(GL_TEXTURE_2D, 1, format, width, height)
             glGenFramebuffers(1, read, 1)
             glBindFramebuffer(GL_FRAMEBUFFER, read[1])
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, read[0], 0)
             checkFramebuffer()
             readW = width
             readH = height
+            readFormat = format
         }
         glBindFramebuffer(GL_FRAMEBUFFER, read[1])
         glViewport(0, 0, width, height)

@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.ColorSpace
 import android.graphics.Matrix
 import android.graphics.Rect
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import androidx.exifinterface.media.ExifInterface
@@ -59,10 +60,11 @@ object ImageIo {
 
     /**
      * Full-resolution export with [layers] applied tile by tile on the GPU.
-     * Pixels stay in sensor orientation; the copied EXIF orientation tag keeps it upright.
+     * JPEG keeps sensor orientation and the copied EXIF orientation tag; 16-bit [png] is drawn upright,
+     * since many viewers ignore orientation in PNG.
      * Must run on a thread with no GL context of its own (it creates one).
      */
-    fun export(cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>, deband: Boolean) {
+    fun export(cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>, deband: Boolean, png: Boolean = false) {
         @Suppress("DEPRECATION") // non-deprecated overload is API 31+
         val decoder = cr.openInputStream(src)!!.use { BitmapRegionDecoder.newInstance(it, false) }
             ?: error("unsupported format")
@@ -81,8 +83,17 @@ object ImageIo {
         val reach = maxOf(feather * 0.03f, if (deband) 2 * DEBAND_RADIUS else 0f)
         val pad = if (reach > 0f) (reach * uprightH).toInt() + 2 else 0
         val region = BitmapFactory.Options().apply { inPreferredColorSpace = SRGB }
-        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(out)
+        // ponytail: whole image in memory (8 bytes/px for PNG, ~400 MB at 50 MP); stream rows to the encoder if phones run out
+        val upright = Matrix()
+        if (png) {
+            upright.postRotate(exif.rotationDegrees.toFloat())
+            if (exif.isFlipped) upright.postScale(-1f, 1f)
+            val b = RectF(0f, 0f, w.toFloat(), h.toFloat()).also(upright::mapRect)
+            upright.postTranslate(-b.left, -b.top)
+        }
+        val out = if (png) Bitmap.createBitmap(if (exif.rotationDegrees % 180 == 0) w else h, uprightH, Bitmap.Config.RGBA_F16, false, SRGB)
+        else Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out).apply { concat(upright) }
         val gpu = if (layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
         val pipeline = gpu?.let { Pipeline() }
         if (pipeline != null && Build.VERSION.SDK_INT >= 34) {
@@ -102,7 +113,7 @@ object ImageIo {
                     pipeline.setSource(tile, r.left, r.top, w, h, orient, aspect)
                     pipeline.deband = deband
                     tile.recycle()
-                    val padded = pipeline.renderToBitmap(layers)
+                    val padded = pipeline.renderToBitmap(layers, png)
                     tile = if (pad == 0) padded
                     else Bitmap.createBitmap(padded, x - r.left, y - r.top, minOf(TILE, w - x), minOf(TILE, h - y)).also { padded.recycle() }
                 } else if (pad > 0) {
@@ -117,11 +128,11 @@ object ImageIo {
             decoder.recycle()
         }
 
-        val tmp = File(cacheDir, "export.jpg")
+        val tmp = File(cacheDir, if (png) "export.png" else "export.jpg")
         try {
-            tmp.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+            tmp.outputStream().use { out.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 95, it) }
             out.recycle()
-            copyExif(cr, src, tmp)
+            copyExif(cr, src, tmp, upright = png)
             cr.openOutputStream(dst)!!.use { o -> tmp.inputStream().use { it.copyTo(o) } }
         } finally {
             tmp.delete()
@@ -136,7 +147,7 @@ object ImageIo {
         ExifInterface.TAG_THUMBNAIL_IMAGE_WIDTH,
     )
 
-    private fun copyExif(cr: ContentResolver, src: Uri, file: File) {
+    private fun copyExif(cr: ContentResolver, src: Uri, file: File, upright: Boolean) {
         val from = cr.openInputStream(src)!!.use { ExifInterface(it) }
         val to = ExifInterface(file)
         ExifInterface::class.java.fields
@@ -144,6 +155,7 @@ object ImageIo {
             .map { it.get(null) as String }
             .filterNot { it in SKIP_TAGS }
             .forEach { tag -> from.getAttribute(tag)?.let { to.setAttribute(tag, it) } }
+        if (upright) to.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
         to.saveAttributes()
     }
 }
