@@ -90,7 +90,7 @@ Not a milestone of this repo: the paid cloud (backend, credits, billing) is plan
 **Goal:** prompted fill without a server on flagship phones.
 
 ### Steps
-1. **Feasibility spike first (3 days)**: SD 1.5 inpainting (CreativeML OpenRAIL-M; use restrictions go into the Terms) converted to MNN, which has a diffusion example; measure 512 px, 20 steps on a Snapdragon 8 Gen 2 class phone. Stop here if > 15 s or > 3 GB RAM; consider an LCM/turbo distilled variant (check license) for 4–8 steps.
+1. **Feasibility spike first (3 days)** (desktop part done, see [`docs/eval/m10-spike.md`](eval/m10-spike.md): go with LCM-LoRA 4 steps; plain 20 steps is about 55 s): SD 1.5 inpainting (CreativeML OpenRAIL-M; use restrictions go into the Terms) converted to MNN, which has a diffusion example; measure 512 px, 20 steps on a Snapdragon 8 Gen 2 class phone. Stop here if > 15 s or > 3 GB RAM; consider an LCM/turbo distilled variant (check license) for 4–8 steps.
 2. **Eligibility**: offered only with ≥ 8 GB RAM and a supported GPU; never on 4 GB devices. Download (~1–2 GB) only after an explicit opt-in with the size shown.
 3. **Pipeline**: crop around the mask (like the eraser), text encoder → UNet loop with cancel and progress → VAE decode; result as a Retouch patch.
 4. **Fill mode** in the AI tool uses it when chosen as the provider for GEN_FILL.
