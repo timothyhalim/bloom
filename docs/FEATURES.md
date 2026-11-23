@@ -106,7 +106,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Applying Crop is one undo step | ui/EditorScreen.kt:256-260 | none | UI |
 | Hide/show, opacity release, blend change, delete, reorder, deband toggle, rename, group/ungroup, group hide/opacity/collapse/move: one undo step each (hide-all is not undoable) | ui/EditorScreen.kt:500, 608-615, 564, 598 | none | UI |
 | Opacity drag previews live and commits one step on release | ui/EditorScreen.kt:603-611, ui/LayerRail.kt:342 | none | UI |
-| Undo of brush strokes / Liquify strokes inside an open tool. **BROKEN (user report)**: by design undo/redo are disabled while a tool is open (`idle`, ui/EditorScreen.kt:639); only Cancel discards the whole draft. Spec: "One stroke = one undo step", "Undo steps back one stroke" | ui/EditorScreen.kt:639, design/UI.md:186, 238 | none | UI |
+| Undo of brush strokes / Liquify strokes inside an open tool: one gesture = one step (fixed 2026-11-23, `EditorState.steps`) | ui/EditorScreen.kt, model/Document.kt (History<T>) | unit: HistoryTest.toolStepsOneGestureEach | UI |
 | Opening a new photo clears history | ui/EditorScreen.kt:281 | none | UI |
 
 ## 6. Layer rail
@@ -593,8 +593,8 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Area | Spec | Code |
 |---|---|---|
-| Undo inside a tool | One stroke = one undo step (brush, Liquify) | Undo/Redo disabled while a tool is open; **BROKEN (user report)** |
-| Rail reorder | Long-press 400 ms then drag, haptic tick, auto-scroll near arrows | Hold via longPressTimeout, no haptic, no auto-scroll; **BROKEN (user report)** |
+| Undo inside a tool | One stroke = one undo step (brush, Liquify) | Done: one gesture = one step |
+| Rail reorder | Long-press 400 ms then drag, haptic tick, auto-scroll near arrows | Fixed: hold-drag works, haptic tick; no auto-scroll yet |
 | Rail | Fades to 25% during canvas gestures; actions Move up/down/Layer settings; insert new layer above the active one; pending shown above the active layer | No fade; Move up/down are bubble buttons, not a11y actions; new layers always on top (Retouch at the bottom); pending always at the top |
 | Rail swipe | Haptic tick; toast 3 s | No haptic; Snackbar Short, first 3 per session |
 | Layer bubble | Closes when the rail scrolls; navigator hidden while open | The tap-outside layer covers the rail, so the rail can't scroll or be dragged while a bubble is open |
