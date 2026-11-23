@@ -35,6 +35,7 @@ Rules that hold throughout:
 - **Consent:** a sheet the first time a photo crop goes to a provider (what is sent, where, `Send` / `Not now` / `Use a different provider`, `Don't ask again for <provider>`); reset or hide cloud features in Settings › Privacy.
 - **Settings page:** AI providers (one row per mode → provider + model; `+ Add provider` form: type, URL, key, `Test connection` which must pass and lists the modes and models found before Save), On-device models, Privacy, Appearance, About. Keys: Replace / Forget only, never shown again.
 - **Ask:** the LLM turns a sentence into Bloom layers (Color parameters, masks from Subject / Background / Gradient / Luminance, Blur). Only the text and a summary of the current layers are sent, never the photo. Result is a checklist of layers; `Apply n layers` is one undo step. A vision option (send a small thumbnail for requests like "fix the white balance") is a later, opt-in addition.
+- **Refine a layer with Ask:** an Ask icon in each layer's bubble opens the Ask field targeted at that layer ("a bit less orange", "only on the sky"). The LLM gets that layer's parameters and mask steps and may only return `SetParam` / mask-step ops for it; the change previews live and applies as one undo step.
 - **Fill (prompted):** in M8 for bring-your-own providers; same plumbing as Erase plus a prompt field.
 - Update `design/mockup.html` to the shipped design after M8.
 
