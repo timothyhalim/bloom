@@ -67,7 +67,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Zoom resets when the shown crop changes shape; same shape keeps zoom | PhotoView.kt:117-132 | none | UI |
 | Tool touches arrive in upright photo 0..1 through the crop matrix (brush lands under the finger on a cropped/rotated photo) | PhotoView.kt:178, 285-305 | none | unit (matrix) / UI |
 | A second finger cancels the current tool stroke (ToolTouch.Cancel) and turns the gesture into pan/zoom | PhotoView.kt:302-303 | none | UI |
-| Touch routing: Crop > Liquify > mask mode / AI Erase > Lens/Zoom focus > none (pan) | ui/EditorScreen.kt:411-428 | none | UI |
+| Touch routing: Crop > Liquify > mask mode / AI Erase > Lens/Zoom focus > none (pan) | ui/EditorScreen.kt:411-428 | UI: CanvasTest (crop, Liquify, gradient, lens tests), UndoTest.undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
 | Overlays (handles, focus mark, crop) redraw on every zoom/pan | ui/EditorScreen.kt:332-335, PhotoView.kt:237 | none | UI |
 | Navigator: shown only when zoomed past the view; hidden at Fit | PhotoView.kt:238-244, ui/EditorScreen.kt:568-576 | none | UI |
 | Navigator: tap or drag inside moves the view there (clamped 0..1) | ui/LayerRail.kt:389-403, PhotoView.kt:205-210 | none | UI |
@@ -83,9 +83,9 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Undo button, enabled only with a photo, no tool open, and history to undo | ui/EditorScreen.kt:642 | UI: UndoTest.applyingAToolIsOneUndoStep, undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
 | Redo button, enabled only with a photo, no tool open, and history to redo | ui/EditorScreen.kt:643 | UI: UndoTest.applyingAToolIsOneUndoStep, undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
 | Undo/Redo step the open tool's own gestures while any tool or Crop is open (`idle` = no tool); a fresh tool starts with nothing to undo | ui/EditorScreen.kt:639 | UI: UndoTest.undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
-| Compare: hold shows the original (no layers), release restores; works inside every tool | ui/EditorScreen.kt:644-650, 173 | none | UI |
-| Compare drops layers only; the crop still applies | ui/EditorScreen.kt:172-173, 340-342 | none | UI |
-| Compare disabled (outline tint, no gesture) without a photo | ui/EditorScreen.kt:646-650 | none | UI |
+| Compare: hold shows the original (no layers), release restores; works inside every tool | ui/EditorScreen.kt:644-650, 173 | UI: CanvasTest.holdingCompareShowsTheOriginalWithTheCropStill | UI |
+| Compare drops layers only; the crop still applies | ui/EditorScreen.kt:172-173, 340-342 | UI: CanvasTest.holdingCompareShowsTheOriginalWithTheCropStill | UI |
+| Compare disabled (outline tint, no gesture) without a photo | ui/EditorScreen.kt:646-650 | UI: CanvasTest.compareDoesNothingWithoutAPhoto | UI |
 | Spec: Compare shows an "Original" tag and is a toggle under TalkBack; not built | design/UI.md:216 | none | n/a |
 | Export button: Pollen petal when enabled; disabled while a tool is open or exporting | ui/EditorScreen.kt:654-665 | UI: ExportMenuTest.exportIsOffWhileAToolIsOpen, ProjectsTest.firstRunHomeHasTheTaglineAndOpenButtonsAndNoEditing | UI |
 | Export progress: ring + "NN%" in the Export button while exporting | ui/EditorScreen.kt:660-663 | none | UI |
@@ -309,7 +309,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Handles drawn on the photo: filled Pollen = full end, ring = fade end; radial shows edge and half-radius circles | ui/MaskBar.kt:454-477 | none | UI (screenshot) |
 | Handles hidden while the gradient step is hidden | ui/EditorScreen.kt:544 | none | UI |
 | Drag near a handle (32dp) moves it | ui/MaskBar.kt:576-585, 525 | none | UI |
-| Touch away from both handles starts a new gradient line at the finger | ui/MaskBar.kt:582-584 | none | UI |
+| Touch away from both handles starts a new gradient line at the finger | ui/MaskBar.kt:582-584 | UI: CanvasTest.touchingAwayFromTheHandlesDrawsANewGradientLine | UI |
 | Touch with Gradient tool and no gradient selected adds one | ui/MaskBar.kt:577 | none | UI |
 | Linear gradient follows smoothstep | gl/Pipeline.kt:967-1000 | GPU: linearGradientFollowsSmoothstep | GPU |
 | Radial gradient (round in image space) | gl/Pipeline.kt:970 | GPU: rotatedExportTilesMatchTheUprightPreview (partial: radial step present) | GPU |
@@ -395,7 +395,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Masked blur doesn't smear the subject into the background (mask-weighted) | gl/Pipeline.kt:1073-1075 | GPU: maskedBlurDoesntSmearTheSubjectIntoTheBackground | GPU |
 | Lens blur: highlight becomes a disc (bokeh) | gl/Pipeline.kt:398-427 | GPU: lensBlurTurnsAHighlightIntoADisc | GPU |
 | Lens blur keeps the focused depth sharp | gl/Pipeline.kt:398-427 | GPU: lensBlurKeepsTheFocusedNearHalfSharp | GPU |
-| Lens / Zoom: focus point mark on the photo; tap or drag moves it (clamped 0..1) | ui/EditorScreen.kt:391-392, 421-425, 884-894 | UI: ToolBarsTest.blurMoreHasTheTypeRowAndEachTypesSliders (mark shown; moving it: none) | UI |
+| Lens / Zoom: focus point mark on the photo; tap or drag moves it (clamped 0..1) | ui/EditorScreen.kt:391-392, 421-425, 884-894 | UI: ToolBarsTest.blurMoreHasTheTypeRowAndEachTypesSliders, CanvasTest.aTapMovesTheLensFocus | UI |
 | Focus mark hidden in mask mode | ui/EditorScreen.kt:528 | none | UI |
 | Lens without a depth map yet: status row replaces the slider (measuring / download % / retry) | ui/EditorScreen.kt:862-863 | none | UI (fake ModelStore) |
 | Depth map measured once per photo, only when a Lens blur or depth step needs it | ui/EditorScreen.kt:158-162, 348-366, Segment.kt:57-64 | none | UI |
@@ -412,7 +412,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Main row: "<Brush> / Size" slider 10..150 dp | ui/LiquifyBar.kt:113 | UI: ToolBarsTest.liquifyHasFiveBrushesSizeAndMore | UI |
 | More: Strength 5..100, Softness 0..100 | ui/LiquifyBar.kt:103-104 | UI: ToolBarsTest.liquifyHasFiveBrushesSizeAndMore | UI |
 | More (Twirl only): Direction Clockwise / Counterclockwise | ui/LiquifyBar.kt:106-110 | UI: ToolBarsTest.liquifyHasFiveBrushesSizeAndMore | UI |
-| Each touch is one stroke with the current settings | ui/LiquifyBar.kt:49-57 | none | unit (LiquifyTouch with fake view) |
+| Each touch is one stroke with the current settings | ui/LiquifyBar.kt:49-57 | UI: CanvasTest.eachLiquifyTouchIsOneStroke | unit (LiquifyTouch with fake view) |
 | Dabs a sixth of the radius apart | model/Liquify.kt:22-23 | unit: LiquifyTest.growingAStrokeMatchesReplayingIt (indirect) | unit |
 | Hold to apply: Bloat, Pinch, Twirl, Restore keep adding a dab every 33 ms while the finger rests; Push doesn't | ui/LiquifyBar.kt:35-44, 51, 68 | none | unit (Robolectric looper) |
 | Hold stops on Up/Cancel and if the tool changes mid-hold | ui/LiquifyBar.kt:38, 63 | none | unit |
@@ -438,7 +438,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Overlay: dim outside (55%; Spec 65%), rule-of-thirds always (Spec: while dragging), white border, L corners (Spec: also edge handles) | ui/CropBar.kt:142-165 | none | UI (screenshot) |
 | Drag a corner (28dp hit) resizes | ui/CropBar.kt:80-83, 111-114 | none | UI |
 | Drag an edge resizes, only when no ratio is locked | ui/CropBar.kt:84-90 | none | UI |
-| Drag inside moves the crop | ui/CropBar.kt:91, 109 | none | UI |
+| Drag inside moves the crop | ui/CropBar.kt:91, 109 | UI: CanvasTest.dragInsideACropMovesIt | UI |
 | Touch outside the crop does nothing (one finger doesn't pan in Crop) | ui/CropBar.kt:91, 98 | none | UI |
 | Minimum crop 5% of the photo height | ui/CropBar.kt:102-103, 137 | none | unit (CropTouch with fake view) |
 | Locked ratio holds while resizing a corner, anchored at the opposite corner | ui/CropBar.kt:117-125 | none | unit |
@@ -636,35 +636,37 @@ Built rows whose "Test today" is `none`, per area (spec-only rows that are not b
 
 | Area | Built rows | Not covered | Spec-only rows (not built, n/a) |
 |---|---|---|---|
-| 1. App start, first run, empty state | 7 | 7 | 1 |
-| 2. Open and load | 20 | 14 | 0 |
-| 3. Canvas: pan, zoom, touches | 19 | 18 | 0 |
-| 4. Top bar | 13 | 13 | 1 |
-| 5. Undo / redo (history) | 10 | 7 | 0 |
-| 6. Layer rail | 23 | 22 | 3 |
-| 7. Layer bubble | 13 | 11 | 1 |
-| 8. Photo bubble (Smooth banding) | 6 | 3 | 0 |
-| 9. Tool bar shell (shared by all tools) | 12 | 12 | 0 |
-| 10. Color tool | 13 | 11 | 1 |
-| 11. Curves | 15 | 9 | 0 |
-| 12. Mask mode: bar and steps row | 22 | 16 | 1 |
-| 13. Mask settings box (More, copy, clear, feather) | 10 | 7 | 0 |
-| 14. Mask step: Brush | 10 | 7 | 0 |
-| 15. Mask step: Gradient | 9 | 7 | 0 |
-| 16. Mask step: Color range (eyedropper) | 10 | 8 | 0 |
-| 17. Mask step: Luminance and Depth range | 9 | 6 | 0 |
-| 18. Mask step: Subject, Background, pins | 14 | 11 | 1 |
+| 1. App start, first run, empty state | 9 | 4 | 1 |
+| 2. Open and load | 20 | 11 | 0 |
+| 3. Canvas: pan, zoom, touches | 19 | 17 | 0 |
+| 4. Top bar | 13 | 1 | 1 |
+| 5. Undo / redo (history) | 10 | 0 | 0 |
+| 6. Layer rail | 26 | 5 | 2 |
+| 7. Layer bubble | 17 | 1 | 1 |
+| 7b. Group bubble | 5 | 0 | 0 |
+| 8. Photo bubble (Smooth banding) | 6 | 1 | 0 |
+| 9. Tool bar shell (shared by all tools) | 12 | 3 | 0 |
+| 10. Color tool | 13 | 5 | 1 |
+| 11. Curves | 15 | 3 | 0 |
+| 12. Mask mode: bar and steps row | 22 | 1 | 1 |
+| 13. Mask settings box (More, copy, clear, feather) | 10 | 1 | 0 |
+| 14. Mask step: Brush | 10 | 3 | 0 |
+| 15. Mask step: Gradient | 9 | 4 | 0 |
+| 16. Mask step: Color range (eyedropper) | 10 | 4 | 0 |
+| 17. Mask step: Luminance and Depth range | 9 | 2 | 0 |
+| 18. Mask step: Subject, Background, pins | 14 | 8 | 1 |
 | 19. Mask overlay, loupe, brush ring | 10 | 10 | 0 |
-| 20. Detail tool (Blur, Sharpen) | 21 | 14 | 0 |
-| 21. Liquify | 20 | 10 | 0 |
-| 22. Crop | 31 | 19 | 1 |
-| 23. AI eraser | 15 | 10 | 2 |
-| 24. AI models (download, verify, run) | 13 | 13 | 1 |
-| 25. Export | 18 | 10 | 1 |
-| 26. System back and discard dialogs | 7 | 7 | 1 |
-| 27. Settings persistence | 3 | 3 | 1 |
-| 28. Theme, scroll indicators, accessibility basics | 4 | 4 | 2 |
+| 20. Detail tool (Blur, Sharpen) | 21 | 4 | 0 |
+| 21. Liquify | 20 | 4 | 0 |
+| 22. Crop | 31 | 7 | 1 |
+| 23. AI eraser | 15 | 5 | 2 |
+| 24. AI models (download, verify, run) | 15 | 8 | 1 |
+| 25. Export | 21 | 7 | 1 |
+| 26. System back and discard dialogs | 7 | 0 | 1 |
+| 27. Settings persistence | 3 | 0 | 1 |
+| 28. Theme, scroll indicators, accessibility basics | 8 | 5 | 2 |
 | 29. Rendering pipeline core | 9 | 5 | 0 |
-| **Total** | **386** | **294** | **18** |
+| 30. Projects and Home | 9 | 0 | 0 |
+| **Total** | **418** | **129** | **17** |
 
-Biggest gaps: no Compose UI tests exist at all, so every rail, bubble, tool-bar, dialog, back-handling and persistence behaviour is untested; ModelStore (download, SHA, multipart) has no test; EXIF copy has no test. Covered well: model math (Crop, Curves, Liquify, Eraser, History, Mask) by unit tests, and the GPU pipeline (colour, masks, blur, liquify, retouch, export tiles, HDR) by PipelineTest. Three GPU tests skip without pushed models (aPinSelectsOnlyThatObject, subjectMaskFindsTheObject, eraserContinuesStripesAcrossTheHole).
+Remaining gaps: canvas gestures (pinch, pan limits, double-tap, navigator), drawing (overlay, loupe, rings, badges: screenshot or manual), AI model runs and their status rows (need a fake ModelStore or pushed models), RAW decode, and GPU colour maths for Contrast, Highlights/Shadows, Temp/Tint and Saturation/Vibrance. Compose UI tests (app/src/androidTest, `showEditor` in Editor.kt) cover the rail, bubbles, tool bars, mask bar, dialogs, back handling, projects, export menu and settings; unit tests cover the model maths, EditorState and ModelStore; PipelineTest covers the GPU pipeline and export. Three GPU tests skip without pushed models (aPinSelectsOnlyThatObject, subjectMaskFindsTheObject, eraserContinuesStripesAcrossTheHole).
