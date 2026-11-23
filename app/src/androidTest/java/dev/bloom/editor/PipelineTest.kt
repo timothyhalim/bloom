@@ -21,6 +21,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.roundToInt
 import org.junit.runner.RunWith
+import kotlin.math.abs
 import kotlin.math.pow
 
 @RunWith(AndroidJUnit4::class)
@@ -96,6 +97,73 @@ class PipelineTest {
             assertTrue(bad.joinToString(), bad.isEmpty())
         } finally {
             p.release()
+        }
+    }
+
+    // --- Recover (M2.5a) ---
+
+    /** Renders [layers] over [src] and returns the red channel row by row. */
+    private fun redsOf(src: Bitmap, layers: List<Layer>, deband: Boolean = true): IntArray = Offscreen().use {
+        val p = Pipeline()
+        try {
+            p.deband = deband
+            p.setSource(src)
+            val out = p.renderToBitmap(layers)
+            IntArray(src.width * src.height).also { out.getPixels(it, 0, src.width, 0, 0, src.width, src.height) }.map { Color.red(it) }.toIntArray()
+        } finally {
+            p.release()
+        }
+    }
+
+    /** Column averages: removes dither and deband noise, keeps the horizontal profile. */
+    private fun profile(r: IntArray, w: Int, h: Int) = DoubleArray(w) { x -> (0 until h).sumOf { r[it * w + x] }.toDouble() / h }
+
+    private fun gray(w: Int, h: Int, v: (Int, Int) -> Int) = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+        setPixels(IntArray(w * h) { val g = v(it % w, it / w); Color.rgb(g, g, g) }, 0, w, 0, 0, w, h)
+    }
+
+    private val contrast = Layer(1).with(ColorParam.Contrast, 100f) // doubles every step
+
+    @Test
+    fun debandSmoothsEightBitStepsUnderAHardPush() {
+        val src = gray(600, 600) { x, _ -> 90 + x / 8 } // one 8-bit level every 8 px
+        fun maxJump(deband: Boolean) = profile(redsOf(src, listOf(contrast), deband), 600, 600)
+            .toList().subList(20, 580).zipWithNext { a, b -> abs(b - a) }.max()
+        val off = maxJump(false)
+        val on = maxJump(true)
+        assertTrue("banded steps should show without deband: $off", off > 1.5)
+        assertTrue("deband should leave no visible steps: $on", on < 0.75)
+    }
+
+    @Test
+    fun debandKeepsEdgesAndTexture() {
+        // a hard edge, and fine texture of +-4 levels on the right
+        val rnd = java.util.Random(3)
+        val src = gray(600, 600) { x, _ -> if (x < 300) 60 else 128 + if (rnd.nextBoolean()) 4 else -4 }
+        val inp = IntArray(600 * 600).also { src.getPixels(it, 0, 600, 0, 0, 600, 600) }.map { Color.red(it) }
+        val out = redsOf(src, listOf(Layer(1)))
+        assertEquals(60.0, profile(out, 600, 600)[299], 0.3)
+        val diff = inp.indices.filter { it % 600 >= 300 }.map { abs(out[it] - inp[it]) }.average()
+        assertTrue("texture changed by $diff levels on average", diff < 0.6)
+    }
+
+    @Test
+    fun sixteenBitSourceKeepsLevelsBetweenEightBitSteps() {
+        // 128.25 / 255 in sRGB, stored once sRGB-encoded and once linear (both decode paths exist on real devices).
+        val target = 128.25 / 255
+        for ((space, value) in listOf(
+            android.graphics.ColorSpace.Named.EXTENDED_SRGB to target,
+            android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB to srgbToLinear(target),
+        )) {
+            val src = Bitmap.createBitmap(32, 32, Bitmap.Config.RGBA_F16, false, android.graphics.ColorSpace.get(space))
+            val h = android.util.Half.toHalf(value.toFloat())
+            val one = android.util.Half.toHalf(1f)
+            val buf = java.nio.ByteBuffer.allocateDirect(32 * 32 * 8).order(java.nio.ByteOrder.nativeOrder())
+            repeat(32 * 32) { buf.putShort(h).putShort(h).putShort(h).putShort(one) }
+            src.copyPixelsFromBuffer(buf.rewind())
+            assertEquals("$space", 128.25, redsOf(src, emptyList()).average(), 0.1)
+            // eight plain layers: each pass must round its half-float output to nearest, not down
+            assertEquals("$space, 8 layers", 128.25, redsOf(src, List(8) { Layer(it.toLong()) }).average(), 0.1)
         }
     }
 

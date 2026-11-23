@@ -1,6 +1,7 @@
 package dev.bloom.editor.gl
 
 import android.graphics.Bitmap
+import android.graphics.ColorSpace
 import android.graphics.Matrix
 import android.opengl.GLES30.*
 import android.opengl.GLUtils
@@ -27,7 +28,18 @@ class Pipeline {
     var height = 0
         private set
 
-    private var source = 0
+    private var raw = 0 // the decoded pixels as uploaded
+    private var rawLinear = false // F16 decodes on API 26-27 come back in linear light
+    private var rawDeep = false // more than 8 bits per channel: nothing to deband
+    private var source = 0 // raw, sRGB-encoded and debanded: what the layers read
+    private var sourceFbo = 0
+    private var prepared = false
+
+    /** Smooth 8-bit banding in the source before the layers run. No effect on sources with more than 8 bits. */
+    var deband = true
+        set(v) {
+            if (field != v) { field = v; prepared = false; rendered = null }
+        }
     private val tex = IntArray(2)
     private val fbo = IntArray(2)
     private val read = IntArray(2) // RGBA8 texture + framebuffer for glReadPixels, made on first export
@@ -52,6 +64,7 @@ class Pipeline {
     private val maskProgram = link(PASS_VERTEX, MASK_FRAGMENT)
     private val dabProgram = link(DAB_VERTEX, DAB_FRAGMENT)
     private val blurProgram = link(PASS_VERTEX, BLUR_FRAGMENT)
+    private val prepareProgram = link(PASS_VERTEX, PREPARE_FRAGMENT)
     private val params = FloatArray(ColorParam.entries.size)
     private val curveTex = genTexture().also {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -63,7 +76,15 @@ class Pipeline {
     private val half = glGetString(GL_EXTENSIONS).orEmpty()
         .let { "GL_EXT_color_buffer_half_float" in it || "GL_EXT_color_buffer_float" in it }
 
+    // Some GPUs truncate when writing half floats, so every pass would darken by up to one half-float step
+    // (~0.12 level near white). Measured once; the passes that write RGBA16F then add half a step first.
+    private val truncates = half && writesTruncate()
+
     init {
+        for (prog in listOf(colorProgram, prepareProgram)) {
+            glUseProgram(prog)
+            glUniform1i(glGetUniformLocation(prog, "uTrunc"), if (truncates) 1 else 0)
+        }
         glUseProgram(colorProgram)
         glUniform1i(glGetUniformLocation(colorProgram, "uMask"), 1)
         glUniform1i(glGetUniformLocation(colorProgram, "uCurve"), 3)
@@ -80,10 +101,19 @@ class Pipeline {
         bmp: Bitmap, originX: Int = 0, originY: Int = 0, fullW: Int = bmp.width, fullH: Int = bmp.height,
         orient: Matrix = Matrix(), aspect: Float = fullW.toFloat() / fullH,
     ) {
-        if (source == 0) source = genTexture()
-        glBindTexture(GL_TEXTURE_2D, source)
-        GLUtils.texImage2D(GL_TEXTURE_2D, 0, bmp, 0)
-        glGenerateMipmap(GL_TEXTURE_2D)
+        if (raw == 0) raw = genTexture().also { glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST) }
+        glBindTexture(GL_TEXTURE_2D, raw)
+        rawDeep = bmp.config == Bitmap.Config.RGBA_F16
+        rawLinear = rawDeep && bmp.colorSpace == ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB)
+        if (rawDeep) {
+            // GLUtils can't upload F16 before API 28; raw half floats work everywhere
+            val buf = ByteBuffer.allocateDirect(bmp.byteCount).order(ByteOrder.nativeOrder())
+            bmp.copyPixelsToBuffer(buf)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, bmp.width, bmp.height, 0, GL_RGBA, GL_HALF_FLOAT, buf.rewind())
+        } else {
+            GLUtils.texImage2D(GL_TEXTURE_2D, 0, bmp, 0)
+        }
+        prepared = false
         if (bmp.width != width || bmp.height != height) {
             width = bmp.width
             height = bmp.height
@@ -99,6 +129,7 @@ class Pipeline {
 
     /** Renders [layers] (bottom to top) and returns the texture holding the result. Cached until layers change. */
     fun render(layers: List<Layer>): Int {
+        if (!prepared) prepare()
         val active = layers.filter { it.visible && it.opacity > 0f }
         if (active == rendered) return result
         masks.keys.filter { id -> layers.none { it.id == id } }.forEach { id -> masks.remove(id)?.let(::delete) }
@@ -183,13 +214,52 @@ class Pipeline {
     }
 
     fun release() {
-        glDeleteTextures(2, intArrayOf(source, curveTex), 0)
+        glDeleteTextures(3, intArrayOf(raw, source, curveTex), 0)
+        glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
         glDeleteTextures(2, tex, 0)
         glDeleteFramebuffers(2, fbo, 0)
         glDeleteTextures(1, read, 0)
         glDeleteFramebuffers(1, read, 1)
         freeMasks()
-        listOf(colorProgram, copyProgram, maskProgram, dabProgram, blurProgram).forEach(::glDeleteProgram)
+        listOf(colorProgram, copyProgram, maskProgram, dabProgram, blurProgram, prepareProgram).forEach(::glDeleteProgram)
+    }
+
+    /** Writes 0.5 + 3/4 of a half-float step into an RGBA16F target and reads it back: 0.5 means the GPU truncates. */
+    private fun writesTruncate(): Boolean {
+        val t = genTexture()
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, 1, 1)
+        val f = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
+        glBindFramebuffer(GL_FRAMEBUFFER, f)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t, 0)
+        val prog = link(PASS_VERTEX, "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main() { o = vec4(0.5 + 0.75 / 2048.0); }")
+        glViewport(0, 0, 1, 1)
+        glUseProgram(prog)
+        drawFullQuad()
+        val out = ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder())
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, out)
+        val ok = glGetError() == GL_NO_ERROR
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        glDeleteProgram(prog)
+        glDeleteFramebuffers(1, intArrayOf(f), 0)
+        glDeleteTextures(1, intArrayOf(t), 0)
+        return ok && out.getFloat(0) < 0.5f + 0.5f / 2048f
+    }
+
+    /** raw -> source: sRGB-encode linear decodes and deband 8-bit ones, then mipmap for the preview. */
+    private fun prepare() {
+        glBindFramebuffer(GL_FRAMEBUFFER, sourceFbo)
+        glViewport(0, 0, width, height)
+        glUseProgram(prepareProgram)
+        glUniform1i(glGetUniformLocation(prepareProgram, "uLinear"), if (rawLinear) 1 else 0)
+        glUniform1i(glGetUniformLocation(prepareProgram, "uDeband"), if (deband && !rawDeep) 1 else 0)
+        glUniform1f(glGetUniformLocation(prepareProgram, "uRadius"), DEBAND_RADIUS * uprightHeight)
+        glUniform2f(glGetUniformLocation(prepareProgram, "uOrigin"), geo[0], geo[1])
+        drawQuad(raw)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        glBindTexture(GL_TEXTURE_2D, source)
+        glGenerateMipmap(GL_TEXTURE_2D)
+        prepared = true
+        rendered = null
     }
 
     /**
@@ -335,6 +405,14 @@ class Pipeline {
         glDeleteFramebuffers(2, fbo, 0)
         glGenFramebuffers(2, fbo, 0)
         val levels = 32 - Integer.numberOfLeadingZeros(maxOf(width, height))
+        glDeleteTextures(1, intArrayOf(source), 0)
+        glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
+        source = genTexture()
+        glTexStorage2D(GL_TEXTURE_2D, levels, if (half) GL_RGBA16F else GL_RGBA8, width, height)
+        sourceFbo = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
+        glBindFramebuffer(GL_FRAMEBUFFER, sourceFbo)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source, 0)
+        checkFramebuffer()
         for (i in 0..1) {
             tex[i] = genTexture()
             glTexStorage2D(GL_TEXTURE_2D, levels, if (half) GL_RGBA16F else GL_RGBA8, width, height)
@@ -357,6 +435,43 @@ class Pipeline {
 
     private companion object {
         const val CURVE_SIZE = 1024
+
+        // Deband (after libplacebo/f3kdb): average 4 random samples around the pixel and take the average only when
+        // it is within 3 levels (JPEG noise included), so 8-bit steps in flat areas melt while edges and texture stay.
+        // Random offsets hash the full-image pixel position, so export tiles agree where they overlap.
+        const val PREPARE_FRAGMENT = """#version 300 es
+precision highp float;
+precision highp int;
+uniform sampler2D uTex;
+uniform bool uLinear;
+uniform bool uDeband;
+""" + HALF_ROUND + """
+uniform float uRadius;
+uniform vec2 uOrigin;
+out vec4 outColor;
+vec3 enc(vec3 c) { c = max(c, 0.0); return uLinear ? mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)) : c; }
+vec3 fetch(vec2 p) { return enc(texelFetch(uTex, clamp(ivec2(p), ivec2(0), textureSize(uTex, 0) - 1), 0).rgb); }
+uvec3 pcg3d(uvec3 v) {
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    return v;
+}
+void main() {
+    vec2 p = gl_FragCoord.xy;
+    vec3 c = fetch(p);
+    if (uDeband) {
+        for (int i = 1; i <= 2; i++) {
+            uvec3 h = pcg3d(uvec3(uvec2(p + uOrigin), uint(i)));
+            float a = float(h.x >> 8) / 16777216.0 * 6.2831853;
+            vec2 o = uRadius * float(i) * float(h.y >> 8) / 16777216.0 * vec2(cos(a), sin(a));
+            vec3 avg = 0.25 * (fetch(p + o) + fetch(p - o) + fetch(p + vec2(-o.y, o.x)) + fetch(p - vec2(-o.y, o.x)));
+            if (all(lessThan(abs(avg - c), vec3(3.0 / 255.0 / float(i))))) c = avg;
+        }
+    }
+    outColor = vec4(store(c), 1.0);
+}"""
 
         /** android.graphics.Matrix is row-major; GLES wants column-major without transpose. */
         fun columnMajor(m: Matrix, out: FloatArray) {
@@ -389,6 +504,7 @@ uniform int uBlend;
 uniform bool uMasked;
 uniform bool uInvert;
 uniform bool uCurves;
+""" + HALF_ROUND + """
 uniform sampler2D uCurve; // CURVE_SIZE x 1 tone table, rgb = output per channel
 out vec4 outColor;
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -426,7 +542,7 @@ void main() {
         m = texelFetch(uMask, px, 0).r;
         if (uInvert) m = 1.0 - m;
     }
-    outColor = vec4(mix(src.rgb, p, uOpacity * m), 1.0);
+    outColor = vec4(store(mix(src.rgb, p, uOpacity * m)), 1.0);
 }"""
 
         // Combines one mask step into the mask so far (uTex), or with uValueOnly writes the step value alone.
@@ -545,6 +661,11 @@ void main() {
 }
 
 /** GLSL: adds +-0.5 of an 8-bit step of fixed noise before the 8-bit write, so smooth gradients don't band. Exact 8-bit values pass through unchanged. */
+/** For passes that write RGBA16F: with uTrunc, add half a half-float step so the GPU's truncation rounds to nearest. */
+internal const val HALF_ROUND = """
+uniform bool uTrunc;
+vec3 store(vec3 c) { return uTrunc ? c + sign(c) * exp2(floor(log2(max(abs(c), vec3(6.1e-5)))) - 11.0) : c; }"""
+
 internal const val DITHER = """
 vec3 dither(vec3 c) {
     float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
@@ -560,6 +681,9 @@ internal fun drawFullQuad() {
     glVertexAttribPointer(0, 2, GL_FLOAT, false, 0, QUAD)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
 }
+
+/** Deband sample radius as a fraction of the upright image height; the second pass reaches twice as far. */
+const val DEBAND_RADIUS = 0.01f
 
 internal fun genTexture(): Int = IntArray(1).also { glGenTextures(1, it, 0) }[0].also {
     glBindTexture(GL_TEXTURE_2D, it)

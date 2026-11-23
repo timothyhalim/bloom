@@ -233,6 +233,7 @@ fun EditorScreen(photoView: PhotoView) {
     LaunchedEffect(Unit) {
         photoView.onViewport = { viewport = it }
         photoView.onTransform = { transformTick++ }
+        launch { snapshotFlow { state.doc.deband }.collect(photoView::setDeband) }
         snapshotFlow { state.rendered() }.collect(photoView::setLayers)
     }
     // Mask overlay and painting only in mask mode.
@@ -262,9 +263,10 @@ fun EditorScreen(photoView: PhotoView) {
         val src = state.source
         if (dst == null || src == null) return@rememberLauncherForActivityResult
         val layers = state.doc.layers
+        val deband = state.doc.deband
         scope.launch {
             busy = true
-            val r = runCatching { withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers) } }
+            val r = runCatching { withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband) } }
             busy = false
             r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "export failed", it) }
             snackbar.showSnackbar(r.fold({ "Saved" }, { "Export failed: ${it.message ?: it}" }))
@@ -308,6 +310,7 @@ fun EditorScreen(photoView: PhotoView) {
                     onTap = { l, y -> state.bubble = if (state.bubble?.first == l.id) null else l.id to y },
                     onToggle = ::toggle,
                     onMove = { l, to -> state.edit { it.move(l.id, top.size - 1 - to) } },
+                    onPhotoTap = { y -> state.bubble = if (state.bubble?.first == PHOTO_ID) null else PHOTO_ID to y },
                     modifier = Modifier.align(Alignment.TopEnd).padding(bottom = with(density) { chromePx.toDp() } + 8.dp),
                 )
                 viewport?.let { v ->
@@ -326,6 +329,15 @@ fun EditorScreen(photoView: PhotoView) {
                         chromePx = it.height
                     },
                 )
+                state.bubble?.takeIf { it.first == PHOTO_ID }?.let { (_, y) ->
+                    Box(Modifier.fillMaxSize().clickable(MutableInteractionSource(), null) { state.bubble = null })
+                    PhotoBubble(
+                        state.doc.deband, deep = preview?.config == Bitmap.Config.RGBA_F16,
+                        onDeband = { on -> state.edit { it.copy(deband = on) } },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(end = 52.dp)
+                            .offset { IntOffset(0, (y - canvasTop - 40.dp.toPx()).roundToInt().coerceAtLeast(0)) },
+                    )
+                }
                 state.bubble?.let { (id, y) ->
                     val l = state.doc.layers.firstOrNull { it.id == id } ?: return@let
                     val shown = state.opacityPreview?.takeIf { it.first == id }?.let { l.copy(opacity = it.second) } ?: l

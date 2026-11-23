@@ -6,6 +6,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Switch
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -81,8 +84,10 @@ fun LayerRail(
     onTap: (Layer, Float) -> Unit,
     onToggle: (Layer) -> Unit,
     onMove: (Layer, Int) -> Unit, // new top-first index
+    onPhotoTap: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var photoY by remember { mutableFloatStateOf(0f) }
     var collapsed by remember { mutableStateOf(false) }
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
@@ -114,7 +119,11 @@ fun LayerRail(
             Column(Modifier.verticalScroll(scroll)) {
                 if (pendingNew) Thumb(pending = true) { Icon(Icons.Adjust, null, Modifier.size(18.dp), tint = Bloom.On) }
                 layers.forEachIndexed { i, l -> RailItem(l, i, layers.size, l.id == activeId, rowPx, onTap, onToggle, onMove) }
-                Thumb(desc = "Photo layer") {
+                Thumb(
+                    Modifier.onGloballyPositioned { photoY = it.positionInRoot().y + it.size.height / 2f }
+                        .clickable(role = Role.Button) { onPhotoTap(photoY) },
+                    active = activeId == PHOTO_ID, desc = "Photo layer",
+                ) {
                     preview?.let { Image(remember(it) { it.asImageBitmap() }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
                 }
             }
@@ -249,6 +258,40 @@ private fun Arrow(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: S
     }
 }
 
+/** Bubble id of the Photo layer; Color layer ids start at 1. */
+const val PHOTO_ID = 0L
+
+/** Settings bubble for the Photo layer: Smooth banding, on by default; sources deeper than 8 bits don't need it. */
+@Composable
+fun PhotoBubble(deband: Boolean, deep: Boolean, onDeband: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(12.dp)
+    Box(modifier) {
+        Column(Modifier.width(236.dp).background(Bloom.SurfaceHigh, shape).border(1.dp, Bloom.Outline, shape).padding(bottom = 8.dp)) {
+            Text("Photo", Modifier.height(48.dp).padding(start = 16.dp, top = 14.dp), color = Bloom.On)
+            Row(
+                Modifier.fillMaxWidth().toggleable(deband && !deep, enabled = !deep, role = Role.Switch, onValueChange = onDeband)
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text("Smooth banding", fontSize = 14.sp, color = if (deep) Bloom.Outline else Bloom.On)
+                    Text(
+                        if (deep) "Not needed: this photo has more than 8 bits" else "Removes steps in skies when you push edits",
+                        fontSize = 11.sp, color = Bloom.OnVariant,
+                    )
+                }
+                Switch(deband && !deep, null, enabled = !deep)
+            }
+        }
+        BubbleTail(Modifier.align(Alignment.TopEnd))
+    }
+}
+
+@Composable
+private fun BubbleTail(modifier: Modifier) = Box(
+    modifier.padding(top = 34.dp).offset(x = 6.dp).size(12.dp).rotate(45f).background(Bloom.SurfaceHigh).border(1.dp, Bloom.Outline),
+)
+
 /** Settings bubble for one layer, pointing at its thumbnail on the rail. */
 @Composable
 fun LayerBubble(
@@ -301,11 +344,7 @@ fun LayerBubble(
                 BubbleAction(Icons.Trash, "Delete", Modifier.weight(1f), onDelete)
             }
         }
-        // tail toward the rail
-        Box(
-            Modifier.align(Alignment.TopEnd).padding(top = 34.dp).offset(x = 6.dp).size(12.dp).rotate(45f)
-                .background(Bloom.SurfaceHigh).border(1.dp, Bloom.Outline),
-        )
+        BubbleTail(Modifier.align(Alignment.TopEnd))
     }
 }
 

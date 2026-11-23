@@ -11,6 +11,7 @@ Free, open-source (GPL-3.0) Android photo editor. Everything that can run on the
 | M2a Masks: brush, gradient, invert, overlay, blend modes | Done |
 | M2b Masks: color range, luminance range, feather, loupe, reorder, copy/clear | Done (not yet tested on a phone) |
 | M1.5 Curves | Done (not yet tested on a phone) |
+| M2.5a Recover: 16-bit sources kept, smooth banding on 8-bit photos | Done (not yet tested on a phone) |
 | Everything below | Not started |
 
 ## Features
@@ -28,7 +29,7 @@ Free, open-source (GPL-3.0) Android photo editor. Everything that can run on the
 | AI (free, on device) | Subject/background masks, object eraser, upscale 2×/4×, background replace (matting + your image) | Prompted fill on flagships (M10) |
 | AI (own server / own key) | IOPaint, ComfyUI, fal key; natural-language edits via llama.cpp, LiteLLM, any OpenAI-compatible endpoint | |
 | AI (paid, Bloom Cloud → fal) | Prompted generative fill, creative upscale, text-prompted background + relighting | |
-| Range / HDR | Dithered 8-bit output (done) | Ultra HDR gain maps, DNG, AI "Recover" (see M2.5) |
+| Range / HDR | Dithered 8-bit output, 16-bit sources, smooth banding (done) | Ultra HDR gain maps, DNG, AI "Recover" (see M2.5) |
 | Basics | Hold to compare, navigator when zoomed, export JPEG with EXIF | PNG/WebP/16-bit export, saved projects to reopen and keep editing (M7) |
 
 ## Budgets ("lightweight")
@@ -48,7 +49,7 @@ Each ends with a measurable exit test on a real phone. Times are for one develop
 | **M1** Edit engine + Color (done) | Layer stack, undo/redo, compare, Color layer on a 16-bit float GPU pipeline, layer rail | 8 stacked layers ≥ 30 fps; 50 undo/redo steps stable |
 | **M1.5** Curves (done) | RGB/R/G/B curves in the Color tool | Curves match a reference LUT within 1 level |
 | **M2** Masks (done) | Steps: brush, gradient, color range, luminance range; feather, invert, overlay, loupe, reorder, copy/clear; blend modes | Brushing < 16 ms/frame; no seams between export tiles |
-| **M2.5** Recover (range) | Ultra HDR gain-map decode, DNG import, 16-bit source textures; AI bit-depth expansion on load (dequantize 8-bit → float) to stop banding; inverse tone mapping only inside clipped highlights; denoise + deband for lifted shadows; 16-bit PNG export | Pushed gradients show no banding on the test set; licenses and phone speed of candidate models checked first |
+| **M2.5** Recover (range) | **a (done):** 16-bit/10-bit sources stay deep; GPU deband on 8-bit photos, on by default, switch in the Photo layer bubble. **b:** clipped-highlight rebuild from colour ratios (darktable method), values above white kept, shadow denoise. **c:** Ultra HDR gain maps, 16-bit PNG export, DNG. **Later:** FFDNet denoise download (after M3), MI-GAN for fully clipped spots (after M6). Classical first: no banding model has a usable license and a clear win over deband | Pushed gradients show no banding on the test set; licenses and phone speed of candidate models checked first |
 | **M3** AI selection (~3 wk) | Subject/Background steps (MediaPipe Interactive Segmenter, then MobileSAM/EfficientSAM if needed), guided-filter edges, on-demand model download | Timing budgets met; IoU ≥ 0.85 on 50 test photos |
 | **M4** Detail (~1–2 wk) | Blur (Gaussian, lens), Sharpen (amount, radius, clarity); export tiles with overlap | Background blur ≥ 30 fps; 12 MP export < 5 s |
 | **M4.5** Crop | Crop, straighten, rotate, perspective, scale (document transform, no layer) | Round-trip crop/rotate keeps full resolution |

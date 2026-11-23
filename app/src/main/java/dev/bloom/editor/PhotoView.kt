@@ -80,6 +80,11 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
         reset()
     }
 
+    fun setDeband(on: Boolean) {
+        renderer.deband = on
+        requestRender()
+    }
+
     fun setLayers(layers: List<Layer>) {
         renderer.layers = layers
         requestRender()
@@ -224,6 +229,7 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
     @Volatile var layers: List<Layer> = emptyList()
     @Volatile private var t = floatArrayOf(1f, 1f, 0f, 0f) // scale x, scale y, offset x, offset y
     @Volatile var overlay: Long? = null // layer id
+    @Volatile var deband = true
     @Volatile var finger: FloatArray? = null // view x, y, image u, v, brush ring px, density; null = no loupe
 
     private var bitmap: Bitmap? = null // kept to re-upload after EGL context loss
@@ -268,6 +274,7 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         }
         val start = System.nanoTime()
         val ls = layers
+        p.deband = deband
         val tex = p.render(ls)
         val ov = overlay
         val ol = ov?.let { o -> ls.firstOrNull { it.id == o && it.visible && it.mask.active } }

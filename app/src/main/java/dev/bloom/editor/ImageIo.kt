@@ -5,10 +5,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
 import android.graphics.Canvas
+import android.graphics.ColorSpace
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
+import dev.bloom.editor.gl.DEBAND_RADIUS
 import dev.bloom.editor.gl.Offscreen
 import dev.bloom.editor.gl.Pipeline
 import dev.bloom.editor.model.Layer
@@ -25,12 +27,16 @@ object ImageIo {
         return s
     }
 
+    /** The pipeline works in sRGB; wide-gamut photos are converted on decode. Sources deeper than 8 bits still decode to F16. */
+    private val SRGB by lazy { ColorSpace.get(ColorSpace.Named.SRGB) } // lazy: JVM unit tests touch this object
+
     /** Downsampled, upright bitmap for on-screen preview. */
     fun loadPreview(cr: ContentResolver, uri: Uri): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         cr.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, bounds) }
         val opts = BitmapFactory.Options().apply {
             inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, PREVIEW_MAX)
+            inPreferredColorSpace = SRGB
         }
         val bmp = cr.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, opts) }
             ?: error("unsupported format")
@@ -47,7 +53,7 @@ object ImageIo {
      * Pixels stay in sensor orientation; the copied EXIF orientation tag keeps it upright.
      * Must run on a thread with no GL context of its own (it creates one).
      */
-    fun export(cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>) {
+    fun export(cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>, deband: Boolean) {
         @Suppress("DEPRECATION") // non-deprecated overload is API 31+
         val decoder = cr.openInputStream(src)!!.use { BitmapRegionDecoder.newInstance(it, false) }
             ?: error("unsupported format")
@@ -60,10 +66,12 @@ object ImageIo {
             if (exif.isFlipped) postScale(-1f, 1f, 0.5f, 0.5f)
         }
         val aspect = if (exif.rotationDegrees % 180 == 0) w.toFloat() / h else h.toFloat() / w
-        // Feathered masks blur across tile edges, so each tile is rendered with that much overlap and cropped back.
+        // Feather and deband read neighbours across tile edges, so each tile is rendered with that much overlap and cropped back.
         val uprightH = if (exif.rotationDegrees % 180 == 0) h else w
         val feather = layers.filter { it.visible }.maxOfOrNull { it.mask.maxFeather } ?: 0f
-        val pad = if (feather > 0f) (feather * 0.03f * uprightH).toInt() + 2 else 0
+        val reach = maxOf(feather * 0.03f, if (deband) 2 * DEBAND_RADIUS else 0f)
+        val pad = if (reach > 0f) (reach * uprightH).toInt() + 2 else 0
+        val region = BitmapFactory.Options().apply { inPreferredColorSpace = SRGB }
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         val gpu = if (layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
@@ -71,9 +79,10 @@ object ImageIo {
         try {
             for (y in 0 until h step TILE) for (x in 0 until w step TILE) {
                 val r = Rect(maxOf(x - pad, 0), maxOf(y - pad, 0), minOf(x + TILE + pad, w), minOf(y + TILE + pad, h))
-                var tile = decoder.decodeRegion(r, null)
+                var tile = decoder.decodeRegion(r, region)
                 if (pipeline != null) {
                     pipeline.setSource(tile, r.left, r.top, w, h, orient, aspect)
+                    pipeline.deband = deband
                     tile.recycle()
                     val padded = pipeline.renderToBitmap(layers)
                     tile = if (pad == 0) padded
