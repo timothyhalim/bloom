@@ -181,8 +181,8 @@ fun CropRows(state: EditorState, c: Crop, aspect: Float, box: Modifier) {
             for ((name, landscape) in ratios) {
                 val wide = landscape?.let { if (it == 0f) maxOf(frame, 1f / frame) else it }
                 val sel = state.cropRatio.let { r -> if (wide == null) r == null else r != null && (abs(r - wide) < 1e-3f || abs(r - 1f / wide) < 1e-3f) }
-                val portrait = state.cropRatio?.let { it < 1f } ?: false
-                val label = if (sel && portrait && name.contains(':')) name.split(':').let { "${it[1]}:${it[0]}" } else name
+                // a selected preset reads as the crop is, width:height (names are written either way round: 4:5, 3:2)
+                val label = if (sel && name.contains(':')) name.split(':').let { (a, b) -> if ((state.cropRatio!! < 1f) == (a.toFloat() < b.toFloat())) name else "$b:$a" } else name
                 Chip(label, sel) {
                     if (wide == null) state.cropRatio = null
                     else {

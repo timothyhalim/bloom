@@ -190,16 +190,16 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Tool list: Color, Detail, Liquify, Crop, AI as icon-only buttons (names for screen readers). Spec: icon + label | ui/EditorScreen.kt:729-735, 795-801 | none | UI |
-| Opening a tool starts a new draft layer (Color/Blur/Liquify/Retouch); param resets to Exposure, channel to RGB, mask mode off, Brush tool, no step selected | ui/EditorScreen.kt:181-190 | none | UI / unit (EditorState) |
-| Opening a tool closes the layer bubble | ui/EditorScreen.kt:186, 253 | none | UI |
-| Left slot: tool icon on a petal; tap = back to tools (asks "Discard changes?" if changed) | ui/EditorScreen.kt:805-814, 514 | none | UI |
-| ✓ Apply: new layer added on top; edited layer replaced in place; desc "Apply as X layer" / "Apply changes" | ui/MaskBar.kt:112-115, ui/EditorScreen.kt:243-248 | none | UI |
-| ✓ on a new layer with nothing changed adds no layer | ui/EditorScreen.kt:245-246, model/Document.kt:257-263 | none | unit (Layer.edited) |
-| `dirty`: crop differs, or edited layer differs, or new layer is edited | ui/EditorScreen.kt:240-241 | none | unit (EditorState) |
-| Mask button: "Mask: none. Add" / "Mask: N steps. Edit", count badge on a filled chip once there are steps. Spec: mask thumbnail | ui/MaskBar.kt:96-108 | none | UI |
+| Tool list: Color, Detail, Liquify, Crop, AI as icon-only buttons (names for screen readers). Spec: icon + label | ui/EditorScreen.kt:729-735, 795-801 | UI: ColorToolTest.theToolListHasEveryTool, AccessibilityTest.everyControlHasAName | UI |
+| Opening a tool starts a new draft layer (Color/Blur/Liquify/Retouch); param resets to Exposure, channel to RGB, mask mode off, Brush tool, no step selected | ui/EditorScreen.kt:181-190 | unit: EditorStateTest.openingAToolStartsAFreshDraft | UI / unit (EditorState) |
+| Opening a tool closes the layer bubble | ui/EditorScreen.kt:186, 253 | unit: EditorStateTest.openingAToolStartsAFreshDraft, UI: LayerBubbleTest.editOpensTheLayersToolAndApplyReplacesIt | UI |
+| Left slot: tool icon on a petal; tap = back to tools (asks "Discard changes?" if changed) | ui/EditorScreen.kt:805-814, 514 | UI: BackTest.leavingAChangedToolAsksAndKeepEditingStays, LayerRailTest.aDraftLayerShowsAsPendingAtTheTop | UI |
+| ✓ Apply: new layer added on top; edited layer replaced in place; desc "Apply as X layer" / "Apply changes" | ui/MaskBar.kt:112-115, ui/EditorScreen.kt:243-248 | UI: UndoTest.applyingAToolIsOneUndoStep, LayerBubbleTest.editOpensTheLayersToolAndApplyReplacesIt, unit: EditorStateTest.newLayersGoOnTopAndEditedOnesStayInPlace | UI |
+| ✓ on a new layer with nothing changed adds no layer | ui/EditorScreen.kt:245-246, model/Document.kt:257-263 | unit: EditorStateTest.applyingAnUnchangedNewLayerAddsNothing | unit (Layer.edited) |
+| `dirty`: crop differs, or edited layer differs, or new layer is edited | ui/EditorScreen.kt:240-241 | unit: EditorStateTest.dirtyMeansTheCropOrTheEditedLayerOrANewEditedLayerChanged | unit (EditorState) |
+| Mask button: "Mask: none. Add" / "Mask: N steps. Edit", count badge on a filled chip once there are steps. Spec: mask thumbnail | ui/MaskBar.kt:96-108 | UI: MaskBarTest.typeButtonsAddAStepWithTheSignSelectItAndSwitchTool, ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
 | Bottom bar is fixed 60dp; settings box floats above it | ui/EditorScreen.kt:704-745 | none | UI |
-| Param chips: icon only; selected = fill + Pollen underline; dot when value changed | ui/EditorScreen.kt:909-923 | none | UI |
+| Param chips: icon only; selected = fill + Pollen underline; dot when value changed | ui/EditorScreen.kt:909-923 | UI: ColorToolTest.theBarListsEveryParameterWithCurvesBeforeTemp (selected state; drawing manual) | UI |
 | Live preview of the draft layer while editing (draft replaces the edited layer in place) | ui/EditorScreen.kt:172-178, 343 | none | UI |
 | Layers above an edited layer still render over the draft | ui/EditorScreen.kt:176 | none | GPU / UI |
 
@@ -207,12 +207,12 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Parameters: Exposure, Contrast, Highlights, Shadows, Temp, Tint, Saturation, Vibrance; Curves chip sits before Temp | ui/EditorScreen.kt:769-779, model/Document.kt:7 | none | UI |
-| Selected parameter's row: name, slider −100..100, value, Reset (to 0) | ui/EditorScreen.kt:750-765 | none | UI |
-| Slider snaps to integers (non-Exposure) | ui/EditorScreen.kt:928 | none | unit (extract snap) |
-| Exposure shown in stops (±3.0 EV), snaps to 0.1 stop | ui/EditorScreen.kt:925-938 | none | unit |
-| Value text: "+N", "−N" (true minus sign), "0" | ui/EditorScreen.kt:930-947 | none | unit |
-| Chip a11y: "Exposure +1.0 stops", "Curves, edited" | ui/EditorScreen.kt:774-775 | none | UI (semantics) |
+| Parameters: Exposure, Contrast, Highlights, Shadows, Temp, Tint, Saturation, Vibrance; Curves chip sits before Temp | ui/EditorScreen.kt:769-779, model/Document.kt:7 | UI: ColorToolTest.theBarListsEveryParameterWithCurvesBeforeTemp | UI |
+| Selected parameter's row: name, slider −100..100, value, Reset (to 0) | ui/EditorScreen.kt:750-765 | UI: ColorToolTest.otherParametersSnapToWholeNumbersWithATrueMinus | UI |
+| Slider snaps to integers (non-Exposure) | ui/EditorScreen.kt:928 | UI: ColorToolTest.otherParametersSnapToWholeNumbersWithATrueMinus | unit (extract snap) |
+| Exposure shown in stops (±3.0 EV), snaps to 0.1 stop | ui/EditorScreen.kt:925-938 | UI: ColorToolTest.exposureReadsInStopsAndSnapsToATenth | unit |
+| Value text: "+N", "−N" (true minus sign), "0" | ui/EditorScreen.kt:930-947 | UI: ColorToolTest.exposureReadsInStopsAndSnapsToATenth, otherParametersSnapToWholeNumbersWithATrueMinus | unit |
+| Chip a11y: "Exposure +1.0 stops", "Curves, edited" | ui/EditorScreen.kt:774-775 | UI: ColorToolTest.exposureReadsInStopsAndSnapsToATenth, tapAddsAPointOnTheCurveAndDragOffTheTopRemovesIt | UI (semantics) |
 | Bar scrolls sideways with edge fade and ‹ › | ui/EditorScreen.kt:771, ui/Theme.kt:62-82 | none | UI |
 | No layers = identity; zero layer = identity | gl/Pipeline.kt:225-234 | GPU: noLayersIsIdentity, zeroLayerIsIdentity | GPU |
 | Exposure +1 stop doubles linear light | gl/Pipeline.kt:941 | GPU: exposurePlusOneStopDoublesLinearLight | GPU |
@@ -226,15 +226,15 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Curves chip replaces the slider row with channel chips (RGB, R, G, B), Reset and a 120dp graph | ui/CurvesGraph.kt:40-58 | none | UI |
-| Channel chip says ", edited" when that channel isn't the line | ui/CurvesGraph.kt:47 | none | UI |
-| Reset resets only the selected channel | ui/CurvesGraph.kt:50-52 | none | UI |
-| Tap on empty curve adds a point on the curve; drag moves it | ui/CurvesGraph.kt:84-92 | none | UI |
+| Curves chip replaces the slider row with channel chips (RGB, R, G, B), Reset and a 120dp graph | ui/CurvesGraph.kt:40-58 | UI: ColorToolTest.curvesChipSwapsTheSliderForTheGraph | UI |
+| Channel chip says ", edited" when that channel isn't the line | ui/CurvesGraph.kt:47 | UI: ColorToolTest.resetAndEditedMarksAreForTheSelectedChannelOnly | UI |
+| Reset resets only the selected channel | ui/CurvesGraph.kt:50-52 | UI: ColorToolTest.resetAndEditedMarksAreForTheSelectedChannelOnly | UI |
+| Tap on empty curve adds a point on the curve; drag moves it | ui/CurvesGraph.kt:84-92 | UI: ColorToolTest.tapAddsAPointOnTheCurveAndDragOffTheTopRemovesIt | UI |
 | Grabs the nearest point within 24dp | ui/CurvesGraph.kt:78, 85-86 | none | UI |
 | No point added past 12 points, at the ends, or within 0.01 of a neighbour | ui/CurvesGraph.kt:89, model/Document.kt:162 | none | UI |
 | Points stay ordered: x clamped between neighbours ± 0.01; y clamped 0..1 | ui/CurvesGraph.kt:102-105 | none | UI |
-| Drag a middle point off the top/bottom (past 24dp) removes it; end points can't be removed; never below 2 points | ui/CurvesGraph.kt:93-100 | none | UI |
-| A11y: graph reads points; actions Raise/Lower point by 5% | ui/CurvesGraph.kt:67-76 | none | UI (semantics) |
+| Drag a middle point off the top/bottom (past 24dp) removes it; end points can't be removed; never below 2 points | ui/CurvesGraph.kt:93-100 | UI: ColorToolTest.tapAddsAPointOnTheCurveAndDragOffTheTopRemovesIt | UI |
+| A11y: graph reads points; actions Raise/Lower point by 5% | ui/CurvesGraph.kt:67-76 | UI: ColorToolTest.curvesChipSwapsTheSliderForTheGraph, resetAndEditedMarksAreForTheSelectedChannelOnly | UI (semantics) |
 | Monotone cubic passes through its points | model/Document.kt:170-208 | unit: CurvesTest.passesThroughItsPoints | unit |
 | No overshoot between points | model/Document.kt:186-208 | unit: CurvesTest.risingPointsGiveARisingCurveWithoutOvershoot | unit |
 | Default curve changes nothing / not active | model/Document.kt:138, 148-158 | unit: CurvesTest.defaultCurveChangesNothing | unit |
@@ -246,22 +246,22 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Mask button (or Edit mask) enters mask mode; left slot "X mask. Back to the tool" and ✓ "Done with mask" return to the tool, keeping the mask | ui/MaskBar.kt:113, 122, 138 | none | UI |
-| Bar type buttons: Brush, Gradient, Color, Luminance, Depth, Subject, Background; each shows the current sign badge | ui/MaskBar.kt:123-134 | none | UI |
-| Brush button only selects the brush tool (painting makes the step) | ui/MaskBar.kt:125 | none | UI |
-| Every other type button adds a new step with the current sign, selects it, switches tool | ui/MaskBar.kt:126-133, ui/EditorScreen.kt:223-229 | none | UI / unit |
-| Luminance adds Shadows preset; Depth adds Near preset | ui/MaskBar.kt:129-130 | none | UI |
-| Luminance vs Depth (and Subject vs Background) highlight only the matching selected step | ui/MaskBar.kt:128-133 | none | UI |
-| Invert toggle (Pollen when on, `selected` semantics) | ui/MaskBar.kt:135-137 | none | UI |
+| Mask button (or Edit mask) enters mask mode; left slot "X mask. Back to the tool" and ✓ "Done with mask" return to the tool, keeping the mask | ui/MaskBar.kt:113, 122, 138 | UI: MaskBarTest.maskModeHasTheStepTypesInvertAndDone, theLeftSlotGoesBackToTheTool, LayerBubbleTest.editMaskOpensTheToolInMaskMode | UI |
+| Bar type buttons: Brush, Gradient, Color, Luminance, Depth, Subject, Background; each shows the current sign badge | ui/MaskBar.kt:123-134 | UI: MaskBarTest.maskModeHasTheStepTypesInvertAndDone | UI |
+| Brush button only selects the brush tool (painting makes the step) | ui/MaskBar.kt:125 | UI: MaskBarTest.typeButtonsAddAStepWithTheSignSelectItAndSwitchTool | UI |
+| Every other type button adds a new step with the current sign, selects it, switches tool | ui/MaskBar.kt:126-133, ui/EditorScreen.kt:223-229 | UI: MaskBarTest.typeButtonsAddAStepWithTheSignSelectItAndSwitchTool, unit: EditorStateTest.addingAStepSelectsItAndSwitchesToItsTool | UI / unit |
+| Luminance adds Shadows preset; Depth adds Near preset | ui/MaskBar.kt:129-130 | UI: MaskBarTest.typeButtonsAddAStepWithTheSignSelectItAndSwitchTool | UI |
+| Luminance vs Depth (and Subject vs Background) highlight only the matching selected step | ui/MaskBar.kt:128-133 | UI: MaskBarTest.typeButtonsAddAStepWithTheSignSelectItAndSwitchTool | UI |
+| Invert toggle (Pollen when on, `selected` semantics) | ui/MaskBar.kt:135-137 | UI: MaskBarTest.maskModeHasTheStepTypesInvertAndDone | UI |
 | Invert flips the mask | gl/Pipeline.kt:964 | GPU: removeStepCutsOutAndInvertFlips | GPU |
-| Sign toggle (+/− round button at the start of the settings row) sets the sign of the next step. Spec: in the bar | ui/MaskBar.kt:327-335, 183 | none | UI |
-| Steps row appears once the mask has a step; chips in evaluation order with type icon + sign badge | ui/MaskBar.kt:146-158, 409-443 | none | UI |
-| Tap a step chip selects it (2dp Pollen border) and switches to its tool; tap again deselects | ui/EditorScreen.kt:207-212 | none | unit (EditorState) / UI |
-| Selected step: flip sign (+/−) button | ui/MaskBar.kt:161-163 | none | UI |
-| Selected step: hide/show (eye) button; hidden chips are dimmed + struck through. Spec: dashed border | ui/MaskBar.kt:164-166, 439-441 | none | UI |
-| Selected step: delete (trash); clears the selection | ui/MaskBar.kt:167, ui/EditorScreen.kt:201-205 | none | UI |
-| Step chip long-press then drag sideways reorders (54dp pitch); the moved step stays selected | ui/MaskBar.kt:149-156, 419-425 | none | UI |
-| Step chip a11y: "Add brush, hidden"; actions Move left / Move right | ui/MaskBar.kt:429-436 | none | UI (semantics) |
+| Sign toggle (+/− round button at the start of the settings row) sets the sign of the next step. Spec: in the bar | ui/MaskBar.kt:327-335, 183 | UI: MaskBarTest.typeButtonsAddAStepWithTheSignSelectItAndSwitchTool | UI |
+| Steps row appears once the mask has a step; chips in evaluation order with type icon + sign badge | ui/MaskBar.kt:146-158, 409-443 | UI: MaskBarTest.aSelectedStepFlipsHidesAndDeletes | UI |
+| Tap a step chip selects it (2dp Pollen border) and switches to its tool; tap again deselects | ui/EditorScreen.kt:207-212 | UI: MaskBarTest.tappingAStepChipSelectsItAndAgainDeselects, unit: EditorStateTest.tappingAStepSelectsItAndTappingAgainDeselects | unit (EditorState) / UI |
+| Selected step: flip sign (+/−) button | ui/MaskBar.kt:161-163 | UI: MaskBarTest.aSelectedStepFlipsHidesAndDeletes | UI |
+| Selected step: hide/show (eye) button; hidden chips are dimmed + struck through. Spec: dashed border | ui/MaskBar.kt:164-166, 439-441 | UI: MaskBarTest.aSelectedStepFlipsHidesAndDeletes | UI |
+| Selected step: delete (trash); clears the selection | ui/MaskBar.kt:167, ui/EditorScreen.kt:201-205 | UI: MaskBarTest.aSelectedStepFlipsHidesAndDeletes | UI |
+| Step chip long-press then drag sideways reorders (54dp pitch); the moved step stays selected | ui/MaskBar.kt:149-156, 419-425 | UI: MaskBarTest.stepChipsReorderByActionAndByHoldAndDrag | UI |
+| Step chip a11y: "Add brush, hidden"; actions Move left / Move right | ui/MaskBar.kt:429-436 | UI: MaskBarTest.aSelectedStepFlipsHidesAndDeletes, stepChipsReorderByActionAndByHoldAndDrag | UI (semantics) |
 | Mask.move keeps every step | model/Document.kt:125 | unit: MaskTest.moveKeepsEveryStep | unit |
 | Step sign/visibility copy helper | model/Document.kt:105-111 | unit: MaskTest.maskIsActiveOnlyWithAVisibleStep | unit |
 | Mask is active only with a visible step; inverted empty mask is inactive | model/Document.kt:116 | unit: MaskTest.maskIsActiveOnlyWithAVisibleStep | unit |
@@ -274,12 +274,12 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| One box: main row + More (caret rotates; "Less") that stacks extra rows above | ui/MaskBar.kt:348-360 | none | UI |
+| One box: main row + More (caret rotates; "Less") that stacks extra rows above | ui/MaskBar.kt:348-360 | UI: MaskBarTest.moreHasCopyFromAnotherLayerClearAndFeather | UI |
 | More (mask) open/closed is remembered across sessions | ui/EditorScreen.kt:315 | UI: SettingsTest.savedToolSettingsLoadOnStart | UI |
-| More: "Copy mask from…" lists other layers with steps as "<Kind> layer N"; disabled when none | ui/MaskBar.kt:225-241 | none | UI |
-| Copy mask replaces this layer's steps and invert, clears the selection | ui/MaskBar.kt:236-237 | none | UI |
-| More: "Clear mask" removes all steps and Invert; disabled when already empty | ui/MaskBar.kt:242-244 | none | UI |
-| More: Feather slider (0..100) for the selected step | ui/MaskBar.kt:181 | none | UI |
+| More: "Copy mask from…" lists other layers with steps as "<Kind> layer N"; disabled when none | ui/MaskBar.kt:225-241 | UI: MaskBarTest.moreHasCopyFromAnotherLayerClearAndFeather, copyFromIsDisabledWithoutAnotherMaskedLayer | UI |
+| Copy mask replaces this layer's steps and invert, clears the selection | ui/MaskBar.kt:236-237 | UI: MaskBarTest.moreHasCopyFromAnotherLayerClearAndFeather | UI |
+| More: "Clear mask" removes all steps and Invert; disabled when already empty | ui/MaskBar.kt:242-244 | UI: MaskBarTest.moreHasCopyFromAnotherLayerClearAndFeather | UI |
+| More: Feather slider (0..100) for the selected step | ui/MaskBar.kt:181 | UI: MaskBarTest.moreHasCopyFromAnotherLayerClearAndFeather | UI |
 | Feather softens an edge evenly (1 = 3% of image height) | gl/Pipeline.kt:673-687 | GPU: featherSoftensAnEdgeEvenly | GPU |
 | Feathered mask: export tile with overlap matches the full render | ImageIo.kt:107, 113 | GPU: paddedTileMatchesFullRenderWithFeather | GPU |
 | maxFeather and readsBelow count visible steps only | model/Document.kt:119-122 | unit: MaskTest.readsBelowAndMaxFeatherCountVisibleStepsOnly | unit |
@@ -289,12 +289,12 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| One finger paints with the current sign | ui/MaskBar.kt:514, 555-563 | none | UI |
-| Consecutive strokes with the same sign merge into the last Brush step (if visible); otherwise a new step | ui/MaskBar.kt:557-560 | none | unit (MaskTouch with fake view) |
+| One finger paints with the current sign | ui/MaskBar.kt:514, 555-563 | UI: UndoTest.undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
+| Consecutive strokes with the same sign merge into the last Brush step (if visible); otherwise a new step | ui/MaskBar.kt:557-560 | UI: UndoTest.undoInsideAToolStepsBackOneBrushStrokeAtATime | unit (MaskTouch with fake view) |
 | Stroke dabs a quarter radius apart; short moves carry over | model/Document.kt:16-40 | unit: MaskTest.strokeDabsAreAQuarterRadiusApart | unit |
 | Brush radius in screen dp → fraction of image height (zoom in for finer strokes) | ui/MaskBar.kt:556 | none | unit |
-| Size slider 4..150 (Spec: 4–200), integer | ui/MaskBar.kt:185-189 | none | UI |
-| More: Softness 0..100, Flow 1..100 | ui/MaskBar.kt:374-377 | none | UI |
+| Size slider 4..150 (Spec: 4–200), integer | ui/MaskBar.kt:185-189 | UI: MaskBarTest.brushRowsHaveSizeSoftnessAndFlow | UI |
+| More: Softness 0..100, Flow 1..100 | ui/MaskBar.kt:374-377 | UI: MaskBarTest.brushRowsHaveSizeSoftnessAndFlow | UI |
 | Flow builds up where dabs overlap | gl/Pipeline.kt:688-716 | none | GPU |
 | Hard dab is full inside and none outside | gl/Pipeline.kt:688-716 | GPU: hardDabIsFullInsideAndNoneOutside | GPU |
 | Second finger or system cancel undoes the stroke in progress (restores the mask from touch-down) | ui/MaskBar.kt:531, PhotoView.kt:303 | none | unit / UI |
@@ -304,8 +304,8 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Gradient button adds a linear gradient (full at top, fading past the middle) with the current sign | ui/EditorScreen.kt:238 | none | UI |
-| Linear / Radial chips for the selected gradient; hint "Tap the gradient icon to add one" when none selected | ui/MaskBar.kt:190-197 | none | UI |
+| Gradient button adds a linear gradient (full at top, fading past the middle) with the current sign | ui/EditorScreen.kt:238 | UI: MaskBarTest.typeButtonsAddAStepWithTheSignSelectItAndSwitchTool | UI |
+| Linear / Radial chips for the selected gradient; hint "Tap the gradient icon to add one" when none selected | ui/MaskBar.kt:190-197 | UI: MaskBarTest.tappingAStepChipSelectsItAndAgainDeselects | UI |
 | Handles drawn on the photo: filled Pollen = full end, ring = fade end; radial shows edge and half-radius circles | ui/MaskBar.kt:454-477 | none | UI (screenshot) |
 | Handles hidden while the gradient step is hidden | ui/EditorScreen.kt:544 | none | UI |
 | Drag near a handle (32dp) moves it | ui/MaskBar.kt:576-585, 525 | none | UI |
@@ -318,14 +318,14 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Color button adds an empty Color step; hint "Tap the photo to pick a color" | ui/MaskBar.kt:127, 258-260 | none | UI |
-| Tap the photo samples the color of the layers below (3×3 average) into the selected Color step (adds one if none selected) | ui/MaskBar.kt:516, 538-553, gl/Pipeline.kt:488 | GPU: eyedropperReadsTheLayersBelow | GPU + UI |
+| Color button adds an empty Color step; hint "Tap the photo to pick a color" | ui/MaskBar.kt:127, 258-260 | UI: MaskBarTest.colorRangeHintsThenATapOnThePhotoPicksAColor | UI |
+| Tap the photo samples the color of the layers below (3×3 average) into the selected Color step (adds one if none selected) | ui/MaskBar.kt:516, 538-553, gl/Pipeline.kt:488 | GPU: eyedropperReadsTheLayersBelow, UI: MaskBarTest.colorRangeHintsThenATapOnThePhotoPicksAColor | GPU + UI |
 | Dragging fine-tunes the last sample | ui/MaskBar.kt:526 | none | UI |
 | One readback at a time while dragging | ui/MaskBar.kt:539 | none | unit |
-| "+" arms the next tap to add a sample (up to 4); hidden at 4 | ui/MaskBar.kt:271-275, model/Document.kt:72 | none | UI |
+| "+" arms the next tap to add a sample (up to 4); hidden at 4 | ui/MaskBar.kt:271-275, model/Document.kt:72 | UI: MaskBarTest.colorRangeHintsThenATapOnThePhotoPicksAColor | UI |
 | Without "+", a tap replaces all samples | ui/MaskBar.kt:545-549 | none | unit |
-| Swatches; tapping one removes it (only when there is more than one) | ui/MaskBar.kt:263-270 | none | UI |
-| Range slider (0..100) in the main row; More: Smooth (Spec: Smoothness) | ui/MaskBar.kt:276, 176-178 | none | UI |
+| Swatches; tapping one removes it (only when there is more than one) | ui/MaskBar.kt:263-270 | UI: MaskBarTest.colorRangeHintsThenATapOnThePhotoPicksAColor | UI |
+| Range slider (0..100) in the main row; More: Smooth (Spec: Smoothness) | ui/MaskBar.kt:276, 176-178 | UI: MaskBarTest.colorRangeHintsThenATapOnThePhotoPicksAColor | UI |
 | Color step selects the sampled hue only | gl/Pipeline.kt:1038 | GPU: colorStepSelectsTheSampledHueOnly | GPU |
 | Loupe shows while picking | ui/EditorScreen.kt:398 | none | manual |
 
@@ -333,10 +333,10 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Luminance presets Shadows / Midtones / Highlights; Depth presets Near / Middle / Far | model/Document.kt:85-90, ui/MaskBar.kt:248-249 | none | unit |
-| Preset button cycles presets; shows "Custom" after a handle drag | ui/MaskBar.kt:205-210 | none | UI |
-| 4-handle strip: nearest handle moves; stacked handles pick by drag direction; handles stay ordered | ui/MaskBar.kt:281-324 | none | UI |
-| Strip a11y: "Luminance range a to d percent" / "Depth range, far to near" | ui/MaskBar.kt:286 | none | UI (semantics) |
+| Luminance presets Shadows / Midtones / Highlights; Depth presets Near / Middle / Far | model/Document.kt:85-90, ui/MaskBar.kt:248-249 | unit: EditorStateTest.luminanceAndDepthPresetsCoverTheirBands | unit |
+| Preset button cycles presets; shows "Custom" after a handle drag | ui/MaskBar.kt:205-210 | UI: MaskBarTest.luminancePresetCyclesAndTheStripReadsItsRange | UI |
+| 4-handle strip: nearest handle moves; stacked handles pick by drag direction; handles stay ordered | ui/MaskBar.kt:281-324 | UI: MaskBarTest.luminancePresetCyclesAndTheStripReadsItsRange (order kept) | UI |
+| Strip a11y: "Luminance range a to d percent" / "Depth range, far to near" | ui/MaskBar.kt:286 | UI: MaskBarTest.luminancePresetCyclesAndTheStripReadsItsRange | UI (semantics) |
 | Hint when no step selected; photo touches do nothing in this tool | ui/MaskBar.kt:202, 518 | none | UI |
 | Luminance step selects only its range | gl/Pipeline.kt:1001-1012 | GPU: luminanceStepSelectsOnlyItsRange | GPU |
 | Luminance reads the layers below (follows earlier exposure) | ui/EditorScreen.kt:232-235, gl/Pipeline.kt:598-600 | GPU: luminanceFollowsEarlierLayers | GPU |
@@ -347,9 +347,9 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Subject / Background buttons add a step; mask found once per photo (and per pin set), cached | ui/MaskBar.kt:132-133, ui/EditorScreen.kt:367-390 | none | UI |
-| Status: "Finding the subject…" (no pins) / "Selecting…" (pins) / "Downloading AI model… N%" / "Couldn't find the subject: …. Tap to retry" | ui/EditorScreen.kt:373, 376, 387, ui/MaskBar.kt:214-218 | none | UI (fake ModelStore) |
-| Hint: "Tap what to select. Remove mode: tap what to leave out" / "Tap what to leave out" | ui/MaskBar.kt:217 | none | UI |
+| Subject / Background buttons add a step; mask found once per photo (and per pin set), cached | ui/MaskBar.kt:132-133, ui/EditorScreen.kt:367-390 | UI: MaskBarTest.typeButtonsAddAStepWithTheSignSelectItAndSwitchTool | UI |
+| Status: "Finding the subject…" (no pins) / "Selecting…" (pins) / "Downloading AI model… N%" / "Couldn't find the subject: …. Tap to retry" | ui/EditorScreen.kt:373, 376, 387, ui/MaskBar.kt:214-218 | UI: MaskBarTest.subjectStatusAndHintShowInTheMainRow | UI (fake ModelStore) |
+| Hint: "Tap what to select. Remove mode: tap what to leave out" / "Tap what to leave out" | ui/MaskBar.kt:217 | UI: MaskBarTest.subjectStatusAndHintShowInTheMainRow | UI |
 | Tap on the photo with a Subject step selected adds a pin with the current sign (include / exclude) | ui/MaskBar.kt:566-574 | none | UI |
 | Tap within 24dp of a pin removes it | ui/MaskBar.kt:570-571 | none | UI |
 | Tap with no Subject step selected does nothing | ui/MaskBar.kt:567 | none | unit |
@@ -382,20 +382,20 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Detail opens a new Blur layer; bar chips Blur / Sharpen | ui/EditorScreen.kt:731, 783-792 | none | UI |
-| Switching Blur ↔ Sharpen only for a new layer, and resets its settings; an applied layer keeps its kind | ui/EditorScreen.kt:786-788 | none | UI |
-| Main row: "<Type> / Blur" or "Sharpen / Amount" slider 0..100, integer | ui/EditorScreen.kt:861-867, 872-880 | none | UI |
-| More (Blur): Type row Gaussian / Lens / Motion / Zoom | ui/EditorScreen.kt:855-858 | none | UI |
-| More (Lens): Range 0..100 (default 10), Highlights 0..100 (default 30) | ui/EditorScreen.kt:834-838, model/Document.kt:225-228 | none | UI |
-| More (Motion): Angle 0..180 | ui/EditorScreen.kt:832 | none | UI |
-| More (Sharpen): Radius 0..100 (default 30), Clarity −100..100 | ui/EditorScreen.kt:820-824 | none | UI |
+| Detail opens a new Blur layer; bar chips Blur / Sharpen | ui/EditorScreen.kt:731, 783-792 | UI: ToolBarsTest.detailOpensABlurLayerAndSwitchesToSharpenWithFreshSettings | UI |
+| Switching Blur ↔ Sharpen only for a new layer, and resets its settings; an applied layer keeps its kind | ui/EditorScreen.kt:786-788 | UI: ToolBarsTest.detailOpensABlurLayerAndSwitchesToSharpenWithFreshSettings, anAppliedBlurLayerKeepsItsKind | UI |
+| Main row: "<Type> / Blur" or "Sharpen / Amount" slider 0..100, integer | ui/EditorScreen.kt:861-867, 872-880 | UI: ToolBarsTest.detailOpensABlurLayerAndSwitchesToSharpenWithFreshSettings | UI |
+| More (Blur): Type row Gaussian / Lens / Motion / Zoom | ui/EditorScreen.kt:855-858 | UI: ToolBarsTest.blurMoreHasTheTypeRowAndEachTypesSliders | UI |
+| More (Lens): Range 0..100 (default 10), Highlights 0..100 (default 30) | ui/EditorScreen.kt:834-838, model/Document.kt:225-228 | UI: ToolBarsTest.blurMoreHasTheTypeRowAndEachTypesSliders | UI |
+| More (Motion): Angle 0..180 | ui/EditorScreen.kt:832 | UI: ToolBarsTest.blurMoreHasTheTypeRowAndEachTypesSliders | UI |
+| More (Sharpen): Radius 0..100 (default 30), Clarity −100..100 | ui/EditorScreen.kt:820-824 | UI: ToolBarsTest.sharpenMoreHasRadiusAndClarity | UI |
 | More (Detail) remembered across sessions | ui/EditorScreen.kt:317 | UI: SettingsTest.savedToolSettingsLoadOnStart | UI |
-| Blur/Sharpen with Amount 0 (and Clarity 0) is "not edited": ✓ adds nothing | model/Document.kt:259-260 | none | unit |
+| Blur/Sharpen with Amount 0 (and Clarity 0) is "not edited": ✓ adds nothing | model/Document.kt:259-260 | unit: EditorStateTest.blurAndSharpenWithNothingToDoAreNotEdits | unit |
 | Gaussian blur follows the bell curve (sigma 2% of height at 100) | gl/Pipeline.kt:428-452 | GPU: gaussianBlurFollowsTheBellCurve | GPU |
 | Masked blur doesn't smear the subject into the background (mask-weighted) | gl/Pipeline.kt:1073-1075 | GPU: maskedBlurDoesntSmearTheSubjectIntoTheBackground | GPU |
 | Lens blur: highlight becomes a disc (bokeh) | gl/Pipeline.kt:398-427 | GPU: lensBlurTurnsAHighlightIntoADisc | GPU |
 | Lens blur keeps the focused depth sharp | gl/Pipeline.kt:398-427 | GPU: lensBlurKeepsTheFocusedNearHalfSharp | GPU |
-| Lens / Zoom: focus point mark on the photo; tap or drag moves it (clamped 0..1) | ui/EditorScreen.kt:391-392, 421-425, 884-894 | none | UI |
+| Lens / Zoom: focus point mark on the photo; tap or drag moves it (clamped 0..1) | ui/EditorScreen.kt:391-392, 421-425, 884-894 | UI: ToolBarsTest.blurMoreHasTheTypeRowAndEachTypesSliders (mark shown; moving it: none) | UI |
 | Focus mark hidden in mask mode | ui/EditorScreen.kt:528 | none | UI |
 | Lens without a depth map yet: status row replaces the slider (measuring / download % / retry) | ui/EditorScreen.kt:862-863 | none | UI (fake ModelStore) |
 | Depth map measured once per photo, only when a Lens blur or depth step needs it | ui/EditorScreen.kt:158-162, 348-366, Segment.kt:57-64 | none | UI |
@@ -408,10 +408,10 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Bar: Push, Bloat, Pinch, Twirl, Restore icon chips | ui/LiquifyBar.kt:119-125 | none | UI |
-| Main row: "<Brush> / Size" slider 10..150 dp | ui/LiquifyBar.kt:113 | none | UI |
-| More: Strength 5..100, Softness 0..100 | ui/LiquifyBar.kt:103-104 | none | UI |
-| More (Twirl only): Direction Clockwise / Counterclockwise | ui/LiquifyBar.kt:106-110 | none | UI |
+| Bar: Push, Bloat, Pinch, Twirl, Restore icon chips | ui/LiquifyBar.kt:119-125 | UI: ToolBarsTest.liquifyHasFiveBrushesSizeAndMore | UI |
+| Main row: "<Brush> / Size" slider 10..150 dp | ui/LiquifyBar.kt:113 | UI: ToolBarsTest.liquifyHasFiveBrushesSizeAndMore | UI |
+| More: Strength 5..100, Softness 0..100 | ui/LiquifyBar.kt:103-104 | UI: ToolBarsTest.liquifyHasFiveBrushesSizeAndMore | UI |
+| More (Twirl only): Direction Clockwise / Counterclockwise | ui/LiquifyBar.kt:106-110 | UI: ToolBarsTest.liquifyHasFiveBrushesSizeAndMore | UI |
 | Each touch is one stroke with the current settings | ui/LiquifyBar.kt:49-57 | none | unit (LiquifyTouch with fake view) |
 | Dabs a sixth of the radius apart | model/Liquify.kt:22-23 | unit: LiquifyTest.growingAStrokeMatchesReplayingIt (indirect) | unit |
 | Hold to apply: Bloat, Pinch, Twirl, Restore keep adding a dab every 33 ms while the finger rests; Push doesn't | ui/LiquifyBar.kt:35-44, 51, 68 | none | unit (Robolectric looper) |
@@ -433,8 +433,8 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Crop opens on the current document crop, ratio unlocked; whole frame shown with the crop drawn over it | ui/EditorScreen.kt:250-254, 340-342 | none | UI |
-| Crop is a document setting after all layers; rail doesn't change; ✓ is one undo step | model/Crop.kt:7-12, ui/EditorScreen.kt:256-260 | none | UI |
+| Crop opens on the current document crop, ratio unlocked; whole frame shown with the crop drawn over it | ui/EditorScreen.kt:250-254, 340-342 | UI: ToolBarsTest.cropBarHasPresetsTurnFlipResetAndApply | UI |
+| Crop is a document setting after all layers; rail doesn't change; ✓ is one undo step | model/Crop.kt:7-12, ui/EditorScreen.kt:256-260 | UI: UndoTest.applyingCropIsOneUndoStep | UI |
 | Overlay: dim outside (55%; Spec 65%), rule-of-thirds always (Spec: while dragging), white border, L corners (Spec: also edge handles) | ui/CropBar.kt:142-165 | none | UI (screenshot) |
 | Drag a corner (28dp hit) resizes | ui/CropBar.kt:80-83, 111-114 | none | UI |
 | Drag an edge resizes, only when no ratio is locked | ui/CropBar.kt:84-90 | none | UI |
@@ -443,21 +443,21 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Minimum crop 5% of the photo height | ui/CropBar.kt:102-103, 137 | none | unit (CropTouch with fake view) |
 | Locked ratio holds while resizing a corner, anchored at the opposite corner | ui/CropBar.kt:117-125 | none | unit |
 | Crop never leaves the photo; a drag past an edge slides along it | ui/CropBar.kt:126-129, model/Crop.kt:102-108 | unit: CropTest.moveTowardStopsAtThePhotoEdge | unit |
-| Presets: Free, Original, 1:1, 4:5, 3:2, 16:9 | ui/CropBar.kt:38, 178-198 | none | UI |
+| Presets: Free, Original, 1:1, 4:5, 3:2, 16:9 | ui/CropBar.kt:38, 178-198 | UI: ToolBarsTest.cropBarHasPresetsTurnFlipResetAndApply | UI |
 | Picking a preset sets the largest crop at that ratio, nearest the centre | ui/CropBar.kt:195, model/Crop.kt:120-143 | unit: CropTest.maximizedFillsThePhotoAtTheRatio | unit |
 | Keystoned photo: largest crop uses the wide end | model/Crop.kt:120-143 | unit: CropTest.maximizedUsesTheWideEndOfAKeystone | unit |
-| A new preset follows the crop's current orientation (Original: the photo's) | ui/CropBar.kt:188-193 | none | UI |
-| Tap the selected preset again turns it (portrait ↔ landscape); label flips ("5:4") | ui/CropBar.kt:180-189 | none | UI |
-| Free unlocks the ratio without changing the crop | ui/CropBar.kt:184 | none | UI |
-| More ("Rotate and perspective"): Rotate ±45° in 0.1° steps, shown "N.N°" | ui/CropBar.kt:45-62 | none | UI |
-| More: Vertical and Horizontal keystone −100..100 | ui/CropBar.kt:47-48 | none | UI |
-| Straighten/keystone reset the crop to the largest that fits at the locked or current ratio | ui/CropBar.kt:56-57 | unit: CropTest.straightenedCropFitsInsideThePhoto (fit) | unit + UI |
+| A new preset follows the crop's current orientation (Original: the photo's) | ui/CropBar.kt:188-193 | UI: ToolBarsTest.aPresetTakesTheCropsOrientationAndTappingItAgainTurnsIt | UI |
+| Tap the selected preset again turns it (portrait ↔ landscape); label flips ("5:4") | ui/CropBar.kt:180-189 | UI: ToolBarsTest.aPresetTakesTheCropsOrientationAndTappingItAgainTurnsIt | UI |
+| Free unlocks the ratio without changing the crop | ui/CropBar.kt:184 | UI: ToolBarsTest.aPresetTakesTheCropsOrientationAndTappingItAgainTurnsIt | UI |
+| More ("Rotate and perspective"): Rotate ±45° in 0.1° steps, shown "N.N°" | ui/CropBar.kt:45-62 | UI: ToolBarsTest.cropMoreHasRotateInTenthsAndKeystones | UI |
+| More: Vertical and Horizontal keystone −100..100 | ui/CropBar.kt:47-48 | UI: ToolBarsTest.cropMoreHasRotateInTenthsAndKeystones | UI |
+| Straighten/keystone reset the crop to the largest that fits at the locked or current ratio | ui/CropBar.kt:56-57 | unit: CropTest.straightenedCropFitsInsideThePhoto (fit), UI: ToolBarsTest.cropMoreHasRotateInTenthsAndKeystones | unit + UI |
 | Crop More remembered across sessions | ui/EditorScreen.kt:318 | UI: SettingsTest.savedToolSettingsLoadOnStart | UI |
-| Bar: Turn 90° clockwise (crop turns with it; locked ratio inverts) | ui/CropBar.kt:207, model/Crop.kt:111 | unit: CropTest.quarterTurnIsClockwise, CropTest.turningKeepsTheSameCropOfThePhoto | unit |
-| Bar: Flip horizontally (as seen, crop mirrored) | ui/CropBar.kt:208, model/Crop.kt:114 | unit: CropTest.flipMirrorsAndTwiceIsIdentity | unit |
+| Bar: Turn 90° clockwise (crop turns with it; locked ratio inverts) | ui/CropBar.kt:207, model/Crop.kt:111 | unit: CropTest.quarterTurnIsClockwise, CropTest.turningKeepsTheSameCropOfThePhoto, UI: ToolBarsTest.cropBarHasPresetsTurnFlipResetAndApply | unit |
+| Bar: Flip horizontally (as seen, crop mirrored) | ui/CropBar.kt:208, model/Crop.kt:114 | unit: CropTest.flipMirrorsAndTwiceIsIdentity, UI: ToolBarsTest.cropBarHasPresetsTurnFlipResetAndApply | unit |
 | Four turns / two flips = identity | model/Crop.kt:111-114 | unit: CropTest.quarterTurnIsClockwise, CropTest.flipMirrorsAndTwiceIsIdentity | unit |
-| Bar: Reset (to no crop, unlocked), disabled when already identity | ui/CropBar.kt:210 | none | UI |
-| Bar: ✓ Apply crop | ui/CropBar.kt:211 | none | UI |
+| Bar: Reset (to no crop, unlocked), disabled when already identity | ui/CropBar.kt:210 | UI: ToolBarsTest.cropBarHasPresetsTurnFlipResetAndApply | UI |
+| Bar: ✓ Apply crop | ui/CropBar.kt:211 | UI: UndoTest.applyingCropIsOneUndoStep | UI |
 | Frame is the box around the warped photo; all of it reachable | model/Crop.kt:19-29 | unit: CropTest.frameShowsTheWholeWarpedPhoto | unit |
 | Identity crop maps output onto the photo; crop rect picks that part | model/Crop.kt:32-42 | unit: CropTest.identityMapsOutputOntoThePhoto, CropTest.cropRectPicksThatPartOfThePhoto | unit |
 | Layers, masks, pins, focus keep uncropped coordinates (re-crop never loses edits) | ui/EditorScreen.kt:341, PhotoView.kt:178-184 | none | UI |
@@ -470,11 +470,11 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| AI opens a new Retouch draft; one finger paints the layer's mask directly with red tint and loupe | ui/EditorScreen.kt:734, 394-398, 412, 418 | none | UI |
-| Main row "Erase / Size" (4..150, shared with mask brush size); More: Softness, Flow (shared with the mask brush) | ui/EraseBar.kt:18-24 | none | UI |
-| Bar: back, Mask button, Erase button (no ✓: running is applying) | ui/EraseBar.kt:28-37 | none | UI |
-| Erase disabled until the mask is active; spinner while running | ui/EraseBar.kt:32-36 | none | UI |
-| Status "Downloading AI model… N%" then "Erasing…" in the main row | ui/EditorScreen.kt:445-452, ui/EraseBar.kt:20-21 | none | UI (fake ModelStore) |
+| AI opens a new Retouch draft; one finger paints the layer's mask directly with red tint and loupe | ui/EditorScreen.kt:734, 394-398, 412, 418 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
+| Main row "Erase / Size" (4..150, shared with mask brush size); More: Softness, Flow (shared with the mask brush) | ui/EraseBar.kt:18-24 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
+| Bar: back, Mask button, Erase button (no ✓: running is applying) | ui/EraseBar.kt:28-37 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
+| Erase disabled until the mask is active; spinner while running | ui/EraseBar.kt:32-36 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
+| Status "Downloading AI model… N%" then "Erasing…" in the main row | ui/EditorScreen.kt:445-452, ui/EraseBar.kt:20-21 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask ("Erasing…" only) | UI (fake ModelStore) |
 | Hole = rendered mask ≥ 50%; widened by max(3, h/300) px | ui/EditorScreen.kt:446-454, Segment.kt:74-81 | none | unit (Eraser) |
 | Mask bounds; context square 2× the hole's long side, min 512, kept on the photo | model/Eraser.kt:6-35 | unit: EraserTest.boundsOfTheMarkedPixels, EraserTest.contextIsCentredSquareAtLeastMinAndStaysOnThePhoto | unit |
 | Erode grows the hole | model/Eraser.kt:38-53 | unit: EraserTest.erodeGrowsTheHole | unit |
@@ -499,9 +499,9 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Multipart URLs (space-separated) joined in order (LaMa: 2 parts) | ModelStore.kt:29, 44 | unit: ModelStoreTest.partsAreJoinedInOrderAndCheckedOnce, everyListedModelHasAFileUrlHashAndSize | unit (local HTTP server) |
 | Non-200: "Model download failed (HTTP n)"; 15 s connect / 30 s read timeouts | ModelStore.kt:46-49 | unit: ModelStoreTest.anHttpErrorIsReportedWithItsCode (timeouts: none) | unit |
 | Rename failure: "Can't save the model" | ModelStore.kt:33 | none | unit |
-| Download progress 0..1 shown as "Downloading AI model… N%" | ModelStore.kt:57, ui/EditorScreen.kt:355, 376, 451 | none | UI |
+| Download progress 0..1 shown as "Downloading AI model… N%" | ModelStore.kt:57, ui/EditorScreen.kt:355, 376, 451 | UI: MaskBarTest.subjectStatusAndHintShowInTheMainRow (text only) | UI |
 | One download at a time (synchronized) | ModelStore.kt:25 | none | unit |
-| Retry: tapping a "Couldn't…" status reruns the failed depth and subject jobs | ui/MaskBar.kt:364-370, ui/EditorScreen.kt:137, 349, 368 | none | UI |
+| Retry: tapping a "Couldn't…" status reruns the failed depth and subject jobs | ui/MaskBar.kt:364-370, ui/EditorScreen.kt:137, 349, 368 | UI: MaskBarTest.subjectStatusAndHintShowInTheMainRow (subject; depth: none) | UI |
 | GPU backend (AUTO) on phones, CPU on the emulator; one shared runtime and GPU program cache file | Segment.kt:20, 114, cpp/segment.cpp:52-91 | none | manual |
 | Native lib missing: model calls return null ("couldn't run on this phone") | Segment.kt:17, 24, ui/EditorScreen.kt:357, 381 | none | unit |
 | Depth input: long side ~518, multiples of 14 | Segment.kt:57-64 | none | unit (extract size math) |
@@ -565,11 +565,11 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Dark theme only, tokens from the spec (Canvas, Surface, Pollen…) | ui/Theme.kt:27-55 | none | UI (screenshot) |
 | Scrolling rows fade the edge with more content and draw ‹ › there | ui/Theme.kt:57-82 | none | UI (screenshot) |
 | Stroke icons on a 24 grid, no icon library | ui/Theme.kt:85-152 | none | n/a |
-| Every icon button has a contentDescription (tool names, "X. Back to tools", mask button, apply) | ui/EditorScreen.kt:798, 807; ui/MaskBar.kt:102, 114 | none | UI (semantics) |
+| Every icon button has a contentDescription (tool names, "X. Back to tools", mask button, apply) | ui/EditorScreen.kt:798, 807; ui/MaskBar.kt:102, 114 | UI: AccessibilityTest.everyControlHasAName | UI (semantics) |
 | Changed state isn't color-only: dots on changed params, sign badges, strike-through for hidden | ui/EditorScreen.kt:920-921, ui/MaskBar.kt:440-441, ui/LayerRail.kt:239 | none | UI |
 | Touch targets at least 48 dp: param chips, mask type and text chips, color sample swatches (24 dp drawn), rail items (rail 48 dp wide), collapsed rail tab; exception: the rail's scroll arrows (48×32, overlaying the list; screen readers scroll the list instead) | ui/EditorScreen.kt (ParamChip), ui/MaskBar.kt, ui/LayerRail.kt | none | UI (uiautomator dump) |
-| Sliders read their name and value ("Exposure", "+1.0 EV"; "Opacity", "80%") | ui/LayerRail.kt (sliderLabel) | none | UI (semantics) |
-| The bubble's tap-outside layer is hidden from screen readers (Back closes the bubble) | ui/EditorScreen.kt (bubble) | none | UI |
+| Sliders read their name and value ("Exposure", "+1.0 EV"; "Opacity", "80%") | ui/LayerRail.kt (sliderLabel) | UI: ColorToolTest.exposureReadsInStopsAndSnapsToATenth, ToolBarsTest (slider state checks) | UI (semantics) |
+| The bubble's tap-outside layer is hidden from screen readers (Back closes the bubble) | ui/EditorScreen.kt (bubble) | UI: AccessibilityTest.everyControlHasAName (no unnamed control in the bubble sweeps) | UI |
 | Font scale up to 2.0: slider labels, value texts, tool rows, bubble actions and the Open photo button grow instead of clipping; font scale changes keep the open photo (no activity restart) | ui/*.kt (widthIn/heightIn), AndroidManifest.xml (configChanges) | none | manual (font_scale 1.3, 2.0) |
 | Spec: light theme, Appearance settings, tabular figures, motion (200 ms cross-fades), canvas a11y actions (zoom/pan), RTL mirroring; not built | design/UI.md:48, 356, 411-421, 443 | none | n/a |
 
