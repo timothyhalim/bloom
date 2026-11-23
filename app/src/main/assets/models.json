@@ -1,30 +1,37 @@
 {
   "subject": {
     "file": "isnet_w8.mnn",
-    "url": "https://raw.githubusercontent.com/OWNER/bloom/main/models/isnet_w8.mnn",
+    "url": "https://raw.githubusercontent.com/timothyhalim/bloom/main/models/isnet_w8.mnn",
     "sha256": "e0b3e529d0c88632618d1f4053b9a2c9944b8d399cf9c30c06d0381997a42b12",
     "size": 44282996,
     "about": "IS-Net general use (DIS, Apache-2.0), converted to MNN with 8-bit weights. Source: https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx"
   },
   "sam_encoder": {
     "file": "mobilesam_encoder_w8.mnn",
-    "url": "https://raw.githubusercontent.com/OWNER/bloom/main/models/mobilesam_encoder_w8.mnn",
+    "url": "https://raw.githubusercontent.com/timothyhalim/bloom/main/models/mobilesam_encoder_w8.mnn",
     "sha256": "4efc953ef424601b8e9efc54d576fbeaf9bf5bb214f42c69fd910699c0c94e8d",
     "size": 11199624,
     "about": "MobileSAM image encoder (Apache-2.0), converted to MNN with 8-bit weights. Source: https://huggingface.co/Acly/MobileSAM (mobile_sam_image_encoder.onnx)"
   },
   "sam_decoder": {
     "file": "mobilesam_decoder_w8.mnn",
-    "url": "https://raw.githubusercontent.com/OWNER/bloom/main/models/mobilesam_decoder_w8.mnn",
+    "url": "https://raw.githubusercontent.com/timothyhalim/bloom/main/models/mobilesam_decoder_w8.mnn",
     "sha256": "88103977791f703fb491f340d8f9508d825d98b40489e56043c5e7693323c2c0",
     "size": 8725924,
     "about": "SAM mask decoder for MobileSAM (Apache-2.0), converted to MNN with 8-bit weights. Source: https://huggingface.co/Acly/MobileSAM (sam_mask_decoder_single.onnx)"
   },
   "depth": {
     "file": "depth_anything_v2_small_w8.mnn",
-    "url": "https://raw.githubusercontent.com/OWNER/bloom/main/models/depth_anything_v2_small_w8.mnn",
+    "url": "https://raw.githubusercontent.com/timothyhalim/bloom/main/models/depth_anything_v2_small_w8.mnn",
     "sha256": "464785bfe0232b0e6a9ac51efabc0b602c4153d3a01da2ef9abd4d8976472924",
     "size": 27166436,
     "about": "Depth Anything V2 Small (Apache-2.0; only the Small model is), converted to MNN with 8-bit weights. Source: https://huggingface.co/onnx-community/depth-anything-v2-small (onnx/model.onnx)"
+  },
+  "eraser": {
+    "file": "lama_f16.mnn",
+    "url": "https://raw.githubusercontent.com/timothyhalim/bloom/main/models/lama_f16.mnn.part1 https://raw.githubusercontent.com/timothyhalim/bloom/main/models/lama_f16.mnn.part2",
+    "sha256": "9df16d4adad8dd95f985fad6c9c283392b45703a828fb355732b09995a98f751",
+    "size": 105045008,
+    "about": "Big LaMa inpainting (Apache-2.0), 512 x 512, converted to MNN with half-precision weights (8-bit weights break its Fourier layers). In two parts: GitHub limits files to 100 MB. Source: https://huggingface.co/Carve/LaMa-ONNX (lama_fp32.onnx)"
   }
 }

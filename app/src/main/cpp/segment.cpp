@@ -1,138 +1,26 @@
-// Subject segmentation with IS-Net through MNN: 1024x1024 RGBA in, 1024x1024 8-bit mask out.
+// On-device models through MNN, all as Modules on one shared runtime: IS-Net (subject mask), MobileSAM (tap-to-select),
+// Depth Anything (lens blur depth) and LaMa (eraser).
 #include <jni.h>
 #include <android/bitmap.h>
 #include <android/log.h>
-#include <MNN/Interpreter.hpp>
-#include <MNN/Tensor.hpp>
+#include <MNN/expr/Module.hpp>
+#include <MNN/expr/Executor.hpp>
+#include <MNN/expr/ExecutorScope.hpp>
+#include <MNN/expr/ExprCreator.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
-
-namespace {
-constexpr int SIZE = 1024;
-
-// Tries the GPU backends first; MNN quietly falls back to CPU when one is missing, so check what it picked.
-MNN::Session *session(MNN::Interpreter &net, bool gpu, int &picked) {
-    static MNN::BackendConfig backend;
-    backend.precision = MNN::BackendConfig::Precision_Low;
-    for (auto type : {MNN_FORWARD_OPENCL, MNN_FORWARD_VULKAN, MNN_FORWARD_CPU}) {
-        if (!gpu && type != MNN_FORWARD_CPU) continue;
-        MNN::ScheduleConfig cfg;
-        cfg.type = type;
-        cfg.backupType = MNN_FORWARD_CPU;
-        cfg.numThread = type == MNN_FORWARD_CPU ? std::max(1u, std::thread::hardware_concurrency()) : 0;
-        cfg.backendConfig = &backend;
-        MNN::Session *s = net.createSession(cfg);
-        if (!s) continue;
-        int got = MNN_FORWARD_CPU;
-        net.getSessionInfo(s, MNN::Interpreter::BACKENDS, &got);
-        if (got == type || type == MNN_FORWARD_CPU) { picked = type; return s; }
-        net.releaseSession(s);
-    }
-    return nullptr;
-}
-
-// Creating a GPU session compiles the model's shaders and can take seconds, so the session is kept for the next
-// photo, and the compiled programs go to a cache file for the next app start.
-struct Loaded {
-    std::string key;
-    std::unique_ptr<MNN::Interpreter> net;
-    MNN::Session *session = nullptr;
-    int backend = -1;
-};
-Loaded loaded;
-std::mutex lock;
-}  // namespace
-
-// Returns the mask (row-major, 0..255) or null; [backend] gets the MNN forward type used.
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_dev_bloom_editor_Segment_run(JNIEnv *env, jclass, jstring modelPath, jstring cachePath, jobject bmp, jboolean gpu,
-                                  jintArray backendOut) {
-    std::lock_guard<std::mutex> guard(lock);
-    auto ms = [t = std::chrono::steady_clock::now()]() mutable {
-        auto now = std::chrono::steady_clock::now();
-        long d = std::chrono::duration_cast<std::chrono::milliseconds>(now - t).count();
-        t = now;
-        return d;
-    };
-    const char *p = env->GetStringUTFChars(modelPath, nullptr);
-    std::string key = std::string(p) + (gpu ? "|gpu" : "|cpu");
-    env->ReleaseStringUTFChars(modelPath, p);
-    if (loaded.key != key) {
-        loaded = {};
-        std::unique_ptr<MNN::Interpreter> net(MNN::Interpreter::createFromFile(key.substr(0, key.rfind('|')).c_str()));
-        if (!net) return nullptr;
-        const char *c = env->GetStringUTFChars(cachePath, nullptr);
-        net->setCacheFile(c);
-        env->ReleaseStringUTFChars(cachePath, c);
-        int picked = -1;
-        MNN::Session *s = session(*net, gpu, picked);
-        if (!s) return nullptr;
-        net->updateCacheFile(s);
-        loaded = {key, std::move(net), s, picked};
-    }
-    MNN::Interpreter *net = loaded.net.get();
-    MNN::Session *s = loaded.session;
-    long setup = ms();
-
-    AndroidBitmapInfo info;
-    void *px;
-    if (AndroidBitmap_getInfo(env, bmp, &info) != 0 || info.width != SIZE || info.height != SIZE ||
-        info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || AndroidBitmap_lockPixels(env, bmp, &px) != 0) return nullptr;
-    // rembg's IS-Net preprocessing: divide by the brightest value, subtract 0.5
-    MNN::Tensor *in = net->getSessionInput(s, nullptr);
-    MNN::Tensor host(in, MNN::Tensor::CAFFE);
-    float *x = host.host<float>();
-    auto *rgba = static_cast<const uint8_t *>(px);
-    int peak = 1;
-    for (int y = 0; y < SIZE; y++)
-        for (int i = 0; i < SIZE * 4; i++) if (i % 4 != 3) peak = std::max(peak, int(rgba[y * info.stride + i]));
-    for (int y = 0; y < SIZE; y++)
-        for (int c = 0; c < SIZE; c++)
-            for (int k = 0; k < 3; k++)
-                x[(k * SIZE + y) * SIZE + c] = rgba[y * info.stride + c * 4 + k] / float(peak) - 0.5f;
-    AndroidBitmap_unlockPixels(env, bmp);
-    in->copyFromHostTensor(&host);
-
-    long prep = ms();
-    if (net->runSession(s) != MNN::NO_ERROR) return nullptr;
-    MNN::Tensor *out = net->getSessionOutput(s, "output_image");
-    MNN::Tensor outHost(out, MNN::Tensor::CAFFE);
-    out->copyToHostTensor(&outHost);
-    __android_log_print(ANDROID_LOG_DEBUG, "Bloom", "segment: load+session %ld ms, input %ld ms, run %ld ms (backend %d)",
-                        setup, prep, ms(), loaded.backend);
-    const float *m = outHost.host<float>();
-    auto [lo, hi] = std::minmax_element(m, m + SIZE * SIZE);
-    float range = std::max(*hi - *lo, 1e-6f);
-    jbyteArray mask = env->NewByteArray(SIZE * SIZE);
-    jbyte *dst = env->GetByteArrayElements(mask, nullptr);
-    for (int i = 0; i < SIZE * SIZE; i++) dst[i] = jbyte(int((m[i] - *lo) / range * 255.f + 0.5f));
-    env->ReleaseByteArrayElements(mask, dst, 0);
-    env->SetIntArrayRegion(backendOut, 0, 1, &loaded.backend);
-    return mask;
-}
-
-// --- MobileSAM: tap-to-select. The encoder runs once per photo; the decoder once per set of pins. ---
-#include <MNN/expr/Module.hpp>
-#include <MNN/expr/Executor.hpp>
-#include <MNN/expr/ExprCreator.hpp>
-#include <cmath>
-#include <cstring>
+#include <vector>
 
 namespace {
 using namespace MNN::Express;
-
-struct Sam {
-    std::string encPath, decPath;
-    std::shared_ptr<Executor::RuntimeManager> runtime;
-    std::shared_ptr<Module> enc, dec;
-    VARP embedding;  // of the last encoded photo, copied out of the encoder graph
-    int w = 0, h = 0;
-};
-Sam sam;
+constexpr int SIZE = 1024;
+std::mutex lock;
 
 std::string str(JNIEnv *env, jstring s) {
     const char *c = env->GetStringUTFChars(s, nullptr);
@@ -141,45 +29,130 @@ std::string str(JNIEnv *env, jstring s) {
     return r;
 }
 
-std::shared_ptr<Executor::RuntimeManager> samRuntime(bool gpu, const std::string &cache) {
-    if (sam.runtime) return sam.runtime;
+// [bmp]'s pixels if it is RGBA (and [size] x [size] when size > 0), locked until AndroidBitmap_unlockPixels; else null.
+uint8_t *lockRgba(JNIEnv *env, jobject bmp, AndroidBitmapInfo &info, int size = 0) {
+    void *px;
+    if (AndroidBitmap_getInfo(env, bmp, &info) != 0 || info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+        (size > 0 && (int(info.width) != size || int(info.height) != size)) || AndroidBitmap_lockPixels(env, bmp, &px) != 0)
+        return nullptr;
+    return static_cast<uint8_t *>(px);
+}
+
+// [n] values stretched to 0..255.
+jbyteArray toBytes(JNIEnv *env, const float *v, int n) {
+    auto [lo, hi] = std::minmax_element(v, v + n);
+    float range = std::max(*hi - *lo, 1e-6f);
+    jbyteArray res = env->NewByteArray(n);
+    jbyte *r = env->GetByteArrayElements(res, nullptr);
+    for (int i = 0; i < n; i++) r[i] = jbyte(int((v[i] - *lo) / range * 255.f + 0.5f));
+    env->ReleaseByteArrayElements(res, r, 0);
+    return res;
+}
+
+// All models share one runtime and so one cache file of compiled GPU programs (compiling them can take seconds).
+std::shared_ptr<Executor::RuntimeManager> runtime;
+
+std::shared_ptr<Executor::RuntimeManager> getRuntime(bool gpu, const std::string &cache) {
+    if (runtime) return runtime;
     static MNN::BackendConfig backend;
     backend.precision = MNN::BackendConfig::Precision_Low;
     MNN::ScheduleConfig cfg;
     cfg.type = gpu ? MNN_FORWARD_AUTO : MNN_FORWARD_CPU;  // AUTO: the best backend this phone has
     cfg.numThread = int(std::max(1u, std::thread::hardware_concurrency()));
     cfg.backendConfig = &backend;
-    sam.runtime.reset(Executor::RuntimeManager::createRuntimeManager(cfg));
-    if (sam.runtime) sam.runtime->setCache(cache);
-    return sam.runtime;
+    runtime.reset(Executor::RuntimeManager::createRuntimeManager(cfg));
+    if (runtime) runtime->setCache(cache);
+    return runtime;
 }
+
+struct Net {
+    std::string path;
+    std::shared_ptr<Module> m;
+    bool cached = false;  // its compiled programs are in the cache file
+};
+
+// Loads [path] into [net] unless it already holds it. False if the model can't load.
+bool load(Net &net, const std::string &path, const std::vector<std::string> &ins, const std::vector<std::string> &outs,
+          const std::shared_ptr<Executor::RuntimeManager> &rt) {
+    if (net.m && net.path == path) return true;
+    net.m.reset(Module::load(ins, outs, path.c_str(), rt));
+    net.path = path;
+    net.cached = false;
+    return net.m != nullptr;
+}
+
+// MNN writes the cache file only when asked, after an inference.
+std::vector<VARP> forward(Net &net, const std::vector<VARP> &in) {
+    auto out = net.m->onForward(in);
+    if (!out.empty() && !net.cached) {
+        runtime->updateCache();
+        net.cached = true;
+    }
+    return out;
+}
+}  // namespace
+
+// IS-Net subject mask: [bmp] is SIZE x SIZE RGBA. Returns the mask (row-major, 0..255) or null.
+namespace {
+Net isnet;
+}  // namespace
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_dev_bloom_editor_Segment_run(JNIEnv *env, jclass, jstring modelPath, jstring cachePath, jobject bmp, jboolean gpu) {
+    std::lock_guard<std::mutex> guard(lock);
+    auto t0 = std::chrono::steady_clock::now();
+    auto rt = getRuntime(gpu, str(env, cachePath));
+    if (!rt || !load(isnet, str(env, modelPath), {"input_image"}, {"output_image"}, rt)) return nullptr;
+    AndroidBitmapInfo info;
+    const uint8_t *rgba = lockRgba(env, bmp, info, SIZE);
+    if (!rgba) return nullptr;
+    // rembg's IS-Net preprocessing: divide by the brightest value, subtract 0.5
+    VARP in = _Input({1, 3, SIZE, SIZE}, NCHW, halide_type_of<float>());
+    float *x = in->writeMap<float>();
+    int peak = 1;
+    for (int y = 0; y < SIZE; y++)
+        for (int i = 0; i < SIZE * 4; i++) if (i % 4 != 3) peak = std::max(peak, int(rgba[y * info.stride + i]));
+    for (int y = 0; y < SIZE; y++)
+        for (int c = 0; c < SIZE; c++)
+            for (int k = 0; k < 3; k++)
+                x[(k * SIZE + y) * SIZE + c] = rgba[y * info.stride + c * 4 + k] / float(peak) - 0.5f;
+    AndroidBitmap_unlockPixels(env, bmp);
+    auto out = forward(isnet, {in});
+    const float *m = out.empty() ? nullptr : out[0]->readMap<float>();
+    auto i = out.empty() ? nullptr : out[0]->getInfo();
+    if (!m || !i || i->size != SIZE * SIZE) return nullptr;
+    __android_log_print(ANDROID_LOG_DEBUG, "Bloom", "subject: %lld ms",
+                        (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+    return toBytes(env, m, SIZE * SIZE);
+}
+
+// --- MobileSAM: tap-to-select. The encoder runs once per photo; the decoder once per set of pins. ---
+namespace {
+struct Sam {
+    Net enc, dec;
+    VARP embedding;  // of the last encoded photo, copied out of the encoder graph
+    int w = 0, h = 0;
+};
+Sam sam;
 }  // namespace
 
 // [bmp]: the photo with its long side 1024, RGBA. Keeps the embedding for samDecode. False if the model can't run.
 extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_bloom_editor_Segment_samEncode(JNIEnv *env, jclass, jstring encPath, jstring cachePath, jobject bmp, jboolean gpu) {
     std::lock_guard<std::mutex> guard(lock);
-    std::string path = str(env, encPath);
-    auto rt = samRuntime(gpu, str(env, cachePath));
-    if (!rt) return false;
-    if (!sam.enc || sam.encPath != path) {
-        sam.enc.reset(Module::load({"input_image"}, {"image_embeddings"}, path.c_str(), rt));
-        sam.encPath = path;
-        if (!sam.enc) return false;
-    }
+    auto rt = getRuntime(gpu, str(env, cachePath));
+    if (!rt || !load(sam.enc, str(env, encPath), {"input_image"}, {"image_embeddings"}, rt)) return false;
     AndroidBitmapInfo info;
-    void *px;
-    if (AndroidBitmap_getInfo(env, bmp, &info) != 0 || info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
-        AndroidBitmap_lockPixels(env, bmp, &px) != 0) return false;
+    const uint8_t *rgba = lockRgba(env, bmp, info);
+    if (!rgba) return false;
     int w = int(info.width), h = int(info.height);
     VARP x = _Input({h, w, 3}, NCHW, halide_type_of<float>());  // RGB 0..255; the model normalises and pads itself
     float *dst = x->writeMap<float>();
-    auto *rgba = static_cast<const uint8_t *>(px);
     for (int y = 0; y < h; y++)
         for (int c = 0; c < w; c++)
             for (int k = 0; k < 3; k++) dst[(y * w + c) * 3 + k] = rgba[y * info.stride + c * 4 + k];
     AndroidBitmap_unlockPixels(env, bmp);
-    auto out = sam.enc->onForward({x});
+    auto out = forward(sam.enc, {x});
     if (out.empty()) return false;
     auto i = out[0]->getInfo();
     if (!i) return false;
@@ -194,14 +167,9 @@ Java_dev_bloom_editor_Segment_samEncode(JNIEnv *env, jclass, jstring encPath, js
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_dev_bloom_editor_Segment_samDecode(JNIEnv *env, jclass, jstring decPath, jfloatArray pinArr) {
     std::lock_guard<std::mutex> guard(lock);
-    std::string path = str(env, decPath);
-    if (sam.embedding.get() == nullptr || !sam.runtime) return nullptr;
-    if (!sam.dec || sam.decPath != path) {
-        sam.dec.reset(Module::load({"image_embeddings", "point_coords", "point_labels", "mask_input", "has_mask_input", "orig_im_size"},
-                                   {"masks"}, path.c_str(), sam.runtime));
-        sam.decPath = path;
-        if (!sam.dec) return nullptr;
-    }
+    if (sam.embedding.get() == nullptr || !runtime ||
+        !load(sam.dec, str(env, decPath), {"image_embeddings", "point_coords", "point_labels", "mask_input", "has_mask_input", "orig_im_size"},
+              {"masks"}, runtime)) return nullptr;
     int n = env->GetArrayLength(pinArr) / 3;
     std::vector<float> pins(n * 3);
     env->GetFloatArrayRegion(pinArr, 0, n * 3, pins.data());
@@ -221,7 +189,7 @@ Java_dev_bloom_editor_Segment_samDecode(JNIEnv *env, jclass, jstring decPath, jf
     hasMask->writeMap<float>()[0] = 0;
     size->writeMap<float>()[0] = float(sam.h);
     size->writeMap<float>()[1] = float(sam.w);
-    auto out = sam.dec->onForward({sam.embedding, coords, labels, maskIn, hasMask, size});
+    auto out = forward(sam.dec, {sam.embedding, coords, labels, maskIn, hasMask, size});
     if (out.empty()) return nullptr;
     const float *m = out[0]->readMap<float>();
     if (!m) return nullptr;
@@ -235,45 +203,79 @@ Java_dev_bloom_editor_Segment_samDecode(JNIEnv *env, jclass, jstring decPath, jf
 
 // --- Depth Anything V2 Small: relative depth for lens blur. ---
 namespace {
-std::shared_ptr<Module> depthNet;
-std::string depthPath;
+Net depthNet;
 }  // namespace
 
 // [bmp]: the photo with both sides multiples of 14 (long side ~518), RGBA. Returns w*h bytes, 255 = nearest.
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_dev_bloom_editor_Segment_depth(JNIEnv *env, jclass, jstring modelPath, jstring cachePath, jobject bmp, jboolean gpu) {
     std::lock_guard<std::mutex> guard(lock);
-    std::string path = str(env, modelPath);
-    auto rt = samRuntime(gpu, str(env, cachePath));  // one runtime for the Module-API models
-    if (!rt) return nullptr;
-    if (!depthNet || depthPath != path) {
-        depthNet.reset(Module::load({"pixel_values"}, {"predicted_depth"}, path.c_str(), rt));
-        depthPath = path;
-        if (!depthNet) return nullptr;
-    }
+    auto rt = getRuntime(gpu, str(env, cachePath));
+    if (!rt || !load(depthNet, str(env, modelPath), {"pixel_values"}, {"predicted_depth"}, rt)) return nullptr;
     AndroidBitmapInfo info;
-    void *px;
-    if (AndroidBitmap_getInfo(env, bmp, &info) != 0 || info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
-        AndroidBitmap_lockPixels(env, bmp, &px) != 0) return nullptr;
+    const uint8_t *rgba = lockRgba(env, bmp, info);
+    if (!rgba) return nullptr;
     int w = int(info.width), h = int(info.height);
     VARP x = _Input({1, 3, h, w}, NCHW, halide_type_of<float>());
     float *dst = x->writeMap<float>();
     const float mean[3] = {0.485f, 0.456f, 0.406f}, sd[3] = {0.229f, 0.224f, 0.225f};
-    auto *rgba = static_cast<const uint8_t *>(px);
     for (int y = 0; y < h; y++)
         for (int c = 0; c < w; c++)
             for (int k = 0; k < 3; k++) dst[(k * h + y) * w + c] = (rgba[y * info.stride + c * 4 + k] / 255.f - mean[k]) / sd[k];
     AndroidBitmap_unlockPixels(env, bmp);
-    auto out = depthNet->onForward({x});
+    auto out = forward(depthNet, {x});
     if (out.empty()) return nullptr;
     const float *d = out[0]->readMap<float>();
     auto i = out[0]->getInfo();
     if (!d || !i || i->size != w * h) return nullptr;
-    auto [lo, hi] = std::minmax_element(d, d + w * h);
-    float range = std::max(*hi - *lo, 1e-6f);
-    jbyteArray res = env->NewByteArray(w * h);
-    jbyte *r = env->GetByteArrayElements(res, nullptr);
-    for (int k = 0; k < w * h; k++) r[k] = jbyte(int((d[k] - *lo) / range * 255.f + 0.5f));
-    env->ReleaseByteArrayElements(res, r, 0);
-    return res;
+    return toBytes(env, d, w * h);
+}
+
+// --- LaMa eraser: fills the masked part of a 512 x 512 crop. ---
+namespace {
+Net eraseNet;
+}  // namespace
+
+// [bmp]: 512 x 512 RGBA, overwritten with the model's output. [mask]: 512 * 512 bytes, non-zero = fill.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_bloom_editor_Segment_erase(JNIEnv *env, jclass, jstring modelPath, jstring cachePath, jobject bmp, jbyteArray maskArr, jboolean gpu) {
+    std::lock_guard<std::mutex> guard(lock);
+    const int n = 512;
+    auto rt = getRuntime(gpu, str(env, cachePath));
+    if (!rt || !load(eraseNet, str(env, modelPath), {"image", "mask"}, {"output"}, rt)) return false;
+    AndroidBitmapInfo info;
+    uint8_t *rgba = env->GetArrayLength(maskArr) == n * n ? lockRgba(env, bmp, info, n) : nullptr;
+    if (!rgba) return false;
+    auto t0 = std::chrono::steady_clock::now();
+    VARP image = _Input({1, 3, n, n}, NCHW, halide_type_of<float>());
+    VARP mask = _Input({1, 1, n, n}, NCHW, halide_type_of<float>());
+    float *img = image->writeMap<float>();
+    float *msk = mask->writeMap<float>();
+    std::vector<jbyte> m(n * n);
+    env->GetByteArrayRegion(maskArr, 0, n * n, m.data());
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++) {
+            for (int k = 0; k < 3; k++) img[(k * n + y) * n + x] = rgba[y * info.stride + x * 4 + k] / 255.f;
+            msk[y * n + x] = m[y * n + x] != 0 ? 1.f : 0.f;
+        }
+    auto out = forward(eraseNet, {image, mask});
+    bool ok = !out.empty();
+    if (ok) {
+        const float *r = out[0]->readMap<float>();
+        auto i = out[0]->getInfo();
+        ok = r && i && i->size == 3 * n * n;
+        if (ok)
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                    for (int k = 0; k < 3; k++)
+                        rgba[y * info.stride + x * 4 + k] = uint8_t(std::min(255.f, std::max(0.f, r[(k * n + y) * n + x] + 0.5f)));
+    }
+    AndroidBitmap_unlockPixels(env, bmp);
+    // LaMa's weights and work buffers are large and erasing is occasional: free them, so the app isn't a memory-kill target
+    out.clear();
+    eraseNet = {};
+    ExecutorScope::Current()->gc(Executor::FULL);
+    __android_log_print(ANDROID_LOG_DEBUG, "Bloom", "erase: %lld ms",
+                        (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+    return ok;
 }

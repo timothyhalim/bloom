@@ -18,6 +18,7 @@ import dev.bloom.editor.model.WarpField
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.MaskStep
+import dev.bloom.editor.model.Patch
 import dev.bloom.editor.model.SubjectStep
 import dev.bloom.editor.SubjectMask
 import kotlin.math.ln
@@ -99,6 +100,7 @@ class Pipeline {
         val buf: java.nio.FloatBuffer = ByteBuffer.allocateDirect(field.d.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
     }
     private val warps = HashMap<Long, WarpTex>()
+    private val patches = HashMap<Long, Pair<Patch, Int>>() // Retouch: each layer's patch and its texture
     private val params = FloatArray(ColorParam.entries.size)
     private val curveTex = genTexture().also {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -112,7 +114,7 @@ class Pipeline {
 
     // Some GPUs truncate when writing half floats, so every pass would darken by up to one half-float step
     // (~0.12 level near white). Measured once; the passes that write RGBA16F then add half a step first.
-    private val truncates = half && writesTruncate()
+    private val truncates = half && runCatching { writesTruncate() }.getOrDefault(false) // a 16F target that won't render: no probe
 
     init {
         for (prog in listOf(colorProgram, prepareProgram, combineProgram)) {
@@ -125,6 +127,7 @@ class Pipeline {
         glUniform1i(glGetUniformLocation(colorProgram, "uF1"), 4)
         glUniform1i(glGetUniformLocation(colorProgram, "uF2"), 5)
         glUniform1i(glGetUniformLocation(colorProgram, "uWarp"), 6)
+        glUniform1i(glGetUniformLocation(colorProgram, "uPatch"), 7)
         glUseProgram(gaussProgram)
         glUniform1i(glGetUniformLocation(gaussProgram, "uMask"), 1)
         glUseProgram(lensProgram)
@@ -196,14 +199,7 @@ class Pipeline {
     fun setSubjects(all: Map<List<Float>, SubjectMask>) {
         glDeleteTextures(subjects.size, subjects.values.map { it.first }.toIntArray(), 0)
         subjects.clear()
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
-        for ((pins, m) in all) {
-            val t = genTexture()
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m.w, m.h, 0, GL_RED, GL_UNSIGNED_BYTE, ByteBuffer.wrap(m.alpha))
-            subjects[pins] = Triple(t, m.w, m.h)
-        }
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 4)
+        for ((pins, m) in all) subjects[pins] = Triple(r8Texture(m), m.w, m.h)
         masks.values.forEach { it.mask = null } // cached masks may contain old subjects
         rendered = null
     }
@@ -214,14 +210,15 @@ class Pipeline {
         depthTex = 0
         depth = d
         masks.values.forEach { it.mask = null } // depth range steps read it
-        if (d != null) {
-            depthTex = genTexture()
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, d.w, d.h, 0, GL_RED, GL_UNSIGNED_BYTE, ByteBuffer.wrap(d.alpha))
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 4)
-        }
+        if (d != null) depthTex = r8Texture(d)
         rendered = null
+    }
+
+    private fun r8Texture(m: SubjectMask): Int = genTexture().also {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m.w, m.h, 0, GL_RED, GL_UNSIGNED_BYTE, ByteBuffer.wrap(m.alpha))
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4)
     }
 
     /** Renders [layers] (bottom to top) and returns the texture holding the result. Cached until layers change. */
@@ -231,8 +228,11 @@ class Pipeline {
         if (active == rendered) return result
         masks.keys.filter { id -> layers.none { it.id == id } }.forEach { id -> masks.remove(id)?.let(::delete) }
         warps.keys.filter { id -> layers.none { it.id == id && it.kind == LayerKind.Liquify } }.forEach { id -> glDeleteTextures(1, intArrayOf(warps.remove(id)!!.tex), 0) }
-        var input = source
-        if (gain != null && active.isNotEmpty()) {
+        patches.keys.filter { id -> layers.none { it.id == id && it.patch === patches[id]!!.first } }.forEach { id -> glDeleteTextures(1, intArrayOf(patches.remove(id)!!.second), 0) }
+        rendered = active
+        result = source
+        if (active.isEmpty()) return result
+        result = if (gain != null) {
             val sdr = chain(source, active, sdrFbo to sdrKeep)
             val hdr = chain(hdrSource, active, null) // masks come from the cache filled by the normal chain
             val out = if (hdr == tex[0]) 1 else 0
@@ -244,18 +244,12 @@ class Pipeline {
             glActiveTexture(GL_TEXTURE2)
             glBindTexture(GL_TEXTURE_2D, source)
             drawQuad(hdr)
-            input = tex[out]
-        } else if (active.isNotEmpty()) {
-            input = chain(source, active, null)
-        }
+            tex[out]
+        } else chain(source, active, null)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        if (active.isNotEmpty()) {
-            glBindTexture(GL_TEXTURE_2D, input)
-            glGenerateMipmap(GL_TEXTURE_2D) // the preview minifies the result
-        }
-        rendered = active
-        result = input
-        return input
+        glBindTexture(GL_TEXTURE_2D, result)
+        glGenerateMipmap(GL_TEXTURE_2D) // the preview minifies the result
+        return result
     }
 
     /** Runs [active] over [src] through the ping-pong targets, the last pass into [last] (fbo, texture) if given. */
@@ -263,7 +257,9 @@ class Pipeline {
         var input = src
         active.forEachIndexed { i, l ->
             val m = if (l.mask.active) maskFor(l, input, active.subList(0, i)) else 0
-            if (l.kind == LayerKind.Blur || l.kind == LayerKind.Sharpen) detailPasses(l, input, m)
+            val detailed = l.kind == LayerKind.Blur || l.kind == LayerKind.Sharpen
+            val curves = l.kind == LayerKind.Color && l.curves.active
+            if (detailed) detailPasses(l, input, m)
             val out = i % 2
             val toLast = last != null && i == active.lastIndex
             glBindFramebuffer(GL_FRAMEBUFFER, if (toLast) last!!.first else fbo[out])
@@ -275,23 +271,29 @@ class Pipeline {
             glUniform1i(glGetUniformLocation(colorProgram, "uBlend"), l.blend.ordinal)
             glUniform1i(glGetUniformLocation(colorProgram, "uMasked"), if (m != 0) 1 else 0)
             glUniform1i(glGetUniformLocation(colorProgram, "uInvert"), if (l.mask.invert) 1 else 0)
-            glUniform1i(glGetUniformLocation(colorProgram, "uCurves"), if (l.kind == LayerKind.Color && l.curves.active) 1 else 0)
+            glUniform1i(glGetUniformLocation(colorProgram, "uCurves"), if (curves) 1 else 0)
             glUniform1i(glGetUniformLocation(colorProgram, "uKind"), l.kind.ordinal)
             glUniform2f(glGetUniformLocation(colorProgram, "uDetail"), l.detail.amount / 50f, l.detail.clarity / 100f * 1.5f)
+            setGeometry(colorProgram, toUpright)
+            glUniformMatrix3fv(glGetUniformLocation(colorProgram, "uUnmap"), 1, false, fromUpright, 0)
+            if (l.kind == LayerKind.Retouch) {
+                val pt = l.patch
+                glActiveTexture(GL_TEXTURE7)
+                glBindTexture(GL_TEXTURE_2D, if (pt != null) patchTexture(l.id, pt) else 0)
+                glUniform4f(glGetUniformLocation(colorProgram, "uRect"), pt?.left ?: 0f, pt?.top ?: 0f, pt?.right ?: 0f, pt?.bottom ?: 0f)
+            }
             if (l.kind == LayerKind.Liquify) {
                 glActiveTexture(GL_TEXTURE6)
                 glBindTexture(GL_TEXTURE_2D, warpTexture(l))
-                setGeometry(colorProgram, toUpright)
-                glUniformMatrix3fv(glGetUniformLocation(colorProgram, "uUnmap"), 1, false, fromUpright, 0)
             }
-            if (l.kind == LayerKind.Blur || l.kind == LayerKind.Sharpen) {
+            if (detailed) {
                 val d = detail!!
                 glActiveTexture(GL_TEXTURE4)
                 glBindTexture(GL_TEXTURE_2D, d[1].first)
                 glActiveTexture(GL_TEXTURE5)
                 glBindTexture(GL_TEXTURE_2D, d[2].first)
             }
-            if (l.kind == LayerKind.Color && l.curves.active) {
+            if (curves) {
                 // one shared table, refilled per layer; 16 KB, and only when the layers change
                 glActiveTexture(GL_TEXTURE3)
                 glBindTexture(GL_TEXTURE_2D, curveTex)
@@ -305,6 +307,26 @@ class Pipeline {
             input = if (toLast) last!!.second else tex[out]
         }
         return input
+    }
+
+    /** [p]'s pixels as a texture, uploaded once per patch. */
+    private fun patchTexture(id: Long, p: Patch): Int {
+        patches[id]?.let { (old, tex) -> if (old === p) return tex; glDeleteTextures(1, intArrayOf(tex), 0) }
+        val t = genTexture()
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        GLUtils.texImage2D(GL_TEXTURE_2D, 0, p.pixels, 0)
+        patches[id] = p to t
+        return t
+    }
+
+    /** Layer [id]'s mask from the last [render], as width × height bytes (row 0 at the top), or null if it has none. */
+    fun maskPixels(id: Long): ByteArray? {
+        val m = masks[id]?.takeIf { it.mask != null } ?: return null
+        glBindFramebuffer(GL_FRAMEBUFFER, m.fbo)
+        val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buf) // RGBA is the readback every GPU supports
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        return ByteArray(width * height) { buf.get(it * 4) }
     }
 
     /** Layer [l]'s offset grid as an RG16F texture, brought up to date (only the changed cells are uploaded). */
@@ -338,24 +360,15 @@ class Pipeline {
      * A masked Blur only averages pixels inside its mask, so a blurred background doesn't pick up the subject's colors.
      */
     private fun detailPasses(l: Layer, src: Int, mask: Int) {
-        val d = detail ?: List(3) { i ->
-            val t = genTexture()
-            glTexStorage2D(GL_TEXTURE_2D, if (i == 0) 32 - Integer.numberOfLeadingZeros(maxOf(width, height)) else 1, if (half) GL_RGBA16F else GL_RGBA8, width, height)
-            val f = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
-            glBindFramebuffer(GL_FRAMEBUFFER, f)
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t, 0)
-            checkFramebuffer()
-            t to f
-        }.also { detail = it }
-        if (l.kind == LayerKind.Blur && l.detail.lens) {
-            lens(src, l, if (l.mask.active) mask else 0, d[1].second)
-        } else if (l.kind == LayerKind.Blur && (l.detail.type == BlurType.Motion || l.detail.type == BlurType.Zoom)) {
-            streak(src, l.detail, d[1].second)
-        } else if (l.kind == LayerKind.Blur) {
-            gauss(src, l.detail.amount / 100f * BLUR_MAX * uprightHeight, if (l.mask.active) mask else 0, l.mask.invert, d[1].second)
-        } else {
-            gauss(src, (0.5f + 2.5f * l.detail.radius / 100f) / SHARPEN_SCALE * uprightHeight, 0, false, d[1].second)
-            if (l.detail.clarity != 0f) gauss(src, CLARITY_RADIUS * uprightHeight, 0, false, d[2].second)
+        val d = detail ?: List(3) { i -> target(levels = if (i == 0) mipLevels() else 1) }.also { detail = it }
+        when {
+            l.kind == LayerKind.Sharpen -> {
+                gauss(src, (0.5f + 2.5f * l.detail.radius / 100f) / SHARPEN_SCALE * uprightHeight, 0, false, d[1].second)
+                if (l.detail.clarity != 0f) gauss(src, CLARITY_RADIUS * uprightHeight, 0, false, d[2].second)
+            }
+            l.detail.lens -> lens(src, l, mask, d[1].second)
+            l.detail.type == BlurType.Motion || l.detail.type == BlurType.Zoom -> streak(src, l.detail, d[1].second)
+            else -> gauss(src, l.detail.amount / 100f * BLUR_MAX * uprightHeight, mask, l.mask.invert, d[1].second)
         }
     }
 
@@ -445,10 +458,8 @@ class Pipeline {
      * With [warp] (row-major 3×3, output 0..1 -> this source 0..1, projective) the result is resampled into [width]×[height]
      * (crop, rotation, scale), averaging where it shrinks.
      */
-    fun renderToBitmap(layers: List<Layer>, deep: Boolean = false, warp: FloatArray? = null, outW: Int = this.width, outH: Int = this.height): Bitmap {
+    fun renderToBitmap(layers: List<Layer>, deep: Boolean = false, warp: FloatArray? = null, width: Int = this.width, height: Int = this.height): Bitmap {
         val t = render(layers)
-        val width = outW
-        val height = outH
         if (!deep) {
             copyToRead(t, GL_RGBA8, warp, width, height)
             val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
@@ -484,19 +495,12 @@ class Pipeline {
         return FloatArray(3) { c -> (0 until 9).sumOf { buf.get(it * 4 + c).toInt() and 0xFF } / 9f / 255f }
     }
 
-    /** Copies [t] (or resamples it through [warp]) into the read target of [format], [w]×[h], and leaves that framebuffer bound for glReadPixels. */
-    private fun copyToRead(t: Int, format: Int = GL_RGBA8, warp: FloatArray? = null, w: Int = width, h: Int = height) {
-        val width = w
-        val height = h
+    /** Copies [t] (or resamples it through [warp]) into the read target of [format], [width]×[height], and leaves that framebuffer bound for glReadPixels. */
+    private fun copyToRead(t: Int, format: Int = GL_RGBA8, warp: FloatArray? = null, width: Int = this.width, height: Int = this.height) {
         if (readW != width || readH != height || readFormat != format) {
             glDeleteTextures(1, read, 0)
             glDeleteFramebuffers(1, read, 1)
-            read[0] = genTexture()
-            glTexStorage2D(GL_TEXTURE_2D, 1, format, width, height)
-            glGenFramebuffers(1, read, 1)
-            glBindFramebuffer(GL_FRAMEBUFFER, read[1])
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, read[0], 0)
-            checkFramebuffer()
+            target(format, w = width, h = height).let { (rt, rf) -> read[0] = rt; read[1] = rf }
             readW = width
             readH = height
             readFormat = format
@@ -512,28 +516,9 @@ class Pipeline {
         drawQuad(t)
     }
 
-    fun release() {
-        glDeleteTextures(5, intArrayOf(raw, source, curveTex, gainTex, depthTex), 0)
-        warps.values.forEach { glDeleteTextures(1, intArrayOf(it.tex), 0) }
-        warps.clear()
-        setSubjects(emptyMap())
-        freeHdrTargets()
-        glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
-        glDeleteTextures(2, tex, 0)
-        glDeleteFramebuffers(2, fbo, 0)
-        glDeleteTextures(1, read, 0)
-        glDeleteFramebuffers(1, read, 1)
-        freeMasks()
-        listOf(colorProgram, copyProgram, warpProgram, streakProgram, lensProgram, gaussProgram, maskProgram, dabProgram, blurProgram, prepareProgram, combineProgram).forEach(::glDeleteProgram)
-    }
-
     /** Writes 0.5 + 3/4 of a half-float step into an RGBA16F target and reads it back: 0.5 means the GPU truncates. */
     private fun writesTruncate(): Boolean {
-        val t = genTexture()
-        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, 1, 1)
-        val f = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
-        glBindFramebuffer(GL_FRAMEBUFFER, f)
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t, 0)
+        val (t, f) = target(GL_RGBA16F, w = 1, h = 1)
         val prog = link(PASS_VERTEX, "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main() { o = vec4(0.5 + 0.75 / 2048.0); }")
         glViewport(0, 0, 1, 1)
         glUseProgram(prog)
@@ -588,11 +573,11 @@ class Pipeline {
         drawQuad(raw)
     }
 
-    /** A single-level render target of the pipeline's size: (texture, framebuffer). */
-    private fun target(): Pair<Int, Int> {
+    /** A render target, the pipeline's size unless given: (texture, framebuffer). Single-level ones sample without mipmaps. */
+    private fun target(format: Int = if (half) GL_RGBA16F else GL_RGBA8, levels: Int = 1, w: Int = width, h: Int = height): Pair<Int, Int> {
         val t = genTexture()
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexStorage2D(GL_TEXTURE_2D, 1, if (half) GL_RGBA16F else GL_RGBA8, width, height)
+        if (levels == 1) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexStorage2D(GL_TEXTURE_2D, levels, format, w, h)
         val f = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
         glBindFramebuffer(GL_FRAMEBUFFER, f)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t, 0)
@@ -729,6 +714,7 @@ class Pipeline {
         glDisable(GL_BLEND)
     }
 
+    /** Sets the GEOMETRY snippet's uniforms, with [m] as uMap. */
     private fun setGeometry(program: Int, m: FloatArray) {
         glUniformMatrix3fv(glGetUniformLocation(program, "uMap"), 1, false, m, 0)
         glUniform2f(glGetUniformLocation(program, "uOrigin"), geo[0], geo[1])
@@ -736,16 +722,7 @@ class Pipeline {
         glUniform1f(glGetUniformLocation(program, "uAspect"), geo[4])
     }
 
-    private fun newMask(): MaskTex {
-        val t = genTexture()
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR) // single level; the overlay samples it
-        glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8, width, height)
-        val f = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
-        glBindFramebuffer(GL_FRAMEBUFFER, f)
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t, 0)
-        checkFramebuffer()
-        return MaskTex(t, f)
-    }
+    private fun newMask(): MaskTex = target(GL_R8).let { (t, f) -> MaskTex(t, f) }
 
     private fun delete(m: MaskTex) {
         glDeleteTextures(1, intArrayOf(m.tex), 0)
@@ -765,30 +742,19 @@ class Pipeline {
         detail = null
         glDeleteTextures(2, tex, 0)
         glDeleteFramebuffers(2, fbo, 0)
-        glGenFramebuffers(2, fbo, 0)
-        val levels = 32 - Integer.numberOfLeadingZeros(maxOf(width, height))
         glDeleteTextures(1, intArrayOf(source), 0)
         glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
         freeHdrTargets()
-        source = genTexture()
-        glTexStorage2D(GL_TEXTURE_2D, levels, if (half) GL_RGBA16F else GL_RGBA8, width, height)
-        sourceFbo = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
-        glBindFramebuffer(GL_FRAMEBUFFER, sourceFbo)
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source, 0)
-        checkFramebuffer()
-        for (i in 0..1) {
-            tex[i] = genTexture()
-            glTexStorage2D(GL_TEXTURE_2D, levels, if (half) GL_RGBA16F else GL_RGBA8, width, height)
-            glBindFramebuffer(GL_FRAMEBUFFER, fbo[i])
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex[i], 0)
-            checkFramebuffer()
-        }
+        target(levels = mipLevels()).let { (t, f) -> source = t; sourceFbo = f }
+        for (i in 0..1) target(levels = mipLevels()).let { (t, f) -> tex[i] = t; fbo[i] = f }
         freeMasks()
         scratch = newMask()
         brush = newMask()
         soft = newMask()
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
     }
+
+    private fun mipLevels() = 32 - Integer.numberOfLeadingZeros(maxOf(width, height))
 
     private fun drawQuad(input: Int) {
         glActiveTexture(GL_TEXTURE0)
@@ -821,9 +787,8 @@ uniform vec3 uEpsSdr;
 uniform vec3 uEpsHdr;
 uniform vec2 uFull;
 out vec4 outColor;
-vec3 lin(vec3 c) { c = max(c, 0.0); return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
-vec3 srgb(vec3 c) { c = max(c, 0.0); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
-vec3 enc(vec3 c) { c = max(c, 0.0); return uLinear ? mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)) : c; }
+""" + SRGB + """
+vec3 enc(vec3 c) { return uLinear ? toSrgb(c) : max(c, 0.0); }
 vec3 fetch(vec2 p) { return enc(texelFetch(uTex, clamp(ivec2(p), ivec2(0), textureSize(uTex, 0) - 1), 0).rgb); }
 uvec3 pcg3d(uvec3 v) {
     v = v * 1664525u + 1013904223u;
@@ -848,7 +813,7 @@ void main() {
         // Ultra HDR at full headroom (android.graphics.Gainmap): hdr = (sdr + epsSdr) * exp(mix(ln min, ln max, g^gamma)) - epsHdr
         vec4 t = texture(uGain, (p + uOrigin) / uFull);
         vec3 g = uGainAlpha ? vec3(t.a) : t.rgb;
-        c = srgb((lin(c) + uEpsSdr) * exp(mix(log(uRatioMin), log(uRatioMax), pow(g, uGamma))) - uEpsHdr);
+        c = toSrgb((toLinear(c) + uEpsSdr) * exp(mix(log(uRatioMin), log(uRatioMax), pow(g, uGamma))) - uEpsHdr);
     }
     outColor = vec4(store(c), 1.0);
 }"""
@@ -861,11 +826,8 @@ uniform sampler2D uTex;
 uniform sampler2D uSdr;
 uniform sampler2D uSrc;
 out vec4 outColor;
-""" + HALF_ROUND + """
-float luma(vec3 c) {
-    c = max(c, 0.0);
-    return dot(mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)), vec3(0.2126, 0.7152, 0.0722));
-}
+""" + HALF_ROUND + SRGB + """
+float luma(vec3 c) { return dot(toLinear(c), LUMA); }
 void main() {
     ivec2 px = ivec2(gl_FragCoord.xy);
     vec3 h = texelFetch(uTex, px, 0).rgb;
@@ -931,22 +893,17 @@ uniform int uBlend;
 uniform bool uMasked;
 uniform bool uInvert;
 uniform bool uCurves;
-uniform int uKind; // LayerKind: 0 Color, 1 Blur, 2 Sharpen, 3 Liquify
+uniform int uKind; // LayerKind.ordinal: 0 Color, 1 Blur, 2 Sharpen, 3 Liquify, 4 Retouch; must follow the enum's order
+uniform sampler2D uPatch; // Retouch: the filled pixels
+uniform vec4 uRect; // Retouch: where they go, upright 0..1
 uniform sampler2D uF1; // Blur: the blurred layer input. Sharpen: its small blur
 uniform sampler2D uF2; // Sharpen: the large blur, for clarity
 uniform vec2 uDetail; // Sharpen: amount, clarity
 uniform sampler2D uWarp; // Liquify: where each upright point reads from, as an offset in photo heights
-uniform mat3 uMap; // Liquify: pipeline pixel (0..1 of the full image) -> upright 0..1
-uniform mat3 uUnmap; // and back
-uniform vec2 uOrigin;
-uniform vec2 uFull;
-uniform float uAspect;
-""" + HALF_ROUND + """
+uniform mat3 uUnmap; // Liquify: upright 0..1 -> pipeline pixel (0..1 of the full image)
+""" + GEOMETRY + HALF_ROUND + SRGB + """
 uniform sampler2D uCurve; // CURVE_SIZE x 1 tone table, rgb = output per channel
 out vec4 outColor;
-const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-vec3 toLinear(vec3 c) { c = max(c, 0.0); return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
-vec3 toSrgb(vec3 c) { c = max(c, 0.0); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 vec3 blend(vec3 b, vec3 s) {
     b = clamp(b, 0.0, 1.0);
     s = clamp(s, 0.0, 1.0);
@@ -961,7 +918,7 @@ void main() {
     vec3 p;
     if (uKind == 1) p = texelFetch(uF1, px, 0).rgb;
     else if (uKind == 3) {
-        vec2 uv = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy;
+        vec2 uv = upright(gl_FragCoord.xy);
         vec2 o = texture(uWarp, uv).rg;
         // untouched (or fully restored) places keep their exact pixel
         if (o == vec2(0.0)) p = src.rgb;
@@ -969,6 +926,11 @@ void main() {
             vec2 q = (uUnmap * vec3(uv + o / vec2(uAspect, 1.0), 1.0)).xy * uFull - uOrigin;
             p = textureLod(uTex, q / vec2(textureSize(uTex, 0)), 0.0).rgb;
         }
+    } else if (uKind == 4) {
+        // the patch inside its rectangle; the layer mask (painted over the object) blends it in
+        vec2 uv = upright(gl_FragCoord.xy);
+        vec2 t = (uv - uRect.xy) / max(uRect.zw - uRect.xy, vec2(1e-6));
+        p = all(greaterThanEqual(t, vec2(0.0))) && all(lessThanEqual(t, vec2(1.0))) ? texture(uPatch, t).rgb : src.rgb;
     } else if (uKind == 2) {
         // unsharp mask, then clarity: midtone-weighted local contrast on brightness only
         p = src.rgb + uDetail.x * (src.rgb - texelFetch(uF1, px, 0).rgb);
@@ -1013,12 +975,9 @@ uniform sampler2D uTex;
 uniform sampler2D uBrush;
 uniform sampler2D uBelow;
 uniform sampler2D uSubject;
-uniform mat3 uMap;
 uniform mat3 uUnmap; // upright -> full image 0..1 (subject and depth only)
 uniform vec2 uSize; // texels of the subject or depth map
-uniform vec2 uOrigin;
-uniform vec2 uFull;
-uniform float uAspect;
+""" + GEOMETRY + """
 uniform bool uFirst;
 uniform bool uAdd;
 uniform bool uValueOnly;
@@ -1027,7 +986,7 @@ uniform vec4 uG;
 uniform vec3 uS[4];
 uniform int uN;
 out vec4 outColor;
-vec3 toLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+""" + SRGB + """
 vec3 oklab(vec3 c) {
     c = toLinear(clamp(c, 0.0, 1.0));
     vec3 lms = pow(vec3(
@@ -1047,7 +1006,7 @@ void main() {
     if (uKind == 0) s = texelFetch(uBrush, px, 0).r;
     else if (uKind <= 2) {
         vec2 a = vec2(uAspect, 1.0);
-        vec2 q = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy * a;
+        vec2 q = upright(gl_FragCoord.xy) * a;
         vec2 q0 = uG.xy * a;
         vec2 d = uG.zw * a - q0;
         if (uKind == 1) s = 1.0 - smoothstep(0.0, 1.0, dot(q - q0, d) / max(dot(d, d), 1e-8));
@@ -1056,7 +1015,7 @@ void main() {
         // Joint bilateral upsampling of the low-res model mask: of the 4x4 nearest mask texels, those whose spot in the
         // photo looks like this pixel count most, so the edge snaps to the photo's edge instead of a blurry halo.
         vec2 n = uSize;
-        vec2 t = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy * n - 0.5;
+        vec2 t = upright(gl_FragCoord.xy) * n - 0.5;
         vec2 base = floor(t);
         vec3 g0 = texelFetch(uBelow, px, 0).rgb;
         ivec2 last = textureSize(uBelow, 0) - 1;
@@ -1085,7 +1044,7 @@ void main() {
             s = 1.0 - smoothstep(r, r + 0.01 + uG.y * 0.15, d);
             if (uN == 0) s = 0.0;
         } else {
-            float l = dot(clamp(c, 0.0, 1.0), vec3(0.2126, 0.7152, 0.0722));
+            float l = dot(clamp(c, 0.0, 1.0), LUMA);
             s = rise(uG.x, uG.y, l) * (uG.w <= uG.z ? step(l, uG.z) : 1.0 - smoothstep(uG.z, uG.w, l));
         }
     }
@@ -1142,20 +1101,13 @@ void main() {
     outColor = uFirst ? acc : vec4(acc.rgb / max(acc.a, 1e-5), 1.0);
 }"""
 
-        // Lens blur as a gather: 64 taps on a golden-angle spiral fill a disc of uRadius. A tap counts if its own blur
-        // disc reaches this pixel, so sharp areas stay sharp and blur grows with depth. A tap
-        // farther away than this pixel can blur no more than this pixel does, so the background never smears over a
-        // sharp foreground. Bright taps weigh more (uBloom): highlights turn into discs like a real lens.
         // Motion / Zoom: STREAK_TAPS samples along a line through the pixel (Motion) or toward the centre (Zoom), each
         // from the mip level as wide as the gap between samples, so long streaks stay smooth.
         const val STREAK_FRAGMENT = """#version 300 es
 precision highp float;
 uniform sampler2D uTex;
-uniform mat3 uMap;
 uniform mat3 uUnmap;
-uniform vec2 uOrigin;
-uniform vec2 uFull;
-uniform float uAspect;
+""" + GEOMETRY + """
 uniform float uHeight; // upright height in px
 uniform bool uZoom;
 uniform vec2 uDir; // Motion: half the streak, upright 0..1
@@ -1164,7 +1116,7 @@ uniform float uAmount; // Zoom: share of the way to the centre the streak reache
 out vec4 outColor;
 const int N = """ + STREAK_TAPS + """;
 void main() {
-    vec2 uv = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy;
+    vec2 uv = upright(gl_FragCoord.xy);
     vec2 span = uZoom ? (uCentre - uv) * uAmount : 2.0 * uDir; // the streak, upright 0..1
     vec2 start = uZoom ? uv : uv - uDir;
     float gap = length(span * vec2(uAspect, 1.0)) * uHeight / float(N);
@@ -1179,14 +1131,16 @@ void main() {
     outColor = vec4(acc / float(N), 1.0);
 }"""
 
+        // Lens blur as a gather: 64 taps on a golden-angle spiral fill a disc of uRadius. A tap counts if its own blur
+        // disc reaches this pixel, so sharp areas stay sharp and blur grows with depth. A tap
+        // farther away than this pixel can blur no more than this pixel does, so the background never smears over a
+        // sharp foreground. Bright taps weigh more (uBloom): highlights turn into discs like a real lens.
         const val LENS_FRAGMENT = """#version 300 es
 precision highp float;
 uniform sampler2D uTex;
 uniform sampler2D uMask;
 uniform sampler2D uDepth;
-uniform mat3 uMap;
-uniform vec2 uOrigin;
-uniform vec2 uFull;
+""" + GEOMETRY + """
 uniform bool uHasDepth;
 uniform bool uWeighted;
 uniform bool uInvert;
@@ -1196,7 +1150,8 @@ uniform float uRange;
 uniform float uBloom;
 uniform float uLod;
 out vec4 outColor;
-float depthAt(vec2 frag) { return texture(uDepth, (uMap * vec3((frag + uOrigin) / uFull, 1.0)).xy).r; }
+""" + SRGB + """
+float depthAt(vec2 frag) { return texture(uDepth, upright(frag)).r; }
 // blur radius in pixels for a depth: none within uRange of the focus depth, full uRadius half the depth scale beyond
 float coc(float d) { return uHasDepth ? uRadius * clamp((abs(d - uFocus) - uRange) * 2.0, 0.0, 1.0) : uRadius; }
 void main() {
@@ -1214,7 +1169,7 @@ void main() {
         float cs = coc(ds);
         if (ds < d0) cs = min(cs, c0);
         float w = clamp(cs - r * uRadius + 1.0, 0.0, 1.0);
-        w *= 1.0 + uBloom * 8.0 * smoothstep(0.7, 1.0, dot(clamp(c, 0.0, 1.0), vec3(0.2126, 0.7152, 0.0722)));
+        w *= 1.0 + uBloom * 8.0 * smoothstep(0.7, 1.0, dot(clamp(c, 0.0, 1.0), LUMA));
         if (uWeighted) { float m = texture(uMask, q / size).r; w *= uInvert ? 1.0 - m : m; }
         acc += vec4(c * w, w);
     }
@@ -1225,11 +1180,8 @@ void main() {
         const val DAB_VERTEX = """#version 300 es
 layout(location = 0) in vec2 aCorner;
 layout(location = 1) in vec2 aCentre;
-uniform mat3 uMap;
-uniform vec2 uOrigin;
-uniform vec2 uFull;
+""" + GEOMETRY + """
 uniform vec2 uSize;
-uniform float uAspect;
 uniform float uRadius;
 out vec2 vLocal;
 void main() {
@@ -1252,7 +1204,6 @@ void main() {
     }
 }
 
-/** GLSL: adds +-0.5 of an 8-bit step of fixed noise before the 8-bit write, so smooth gradients don't band. Exact 8-bit values pass through unchanged. */
 private const val GAUSS_TAPS = 16
 private const val BLUR_MAX = 0.02f // Blur at 100: sigma = 2% of the upright image height
 private const val LENS_MAX = 0.04f // Lens blur at 100: a disc with a radius of 4% of the upright image height
@@ -1280,11 +1231,26 @@ internal const val HALF_ROUND = """
 uniform bool uTrunc;
 vec3 store(vec3 c) { return uTrunc ? c + sign(c) * exp2(floor(log2(max(abs(c), vec3(6.1e-5)))) - 11.0) : c; }"""
 
+/** GLSL: adds +-0.5 of an 8-bit step of fixed noise before the 8-bit write, so smooth gradients don't band. Exact 8-bit values pass through unchanged. */
 internal const val DITHER = """
 vec3 dither(vec3 c) {
     float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     return c + (n - 0.5) / 255.0;
 }"""
+
+/** GLSL: sRGB <-> linear light (negatives clamp to 0) and Rec. 709 luma weights. */
+private const val SRGB = """
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+vec3 toLinear(vec3 c) { c = max(c, 0.0); return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+vec3 toSrgb(vec3 c) { c = max(c, 0.0); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }"""
+
+/** GLSL: the uniforms [Pipeline.setGeometry] sets, and upright() for a pipeline pixel's upright 0..1 position. */
+private const val GEOMETRY = """
+uniform mat3 uMap; // pipeline pixel (0..1 of the full image) -> upright 0..1; for brush dabs the reverse
+uniform vec2 uOrigin; // this tile's offset in the full image, px
+uniform vec2 uFull; // the full image's size, px
+uniform float uAspect; // upright width / height
+vec2 upright(vec2 px) { return (uMap * vec3((px + uOrigin) / uFull, 1.0)).xy; }"""
 
 private val QUAD: FloatBuffer = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
     .put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)).apply { position(0) }
@@ -1317,9 +1283,13 @@ private fun checkFramebuffer() =
     check(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) { "framebuffer incomplete" }
 
 internal fun link(vs: String, fs: String): Int = glCreateProgram().also {
-    glAttachShader(it, compile(GL_VERTEX_SHADER, vs))
-    glAttachShader(it, compile(GL_FRAGMENT_SHADER, fs))
+    val v = compile(GL_VERTEX_SHADER, vs)
+    val f = compile(GL_FRAGMENT_SHADER, fs)
+    glAttachShader(it, v)
+    glAttachShader(it, f)
     glLinkProgram(it)
+    glDeleteShader(v) // freed with the program
+    glDeleteShader(f)
     val ok = IntArray(1)
     glGetProgramiv(it, GL_LINK_STATUS, ok, 0)
     check(ok[0] != 0) { "program link failed: ${glGetProgramInfoLog(it)}" }

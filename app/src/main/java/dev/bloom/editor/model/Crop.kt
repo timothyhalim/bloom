@@ -15,9 +15,6 @@ data class Crop(
     val vertical: Float = 0f, val horizontal: Float = 0f,
     val left: Float = 0f, val top: Float = 0f, val right: Float = 1f, val bottom: Float = 1f,
 ) {
-    /** The turned photo's width and height, in upright photo heights ([aspect] = photo width / height). */
-    private fun turnedSize(aspect: Float) = if (turns % 2 == 0) aspect to 1f else 1f to aspect
-
     /** The frame: the box around the warped photo, centred coordinates in photo heights (x0, y0, x1, y1). */
     private fun bounds(aspect: Float): FloatArray {
         val f = forward(aspect)
@@ -46,13 +43,11 @@ data class Crop(
 
     /** Photo -> frame, both centred in photo heights. */
     private fun forward(aspect: Float): FloatArray {
-        val (fw, fh) = turnedSize(aspect)
+        // the turned photo's width and height, in upright photo heights
+        val (fw, fh) = if (turns % 2 == 0) aspect to 1f else 1f to aspect
         val fl = floatArrayOf(if (flip) -1f else 1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
-        val turn = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f).let { m ->
-            var t = m
-            repeat(((turns % 4) + 4) % 4) { t = mul(floatArrayOf(0f, -1f, 0f, 1f, 0f, 0f, 0f, 0f, 1f), t) } // (x, y) -> (-y, x): clockwise, y down
-            t
-        }
+        var turn = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        repeat(turns) { turn = mul(floatArrayOf(0f, -1f, 0f, 1f, 0f, 0f, 0f, 0f, 1f), turn) } // (x, y) -> (-y, x): clockwise, y down
         // keystone: at the turned photo's edge the scale is 1 ± KEYSTONE × value
         val key = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, KEYSTONE * horizontal / 100f / (fw / 2), KEYSTONE * vertical / 100f / (fh / 2), 1f)
         val a = Math.toRadians(angle.toDouble())
@@ -101,26 +96,15 @@ data class Crop(
     private fun centre(aspect: Float) = bounds(aspect).let { (x0, y0, x1, y1) -> -x0 / (x1 - x0) to -y0 / (y1 - y0) }
 
     /** This crop, shrunk toward the photo's centre until it fits on the photo. */
-    fun fit(aspect: Float): Crop {
-        val o = outline(aspect)
-        if (fits(o)) return this
-        val (cx, cy) = centre(aspect)
-        val scaled = { s: Float -> copy(left = cx + (left - cx) * s, top = cy + (top - cy) * s, right = cx + (right - cx) * s, bottom = cy + (bottom - cy) * s) }
-        var lo = 0f
-        var hi = 1f
-        repeat(24) { val mid = (lo + hi) / 2; if (scaled(mid).fits(o)) lo = mid else hi = mid }
-        return scaled(lo)
-    }
+    fun fit(aspect: Float) = centre(aspect).let { (cx, cy) -> copy(left = cx, top = cy, right = cx, bottom = cy).moveToward(this, aspect) }
 
     /** As far from this (which fits) toward [to]'s rectangle as stays on the photo. */
     fun moveToward(to: Crop, aspect: Float): Crop {
-        val lerp = { t: Float -> copy(left = left + (to.left - left) * t, top = top + (to.top - top) * t, right = right + (to.right - right) * t, bottom = bottom + (to.bottom - bottom) * t) }
         val o = outline(aspect)
-        if (lerp(1f).fits(o)) return lerp(1f)
-        var lo = 0f
-        var hi = 1f
-        repeat(20) { val mid = (lo + hi) / 2; if (lerp(mid).fits(o)) lo = mid else hi = mid }
-        return lerp(lo)
+        val end = copy(left = to.left, top = to.top, right = to.right, bottom = to.bottom)
+        if (end.fits(o)) return end
+        val lerp = { t: Float -> copy(left = left + (to.left - left) * t, top = top + (to.top - top) * t, right = right + (to.right - right) * t, bottom = bottom + (to.bottom - bottom) * t) }
+        return lerp(bisect(1f, 0f, 20) { lerp(it).fits(o) })
     }
 
     /** Turned a quarter clockwise, crop included. */
@@ -139,23 +123,15 @@ data class Crop(
         val o = outline(aspect)
         val at = { cx: Float, cy: Float, h: Float -> copy(left = cx - h * r / fw / 2, right = cx + h * r / fw / 2, top = cy - h / fh / 2, bottom = cy + h / fh / 2) }
         // height of the largest crop centred at (cx, cy); concave in the centre, since the photo is convex in the frame
-        val biggest = { cx: Float, cy: Float ->
-            var lo = 0f
-            var hi = minOf(fw / r, fh)
-            repeat(14) { val mid = (lo + hi) / 2; if (at(cx, cy, mid).fits(o)) lo = mid else hi = mid }
-            lo
-        }
+        val biggest = { cx: Float, cy: Float -> bisect(minOf(fw / r, fh), 0f, 14) { at(cx, cy, it).fits(o) } }
         val (x0, y0) = centre(aspect)
         // one axis at a time: ternary search for the best, then back toward the photo's centre while just as big
         val best = { from: Float, f: (Float) -> Float ->
             var lo = 0f
             var hi = 1f
             repeat(16) { val a = lo + (hi - lo) / 3; val b = hi - (hi - lo) / 3; if (f(a) < f(b)) lo = a else hi = b }
-            val top = f((lo + hi) / 2)
-            var near = from
-            var far = (lo + hi) / 2
-            if (f(near) < top - 1e-4f) repeat(12) { val mid = (near + far) / 2; if (f(mid) >= top - 1e-4f) far = mid else near = mid }
-            if (f(from) >= top - 1e-4f) from else far
+            val top = f((lo + hi) / 2) - 1e-4f
+            if (f(from) >= top) from else bisect(from, (lo + hi) / 2, 12) { f(it) >= top }
         }
         var cx = x0
         var cy = y0
@@ -193,4 +169,12 @@ data class Crop(
             return (m[0] * x + m[1] * y + m[2]) / w to (m[3] * x + m[4] * y + m[5]) / w
         }
     }
+}
+
+/** Halves the gap between [good] (passes [ok]) and [bad] [n] times; returns the last value that passes. */
+private inline fun bisect(bad: Float, good: Float, n: Int, ok: (Float) -> Boolean): Float {
+    var b = bad
+    var g = good
+    repeat(n) { val mid = (b + g) / 2; if (ok(mid)) g = mid else b = mid }
+    return g
 }

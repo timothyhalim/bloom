@@ -19,22 +19,8 @@ data class WarpStroke(
     val reverse: Boolean = false, // Twirl: counterclockwise
 ) {
     /** Adds dabs from the last one toward (x, y), a sixth of the radius apart (Push follows the finger closely). */
-    fun lineTo(x: Float, y: Float, aspect: Float): WarpStroke {
-        if (points.isEmpty()) return copy(points = listOf(x, y))
-        val lx = points[points.size - 2]
-        val ly = points[points.size - 1]
-        val d = hypot((x - lx) * aspect, y - ly)
-        val step = radius / 6f
-        val n = (d / step).toInt()
-        if (n == 0) return this
-        val added = ArrayList<Float>(n * 2)
-        for (i in 1..n) {
-            val t = i * step / d
-            added += lx + (x - lx) * t
-            added += ly + (y - ly) * t
-        }
-        return copy(points = points + added)
-    }
+    fun lineTo(x: Float, y: Float, aspect: Float) =
+        points.dabsTo(x, y, aspect, radius / 6f).let { if (it === points) this else copy(points = it) }
 }
 
 /**
@@ -57,9 +43,12 @@ class WarpField(val aspect: Float) {
     /** Brings the grid to [all]: continues if [all] only adds to what was applied, else replays from zero. */
     fun update(all: List<WarpStroke>) {
         val n = strokes.size
+        // the last stroke continues if only its points grew, from the same first dab
         val grows = all.size >= n && (0 until n - 1).all { all[it] === strokes[it] } &&
-            (n == 0 || all[n - 1].let { s -> s.tool == strokes[n - 1].tool && s.radius == strokes[n - 1].radius && s.points.size >= applied * 2 })
-        if (all.isEmpty()) applied = 0
+            (n == 0 || all[n - 1].let { s ->
+                val o = strokes[n - 1]
+                s.copy(points = o.points) == o && s.points.size >= applied * 2 && s.points.take(2) == o.points.take(2)
+            })
         if (!grows) {
             d.fill(0f)
             dirty = intArrayOf(0, 0, w, h)
@@ -118,13 +107,13 @@ class WarpField(val aspect: Float) {
         val from = maxOf(0, y0 - mg) * w * 2
         System.arraycopy(d, from, old, from, minOf(h, y1 + mg) * w * 2 - from)
         val o = FloatArray(2)
+        // the mask brush's falloff: full inside e, smoothstep over the soft outer part
+        val e = 1f - maxOf(s.softness, 0.001f)
         for (j in y0 until y1) for (i in x0 until x1) {
             val px = (i + 0.5f) / w * aspect
             val py = (j + 0.5f) / h
             val dist = hypot(px - cx, py - cy) / r
             if (dist >= 1f) continue
-            // the mask brush's falloff: full inside, smoothstep over the soft outer part
-            val e = 1f - maxOf(s.softness, 0.001f)
             val f = s.strength * (1f - ((dist - e) / (1f - e)).coerceIn(0f, 1f).let { it * it * (3 - 2 * it) })
             val at = (j * w + i) * 2
             if (s.tool == WarpTool.Restore) {

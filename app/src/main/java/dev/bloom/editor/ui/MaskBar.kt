@@ -4,10 +4,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -36,7 +36,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +55,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bloom.editor.PhotoView
@@ -66,6 +66,7 @@ import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.SubjectStep
 import androidx.compose.material3.CircularProgressIndicator
 import dev.bloom.editor.model.GradientStep
+import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.MaskStep
 import dev.bloom.editor.model.Stroke as BrushStroke
@@ -106,19 +107,19 @@ fun MaskButton(mask: Mask, onClick: () -> Unit) {
     }
 }
 
+/** Right end of a tool's bar: the mask button and ✓. */
+@Composable
+fun RowScope.MaskAndApply(state: EditorState, d: Layer) {
+    MaskButton(d.mask) { state.maskMode = true }
+    IconButton(state::apply) { Icon(Icons.Check, if (state.editingId != null) "Apply changes" else "Apply as ${d.kind.label} layer", tint = Bloom.Pollen) }
+}
+
 /** Bar contents in mask mode: what you add (sign + step types), then Invert and ✓. */
 @Composable
 fun RowScope.MaskBar(state: EditorState) {
-    val mask = state.draft?.mask ?: return
-    Box(
-        Modifier.size(54.dp, 48.dp).clickable(role = Role.Button) { state.maskMode = false }
-            .semantics { contentDescription = "${state.draft?.kind?.label ?: "Color"} mask. Back to the tool" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(36.dp, 30.dp).background(Bloom.PollenContainer, Bloom.Petal), contentAlignment = Alignment.Center) {
-            Icon(Icons.Mask, null, tint = Bloom.OnPollenContainer)
-        }
-    }
+    val d = state.draft ?: return
+    val mask = d.mask
+    ToolIcon(Icons.Mask, "${d.kind.label} mask. Back to the tool") { state.maskMode = false }
     Row(Modifier.weight(1f).scrollFade(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         val sign = if (state.maskAdd) "Add" else "Remove"
         TypeButton(Icons.Brush, state.maskAdd, state.maskTool == MaskTool.Brush, "$sign brush") { state.maskTool = MaskTool.Brush }
@@ -168,74 +169,52 @@ fun MaskRows(state: EditorState, box: Modifier) {
     }
     // One box for the current tool: its main row, plus the More rows above it when open.
     val i = state.stepIndex
-    Column(box) {
-        if (state.maskMore) {
-            MaskActions(state)
-            when (state.maskTool) {
-                MaskTool.Brush -> {
-                    SliderRow("Softness", state.softness, 0f..100f) { state.softness = it; state.showRing(state.brushSize, it) }
-                    SliderRow("Flow", state.flow, 1f..100f) { state.flow = it }
-                }
-                MaskTool.Color -> (sel as? ColorStep)?.let { c ->
-                    SliderRow("Smooth", c.smooth * 100f, 0f..100f) { state.replaceStep(i!!, c.copy(smooth = it / 100f)) }
-                }
-                else -> Unit
+    ToolBox(state.maskMore, { state.maskMore = !state.maskMore }, box, moreRows = {
+        MaskActions(state)
+        when (state.maskTool) {
+            MaskTool.Brush -> BrushRows(state)
+            MaskTool.Color -> (sel as? ColorStep)?.let { c ->
+                SliderRow("Smooth", c.smooth * 100f, 0f..100f) { state.replaceStep(i!!, c.copy(smooth = it / 100f)) }
             }
-            if (sel != null) SliderRow("Feather", sel.feather * 100f, 0f..100f) { state.replaceStep(i!!, sel.with(feather = it / 100f)) }
+            else -> Unit
         }
-        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-            SignToggle(state)
-            when (state.maskTool) {
-                MaskTool.Brush -> {
-                    Text("Size", Modifier.width(36.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-                    Slider(state.brushSize, { state.brushSize = it.roundToInt().toFloat(); state.showRing(state.brushSize, state.softness) }, Modifier.weight(1f), valueRange = 4f..150f, colors = sliderColors())
-                    Text("${state.brushSize.roundToInt()}", Modifier.width(36.dp), fontSize = 14.sp, color = Bloom.On)
-                }
-                MaskTool.Gradient -> Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val g = sel as? GradientStep
-                    if (g == null) Hint("Tap the gradient icon to add one")
-                    else {
-                        Chip("Linear", !g.radial) { state.replaceStep(i!!, g.copy(radial = false)) }
-                        Chip("Radial", g.radial) { state.replaceStep(i!!, g.copy(radial = true)) }
-                    }
-                }
-                MaskTool.Color -> ColorControls(state, sel as? ColorStep)
-                MaskTool.Luminance -> {
-                    val l = sel as? LuminanceStep
-                    val status = state.subjectStatus?.takeIf { l?.depth == true && state.depth == null }
-                    if (l == null) Hint("Tap the luminance or depth icon to add one", Modifier.weight(1f))
-                    else if (status != null) {
-                        if (status.startsWith("Couldn't")) TextButton({ state.subjectRetry++ }, Modifier.weight(1f)) { Text("$status. Tap to retry", fontSize = 12.sp, color = Bloom.On, maxLines = 2) }
-                        else Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(16.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
-                            Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-                        }
-                    } else {
-                        val names = if (l.depth) depthPresets else presets
-                        val preset = names.entries.firstOrNull { (_, p) -> p.a == l.a && p.b == l.b && p.c == l.c && p.d == l.d }?.key
-                        TextButton({
-                            val next = names.values.toList()[(names.keys.indexOf(preset) + 1) % names.size]
-                            state.replaceStep(i!!, l.copy(a = next.a, b = next.b, c = next.c, d = next.d))
-                        }, Modifier.width(96.dp)) { Text(preset ?: "Custom", fontSize = 12.sp, color = Bloom.On) }
-                        LuminanceStrip(l, Modifier.weight(1f)) { state.replaceStep(i!!, it) }
-                    }
-                }
-                MaskTool.Subject -> {
-                    val status = state.subjectStatus
-                    when {
-                        status != null && status.startsWith("Couldn't") -> TextButton({ state.subjectRetry++ }, Modifier.weight(1f)) {
-                            Text("$status. Tap to retry", fontSize = 12.sp, color = Bloom.On, maxLines = 2)
-                        }
-                        status != null -> Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(16.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
-                            Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-                        }
-                        else -> Hint(if (state.maskAdd) "Tap what to select. Remove mode: tap what to leave out" else "Tap what to leave out", Modifier.weight(1f))
-                    }
+        if (sel != null) SliderRow("Feather", sel.feather * 100f, 0f..100f) { state.replaceStep(i!!, sel.with(feather = it / 100f)) }
+    }) {
+        SignToggle(state)
+        when (state.maskTool) {
+            MaskTool.Brush -> {
+                Text("Size", Modifier.width(36.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+                Slider(state.brushSize, { state.brushSize = it.roundToInt().toFloat(); state.showRing(state.brushSize, state.softness) }, Modifier.weight(1f), valueRange = 4f..150f, colors = sliderColors())
+                Text("${state.brushSize.roundToInt()}", Modifier.width(36.dp), fontSize = 14.sp, color = Bloom.On)
+            }
+            MaskTool.Gradient -> Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val g = sel as? GradientStep
+                if (g == null) Hint("Tap the gradient icon to add one")
+                else {
+                    Chip("Linear", !g.radial) { state.replaceStep(i!!, g.copy(radial = false)) }
+                    Chip("Radial", g.radial) { state.replaceStep(i!!, g.copy(radial = true)) }
                 }
             }
-            IconButton({ state.maskMore = !state.maskMore }) {
-                Icon(Icons.Up, if (state.maskMore) "Less" else "More settings", Modifier.rotate(if (state.maskMore) 180f else 0f), tint = Bloom.On)
+            MaskTool.Color -> ColorControls(state, sel as? ColorStep)
+            MaskTool.Luminance -> {
+                val l = sel as? LuminanceStep
+                val status = state.depthStatus?.takeIf { l?.depth == true && state.depth == null }
+                if (l == null) Hint("Tap the luminance or depth icon to add one", Modifier.weight(1f))
+                else if (status != null) StatusRow(status, { state.aiRetry++ })
+                else {
+                    val names = if (l.depth) depthPresets else presets
+                    val preset = names.entries.firstOrNull { (_, p) -> p.a == l.a && p.b == l.b && p.c == l.c && p.d == l.d }?.key
+                    TextButton({
+                        val next = names.values.toList()[(names.keys.indexOf(preset) + 1) % names.size]
+                        state.replaceStep(i!!, l.copy(a = next.a, b = next.b, c = next.c, d = next.d))
+                    }, Modifier.width(96.dp)) { Text(preset ?: "Custom", fontSize = 12.sp, color = Bloom.On) }
+                    LuminanceStrip(l, Modifier.weight(1f)) { state.replaceStep(i!!, it) }
+                }
+            }
+            MaskTool.Subject -> {
+                val status = state.subjectStatus
+                if (status != null) StatusRow(status, { state.aiRetry++ })
+                else Hint(if (state.maskAdd) "Tap what to select. Remove mode: tap what to leave out" else "Tap what to leave out", Modifier.weight(1f))
             }
         }
     }
@@ -252,7 +231,7 @@ private fun MaskActions(state: EditorState) {
             TextButton({ menu = true }, enabled = others.isNotEmpty()) { Text("Copy mask from…", fontSize = 12.sp, color = if (others.isNotEmpty()) Bloom.On else Bloom.Outline) }
             DropdownMenu(menu, { menu = false }, containerColor = Bloom.SurfaceHigh) {
                 others.forEach { (n, l) ->
-                    DropdownMenuItem(text = { Text("Color layer ${n + 1}", color = Bloom.On) }, onClick = {
+                    DropdownMenuItem(text = { Text("${l.kind.label} layer ${n + 1}", color = Bloom.On) }, onClick = {
                         menu = false
                         state.setMask(l.mask)
                         state.stepIndex = null
@@ -365,8 +344,40 @@ internal fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRa
     }
 }
 
+/** A tool's settings box: its main row ending in More, which shows [moreRows] above it. */
 @Composable
-internal fun Chip(label: String, selected: Boolean, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, desc: String? = null, onClick: () -> Unit) {
+internal fun ToolBox(
+    more: Boolean, onMore: () -> Unit, box: Modifier, moreDesc: String = "More settings",
+    moreRows: @Composable ColumnScope.() -> Unit, main: @Composable RowScope.() -> Unit,
+) {
+    Column(box) {
+        if (more) moreRows()
+        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+            main()
+            IconButton(onMore) { Icon(Icons.Up, if (more) "Less" else moreDesc, Modifier.rotate(if (more) 180f else 0f), tint = Bloom.On) }
+        }
+    }
+}
+
+/** An AI job's progress in a tool's main row: a spinner and what it is doing, or its error and Retry. */
+@Composable
+internal fun RowScope.StatusRow(status: String, onRetry: (() -> Unit)?, start: Dp = 0.dp) {
+    if (onRetry != null && status.startsWith("Couldn't")) TextButton(onRetry, Modifier.weight(1f)) { Text("$status. Tap to retry", fontSize = 12.sp, color = Bloom.On, maxLines = 2) }
+    else Row(Modifier.weight(1f).padding(start = start), verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(16.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+        Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+    }
+}
+
+/** The mask brush's More rows, shared with AI Erase. */
+@Composable
+internal fun BrushRows(state: EditorState) {
+    SliderRow("Softness", state.softness, 0f..100f) { state.softness = it; state.showRing(state.brushSize, it) }
+    SliderRow("Flow", state.flow, 1f..100f) { state.flow = it }
+}
+
+@Composable
+internal fun Chip(label: String, selected: Boolean, desc: String? = null, onClick: () -> Unit) {
     val shape = RoundedCornerShape(10.dp)
     Row(
         Modifier.height(40.dp).clip(shape).then(if (selected) Modifier.background(Bloom.SurfaceHigh) else Modifier)
@@ -374,7 +385,6 @@ internal fun Chip(label: String, selected: Boolean, icon: androidx.compose.ui.gr
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        icon?.let { Icon(it, null, Modifier.size(18.dp).padding(end = 4.dp), tint = if (selected) Bloom.Pollen else Bloom.OnVariant) }
         Text(label, fontSize = 12.sp, color = if (selected) Bloom.On else Bloom.OnVariant, fontWeight = FontWeight.Medium)
     }
 }
@@ -483,8 +493,9 @@ fun Pins(s: SubjectStep, photoView: PhotoView, transformTick: Int) {
 }
 
 /**
- * One-finger handler for mask mode. Brush: paints into the last Brush step with the current sign, or starts one.
- * Gradient: drags the nearest handle of the selected gradient, or redraws it from the touch point.
+ * One-finger handler for mask mode and AI Erase. Brush: paints into the last Brush step with the current sign, or
+ * starts one. Gradient: drags the nearest handle of the selected gradient, or redraws it from the touch point.
+ * Color: samples the color under the finger. Subject: adds a pin, or removes the one under the finger.
  */
 class MaskTouch(
     private val state: EditorState, private val photoView: PhotoView, private val aspect: Float, private val density: Float,

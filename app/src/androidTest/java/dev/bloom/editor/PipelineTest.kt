@@ -12,6 +12,7 @@ import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.Crop
+import dev.bloom.editor.model.Patch
 import dev.bloom.editor.model.Curves
 import dev.bloom.editor.model.WarpField
 import dev.bloom.editor.model.WarpStroke
@@ -32,6 +33,7 @@ import org.junit.Test
 import kotlin.math.roundToInt
 import org.junit.runner.RunWith
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.pow
 
@@ -40,15 +42,21 @@ class PipelineTest {
     private fun srgbToLinear(c: Double) = if (c <= 0.04045) c / 12.92 else ((c + 0.055) / 1.055).pow(2.4)
     private fun linearToSrgb(c: Double) = if (c <= 0.0031308) c * 12.92 else 1.055 * c.pow(1 / 2.4) - 0.055
 
-    private fun run(layers: List<Layer>, gray: Int = 128): Int = Offscreen().use {
-        val p = Pipeline()
-        try {
-            p.setSource(Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(gray, gray, gray)) })
-            Color.red(p.renderToBitmap(layers).getPixel(3, 5))
-        } finally {
-            p.release()
+    /** Renders [layers] over [src] and returns every pixel (ARGB), row by row. [setup] loads the source (and more). */
+    private fun pixels(src: Bitmap, layers: List<Layer>, deband: Boolean = true, setup: Pipeline.(Bitmap) -> Unit = { setSource(it) }): IntArray =
+        Offscreen().use {
+            val p = Pipeline()
+            p.deband = deband
+            p.setup(src)
+            val out = p.renderToBitmap(layers)
+            IntArray(out.width * out.height).also { out.getPixels(it, 0, out.width, 0, 0, out.width, out.height) }
         }
-    }
+
+    /** Renders [layers] over [src] and returns the red channel row by row. */
+    private fun redsOf(src: Bitmap, layers: List<Layer>, deband: Boolean = true, setup: Pipeline.(Bitmap) -> Unit = { setSource(it) }) =
+        pixels(src, layers, deband, setup).map(Color::red).toIntArray()
+
+    private fun run(layers: List<Layer>): Int = Color.red(pixels(gray(8, 8) { _, _ -> 128 }, layers)[5 * 8 + 3])
 
     @Test
     fun noLayersIsIdentity() = assertEquals(128, run(emptyList()))
@@ -71,60 +79,33 @@ class PipelineTest {
     }
 
     @Test
-    fun ditherKeepsFractionalLevelsOnAverage() = Offscreen().use {
-        val p = Pipeline()
-        try {
-            p.setSource(Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(128, 128, 128)) })
-            val out = p.renderToBitmap(listOf(Layer(1).with(ColorParam.Exposure, 100f / 3)))
-            val reds = IntArray(64).also { out.getPixels(it, 0, 8, 0, 0, 8, 8) }.map { Color.red(it) }
-            val expected = 255 * linearToSrgb(2 * srgbToLinear(128 / 255.0)) // ~177.3, between two 8-bit levels
-            assertEquals(expected, reds.average(), 0.3)
-            assertEquals(2, reds.distinct().size)
-        } finally {
-            p.release()
-        }
+    fun ditherKeepsFractionalLevelsOnAverage() {
+        val reds = redsOf(gray(8, 8) { _, _ -> 128 }, listOf(Layer(1).with(ColorParam.Exposure, 100f / 3)))
+        val expected = 255 * linearToSrgb(2 * srgbToLinear(128 / 255.0)) // ~177.3, between two 8-bit levels
+        assertEquals(expected, reds.average(), 0.3)
+        assertEquals(2, reds.distinct().size)
     }
 
     @Test
     fun hiddenLayerIsSkipped() = assertEquals(128, run(listOf(Layer(1).with(ColorParam.Exposure, 100f).copy(visible = false))))
 
     @Test
-    fun curvesMatchTheReferenceTableWithinOneLevel() = Offscreen().use {
+    fun curvesMatchTheReferenceTableWithinOneLevel() {
         // M1.5 exit test: an S-curve on RGB plus a red curve, over every 8-bit input level
         val c = Curves(rgb = listOf(0f, 0f, 0.25f, 0.15f, 0.75f, 0.85f, 1f, 1f), r = listOf(0f, 0.1f, 0.5f, 0.6f, 1f, 0.95f))
-        val src = Bitmap.createBitmap(256, 1, Bitmap.Config.ARGB_8888).apply { for (i in 0..255) setPixel(i, 0, Color.rgb(i, i, i)) }
-        val p = Pipeline()
-        try {
-            p.setSource(src)
-            // a plain layer on top checks the table is per layer
-            val out = p.renderToBitmap(listOf(Layer(1).copy(curves = c), Layer(2)))
-            val lut = c.lut(4096)
-            val bad = (0..255).flatMap { i ->
-                val px = out.getPixel(i, 0)
-                val ref = (i / 255f * 4095).roundToInt() * 4
-                listOf(Color.red(px) to lut[ref], Color.green(px) to lut[ref + 1]).filter { (o, e) -> kotlin.math.abs(o - (255 * e).roundToInt()) > 1 } // dither moves output by up to one level
-                    .map { (o, e) -> "$i:$o/${"%.2f".format(255 * e)}" }
-            }
-            assertTrue(bad.joinToString(), bad.isEmpty())
-        } finally {
-            p.release()
+        // a plain layer on top checks the table is per layer
+        val out = pixels(gray(256, 1) { x, _ -> x }, listOf(Layer(1).copy(curves = c), Layer(2)))
+        val lut = c.lut(4096)
+        val bad = (0..255).flatMap { i ->
+            val px = out[i]
+            val ref = (i / 255f * 4095).roundToInt() * 4
+            listOf(Color.red(px) to lut[ref], Color.green(px) to lut[ref + 1]).filter { (o, e) -> abs(o - (255 * e).roundToInt()) > 1 } // dither moves output by up to one level
+                .map { (o, e) -> "$i:$o/${"%.2f".format(255 * e)}" }
         }
+        assertTrue(bad.joinToString(), bad.isEmpty())
     }
 
     // --- Recover (M2.5a) ---
-
-    /** Renders [layers] over [src] and returns the red channel row by row. */
-    private fun redsOf(src: Bitmap, layers: List<Layer>, deband: Boolean = true): IntArray = Offscreen().use {
-        val p = Pipeline()
-        try {
-            p.deband = deband
-            p.setSource(src)
-            val out = p.renderToBitmap(layers)
-            IntArray(src.width * src.height).also { out.getPixels(it, 0, src.width, 0, 0, src.width, src.height) }.map { Color.red(it) }.toIntArray()
-        } finally {
-            p.release()
-        }
-    }
 
     /** Column averages: removes dither and deband noise, keeps the horizontal profile. */
     private fun profile(r: IntArray, w: Int, h: Int) = DoubleArray(w) { x -> (0 until h).sumOf { r[it * w + x] }.toDouble() / h }
@@ -166,17 +147,22 @@ class PipelineTest {
             android.graphics.ColorSpace.Named.EXTENDED_SRGB to target,
             android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB to srgbToLinear(target),
         )) {
-            val src = Bitmap.createBitmap(32, 32, Bitmap.Config.RGBA_F16, false, android.graphics.ColorSpace.get(space))
-            val h = android.util.Half.toHalf(value.toFloat())
-            val one = android.util.Half.toHalf(1f)
-            val buf = java.nio.ByteBuffer.allocateDirect(32 * 32 * 8).order(java.nio.ByteOrder.nativeOrder())
-            repeat(32 * 32) { buf.putShort(h).putShort(h).putShort(h).putShort(one) }
-            src.copyPixelsFromBuffer(buf.rewind())
+            val src = f16(32, 32, space, value.toFloat())
             assertEquals("$space", 128.25, redsOf(src, emptyList()).average(), 0.1)
             // eight plain layers: each pass must round its half-float output to nearest, not down
             assertEquals("$space, 8 layers", 128.25, redsOf(src, List(8) { Layer(it.toLong()) }).average(), 0.1)
         }
     }
+
+    /** A w×h half-float photo in [space], every pixel (v, v, v). */
+    private fun f16(w: Int, h: Int, space: android.graphics.ColorSpace.Named, v: Float) =
+        Bitmap.createBitmap(w, h, Bitmap.Config.RGBA_F16, false, android.graphics.ColorSpace.get(space)).apply {
+            val hv = android.util.Half.toHalf(v)
+            val one = android.util.Half.toHalf(1f)
+            val buf = java.nio.ByteBuffer.allocateDirect(w * h * 8).order(java.nio.ByteOrder.nativeOrder())
+            repeat(w * h) { buf.putShort(hv).putShort(hv).putShort(hv).putShort(one) }
+            copyPixelsFromBuffer(buf.rewind())
+        }
 
     // --- 16-bit PNG export (M2.5c) ---
 
@@ -193,13 +179,8 @@ class PipelineTest {
 
     @Test
     fun pngExportKeepsLevelsBetweenEightBitSteps() {
-        val src = Bitmap.createBitmap(64, 48, Bitmap.Config.RGBA_F16, false, android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
         // 128.5: halfway between 8-bit steps; each 16-bit PNG decode to half floats rounds down ~0.12 levels
-        val h = android.util.Half.toHalf((128.5 / 255).toFloat())
-        val one = android.util.Half.toHalf(1f)
-        val buf = java.nio.ByteBuffer.allocateDirect(64 * 48 * 8).order(java.nio.ByteOrder.nativeOrder())
-        repeat(64 * 48) { buf.putShort(h).putShort(h).putShort(h).putShort(one) }
-        src.copyPixelsFromBuffer(buf.rewind())
+        val src = f16(64, 48, android.graphics.ColorSpace.Named.SRGB, (128.5 / 255).toFloat())
         val f = java.io.File(ctx.cacheDir, "t_in.png").apply { outputStream().use { src.compress(Bitmap.CompressFormat.PNG, 100, it) } }
         assertEquals("source PNG bit depth", 16, f.readBytes()[24].toInt())
         for (layers in listOf(listOf(Layer(1)), emptyList())) {
@@ -244,6 +225,16 @@ class PipelineTest {
 
     private fun smooth(w: Int, h: Int) = gray(w, h) { x, y -> (128 + 100 * Math.sin(x / 37.0) * Math.cos(y / 23.0)).toInt() }
 
+    /** Red of [px] (w × h) sampled bilinearly at (sx, sy) in pixels, pixel centres on integers, edges clamped. */
+    private fun bilinearRed(px: IntArray, w: Int, h: Int, sx: Double, sy: Double): Double {
+        val at = { x: Int, y: Int -> Color.red(px[y.coerceIn(0, h - 1) * w + x.coerceIn(0, w - 1)]).toDouble() }
+        val x0 = floor(sx).toInt()
+        val y0 = floor(sy).toInt()
+        val fx = sx - x0
+        val fy = sy - y0
+        return (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy
+    }
+
     @Test
     fun cropExportIsThatRegionPixelForPixel() {
         // wider than two tiles, so a tile edge falls inside the crop
@@ -253,11 +244,7 @@ class PipelineTest {
         val out = exportCropped(src, Crop(left = 0.2f, top = 0.1f, right = 0.9f, bottom = 0.8f))
         assertEquals(1750, out.width)
         assertEquals(910, out.height)
-        for (y in 0 until out.height step 7) for (x in 0 until out.width step 3) {
-            val e = src.getPixel(500 + x, 130 + y)
-            val o = out.getPixel(x, y)
-            for (sh in listOf(16, 8, 0)) assertNear("($x,$y)", (e shr sh) and 0xFF, (o shr sh) and 0xFF, 1)
-        }
+        for (y in 0 until out.height step 7) for (x in 0 until out.width step 3) assertRgbNear("($x,$y)", src.getPixel(500 + x, 130 + y), out.getPixel(x, y), 1)
     }
 
     @Test
@@ -287,18 +274,11 @@ class PipelineTest {
         val out = exportCropped(src, crop)
         val m = crop.matrix(aspect)
         val px = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
-        val at = { x: Int, y: Int -> Color.red(px[y.coerceIn(0, h - 1) * w + x.coerceIn(0, w - 1)]).toDouble() }
         var worst = 0.0
         for (y in 0 until out.height step 5) for (x in 0 until out.width step 5) {
             val (u, v) = Crop.map(m, (x + 0.5f) / out.width, (y + 0.5f) / out.height)!!
-            val sx = u * w - 0.5
-            val sy = v * h - 0.5
-            val x0 = Math.floor(sx).toInt()
-            val y0 = Math.floor(sy).toInt()
-            val fx = sx - x0
-            val fy = sy - y0
-            val e = (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy
-            worst = maxOf(worst, Math.abs(e - Color.red(out.getPixel(x, y))))
+            val e = bilinearRed(px, w, h, u * w - 0.5, v * h - 0.5)
+            worst = maxOf(worst, abs(e - Color.red(out.getPixel(x, y))))
         }
         assertTrue("worst difference $worst levels", worst <= 3.0)
     }
@@ -338,13 +318,13 @@ class PipelineTest {
         val restore = WarpStroke(WarpTool.Restore, sweep, 0.2f, 1f)
         val pushed = push(1.5f, 0.3f, 0.5f, 0.6f, 0.4f)
         // no offsets: the input (within the 8-bit readback's dither)
-        val none = pixels(src, listOf(liquify())) { p, b -> p.deband = false; p.setSource(b) }
-        for (i in inp.indices step 7) for (sh in listOf(16, 8, 0)) assertNear("$i", (inp[i] shr sh) and 0xFF, (none[i] shr sh) and 0xFF, 1)
+        val none = pixels(src, listOf(liquify()), deband = false)
+        for (i in inp.indices step 7) assertRgbNear("$i", inp[i], none[i], 1)
         // pushed, then fully restored: exactly the same pixels as no offsets
-        val restored = pixels(src, listOf(liquify(pushed, restore, restore, restore))) { p, b -> p.deband = false; p.setSource(b) }
+        val restored = pixels(src, listOf(liquify(pushed, restore, restore, restore)), deband = false)
         assertArrayEquals(none, restored)
         // and the push alone does move pixels
-        val moved = pixels(src, listOf(liquify(pushed))) { p, b -> p.deband = false; p.setSource(b) }
+        val moved = pixels(src, listOf(liquify(pushed)), deband = false)
         assertTrue(!moved.contentEquals(none))
     }
 
@@ -355,10 +335,9 @@ class PipelineTest {
         val aspect = w.toFloat() / h
         val src = smooth(w, h)
         val st = push(aspect, 0.3f, 0.5f, 0.55f, 0.5f)
-        val out = pixels(src, listOf(liquify(st))) { p, b -> p.deband = false; p.setSource(b) }
+        val out = pixels(src, listOf(liquify(st)), deband = false)
         val f = WarpField(aspect).apply { update(listOf(st)) }
         val px = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
-        val at = { x: Int, y: Int -> Color.red(px[y.coerceIn(0, h - 1) * w + x.coerceIn(0, w - 1)]).toDouble() }
         fun bilinear(g: FloatArray, gw: Int, gh: Int, x: Double, y: Double, c: Int): Double {
             val gx = (x - 0.5).coerceIn(0.0, gw - 1.0)
             val gy = (y - 0.5).coerceIn(0.0, gh - 1.0)
@@ -375,14 +354,8 @@ class PipelineTest {
             val v = (y + 0.5) / h
             val ox = bilinear(f.d, f.w, f.h, u * f.w, v * f.h, 0)
             val oy = bilinear(f.d, f.w, f.h, u * f.w, v * f.h, 1)
-            val sx = (u + ox / aspect) * w - 0.5
-            val sy = (v + oy) * h - 0.5
-            val x0 = Math.floor(sx).toInt()
-            val y0 = Math.floor(sy).toInt()
-            val fx = sx - x0
-            val fy = sy - y0
-            val e = (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy
-            worst = maxOf(worst, Math.abs(e - Color.red(out[y * w + x])))
+            val e = bilinearRed(px, w, h, (u + ox / aspect) * w - 0.5, (v + oy) * h - 0.5)
+            worst = maxOf(worst, abs(e - Color.red(out[y * w + x])))
         }
         // half-float offsets (~1e-3 relative) on a smooth photo
         assertTrue("worst difference $worst levels", worst <= 3.0)
@@ -393,19 +366,25 @@ class PipelineTest {
         val n = 400
         val src = pattern(n, n)
         val st = push(1f, 0.25f, 0.5f, 0.45f, 0.5f)
-        val layers = listOf(liquify(st))
-        val full = pixels(src, layers) { p, b -> p.deband = false; p.setSource(b) }
         // a tile right of the push, padded by the largest offset as ImageIo does
         val pad = ((WarpField(1f).apply { update(listOf(st)) }.maxOffset() + 0.002f) * n).toInt() + 2
-        val x0 = 192
-        val y0 = 128
-        val tile = Bitmap.createBitmap(src, x0 - pad, y0 - pad, 128 + 2 * pad, 128 + 2 * pad)
-        val part = pixels(tile, layers) { p, b -> p.deband = false; p.setSource(b, x0 - pad, y0 - pad, n, n) }
-        val tw = 128 + 2 * pad
-        for (y in y0 until y0 + 128) for (x in x0 until x0 + 128) {
-            val a = full[y * n + x]
-            val b = part[(y - y0 + pad) * tw + (x - x0 + pad)]
-            for (sh in listOf(16, 8, 0)) assertNear("($x,$y)", (a shr sh) and 0xFF, (b shr sh) and 0xFF, 1)
+        assertTileMatchesFull(src, listOf(liquify(st)), 192, 128, 128, pad, 1)
+    }
+
+    /**
+     * Renders [layers] over all of [src] and over a [size] px tile of it at (x0, y0), padded by [pad] as export does;
+     * the tile's pixels match within [tol]. [extra] sets more inputs after the source.
+     */
+    private fun assertTileMatchesFull(
+        src: Bitmap, layers: List<Layer>, x0: Int, y0: Int, size: Int, pad: Int, tol: Int,
+        deband: Boolean = false, label: String = "", extra: Pipeline.() -> Unit = {},
+    ) {
+        val full = pixels(src, layers, deband) { setSource(it); this.extra() }
+        val tile = Bitmap.createBitmap(src, x0 - pad, y0 - pad, size + 2 * pad, size + 2 * pad)
+        val part = pixels(tile, layers, deband) { setSource(it, x0 - pad, y0 - pad, src.width, src.height); this.extra() }
+        val tw = size + 2 * pad
+        for (y in y0 until y0 + size) for (x in x0 until x0 + size) {
+            assertRgbNear("$label($x,$y)", full[y * src.width + x], part[(y - y0 + pad) * tw + (x - x0 + pad)], tol)
         }
     }
 
@@ -414,12 +393,7 @@ class PipelineTest {
     @Test
     fun rawHighlightsAboveWhiteComeBackWithExposure() {
         // Raw decodes are linear F16 with the brightest 1% above 1.0; one stop down must bring 2.0 back to white, not grey.
-        val src = Bitmap.createBitmap(32, 32, Bitmap.Config.RGBA_F16, false, android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB))
-        val two = android.util.Half.toHalf(2f)
-        val one = android.util.Half.toHalf(1f)
-        val buf = java.nio.ByteBuffer.allocateDirect(32 * 32 * 8).order(java.nio.ByteOrder.nativeOrder())
-        repeat(32 * 32) { buf.putShort(two).putShort(two).putShort(two).putShort(one) }
-        src.copyPixelsFromBuffer(buf.rewind())
+        val src = f16(32, 32, android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB, 2f)
         assertEquals(255.0, redsOf(src, listOf(Layer(1).with(ColorParam.Exposure, -100f / 3))).average(), 1.0)
         // a Curves layer on top of the raw must not cut that range off
         val curved = Layer(1).copy(curves = Curves(rgb = listOf(0f, 0f, 0.5f, 0.6f, 1f, 1f)))
@@ -429,6 +403,9 @@ class PipelineTest {
     // --- Detail: Blur and Sharpen (M4) ---
 
     private fun blur(amount: Float) = Layer(1, kind = LayerKind.Blur, detail = Detail(amount = amount))
+
+    /** An n×n subject or depth mask: full on the left half, none on the right. */
+    private fun leftHalf(n: Int) = SubjectMask(n, n, ByteArray(n * n) { if (it % n < n / 2) -1 else 0 })
 
     /** The step edge (lo | hi at x = edge) blurred by a Gaussian of [sigma] px, sampled at pixel centre x. */
     private fun bell(x: Int, edge: Int, lo: Int, hi: Int, sigma: Double): Double {
@@ -463,9 +440,8 @@ class PipelineTest {
         val src = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
             setPixels(IntArray(w * h) { if (it % w < w / 2) Color.rgb(220, 30, 30) else Color.rgb(30, 30, 220) }, 0, w, 0, 0, w, h)
         }
-        val subject = SubjectMask(Segment.SIZE, Segment.SIZE, ByteArray(Segment.SIZE * Segment.SIZE) { if (it % Segment.SIZE < Segment.SIZE / 2) -1 else 0 })
         val bg = blur(100f).copy(mask = Mask(listOf(SubjectStep(background = true))))
-        val out = pixels(src, listOf(bg)) { p, b -> p.deband = false; p.setSource(b); p.setSubjects(mapOf(emptyList<Float>() to subject)) }
+        val out = pixels(src, listOf(bg), deband = false) { setSource(it); setSubjects(mapOf(emptyList<Float>() to leftHalf(Segment.SIZE))) }
         val reds = (w / 2 + 1 until w / 2 + 12).map { x -> Color.red(out[h / 2 * w + x]) }
         assertTrue("background next to the subject stays blue: $reds", reds.all { it < 45 })
         // the subject itself is untouched
@@ -489,7 +465,7 @@ class PipelineTest {
         val n = 400
         val src = gray(n, n) { x, y -> if (hypot((x - n / 2).toDouble(), (y - n / 2).toDouble()) <= 3.0) 255 else 0 }
         val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Lens, amount = 100f))
-        val out = pixels(src, listOf(lens)) { p, b -> p.deband = false; p.setSource(b) }
+        val out = pixels(src, listOf(lens), deband = false)
         val lit = { x: Int, y: Int -> Color.red(out[(n / 2 + y) * n + n / 2 + x]) > 3 }
         assertTrue("lit inside the disc", lit(0, 8) && lit(8, 0) && lit(-8, 0) && lit(0, -8))
         assertTrue("dark outside it", !lit(0, 26) && !lit(26, 0))
@@ -504,9 +480,8 @@ class PipelineTest {
         val w = 300
         val h = 300
         val src = gray(w, h) { x, y -> if (x < w / 2) (if (y % 4 < 2) 40 else 200) else (if (x % 6 < 3) 60 else 220) }
-        val depth = SubjectMask(64, 64, ByteArray(64 * 64) { if (it % 64 < 32) -1 else 0 })
         val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Lens, amount = 100f, bloom = 0f, focusX = 0.25f, focusY = 0.5f, range = 0f))
-        val out = pixels(src, listOf(lens)) { p, b -> p.deband = false; p.setSource(b); p.setDepth(depth) }
+        val out = pixels(src, listOf(lens), deband = false) { setSource(it); setDepth(leftHalf(64)) }
         val inp = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
         // the near half (up to a few px from the edge, where the depth map is smoothed) is untouched
         for (y in 100 until 200) for (x in 20 until w / 2 - 8) assertNear("($x,$y)", Color.red(inp[y * w + x]), Color.red(out[y * w + x]), 1)
@@ -518,9 +493,8 @@ class PipelineTest {
     @Test
     fun depthRangeStepSelectsTheNearHalf() {
         // depth map: left half near (255), right half far (0); a Near step brightens only the left
-        val depth = SubjectMask(64, 64, ByteArray(64 * 64) { if (it % 64 < 32) -1 else 0 })
         val layer = Layer(1, mask = Mask(listOf(LuminanceStep.Near))).with(ColorParam.Exposure, 50f)
-        val out = pixels(gray(64, 32) { _, _ -> 100 }, listOf(layer)) { p, b -> p.deband = false; p.setSource(b); p.setDepth(depth) }
+        val out = pixels(gray(64, 32) { _, _ -> 100 }, listOf(layer), deband = false) { setSource(it); setDepth(leftHalf(64)) }
         assertTrue("near half brightened (${Color.red(out[16 * 64 + 8])})", Color.red(out[16 * 64 + 8]) > 140)
         assertEquals("far half untouched", 100.0, Color.red(out[16 * 64 + 56]).toDouble(), 1.0)
     }
@@ -531,7 +505,7 @@ class PipelineTest {
         val n = 400
         val src = gray(n, n) { x, y -> if (x in 199..200 && y in 199..200) 255 else 0 }
         for (angle in listOf(0f, 90f)) {
-            val out = pixels(src, listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Motion, amount = 100f, angle = angle)))) { p, b -> p.deband = false; p.setSource(b) }
+            val out = pixels(src, listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Motion, amount = 100f, angle = angle))), deband = false)
             val lit = { dx: Int, dy: Int -> Color.red(out[(200 + dy) * n + 200 + dx]) > 0 }
             val along = if (angle == 0f) lit(15, 0) && lit(-15, 0) else lit(0, 15) && lit(0, -15)
             val across = if (angle == 0f) lit(0, 8) || lit(0, -8) else lit(8, 0) || lit(-8, 0)
@@ -541,7 +515,7 @@ class PipelineTest {
         }
         // Zoom: stripes everywhere; the centre (on pixel 200's middle) keeps its pixel, far away the stripes smear
         val stripes = gray(n, n) { x, _ -> if (x % 8 < 4) 40 else 220 }
-        val z = pixels(stripes, listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Zoom, amount = 100f, focusX = 200.5f / n, focusY = 200.5f / n)))) { p, b -> p.deband = false; p.setSource(b) }
+        val z = pixels(stripes, listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Zoom, amount = 100f, focusX = 200.5f / n, focusY = 200.5f / n))), deband = false)
         val sp = IntArray(n * n).also { stripes.getPixels(it, 0, n, 0, 0, n, n) }
         assertNear("centre", Color.red(sp[200 * n + 200]), Color.red(z[200 * n + 200]), 1)
         val edge = (20 until 60).map { Color.red(z[200 * n + it]) }
@@ -562,17 +536,59 @@ class PipelineTest {
             listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Motion, amount = 100f, angle = 30f))) to 64,
             listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(BlurType.Zoom, amount = 30f, focusX = 0.2f, focusY = 0.3f))) to 128,
         )) {
-        val depth = SubjectMask(64, 64, ByteArray(64 * 64) { ((it % 64) * 4).toByte() })
-        val full = pixels(src, layers) { p, b -> p.deband = false; p.setSource(b); p.setDepth(depth) }
-        val tile = Bitmap.createBitmap(src, 128 - pad, 128 - pad, 128 + 2 * pad, 128 + 2 * pad)
-        val part = pixels(tile, layers) { p, b -> p.deband = false; p.setSource(b, 128 - pad, 128 - pad, n, n); p.setDepth(depth) }
-        val tw = 128 + 2 * pad
-        for (y in 128 until 256) for (x in 128 until 256) {
-            val a = full[y * n + x]
-            val b = part[(y - 128 + pad) * tw + (x - 128 + pad)]
-            for (sh in listOf(16, 8, 0)) assertNear("${layers[0].detail.type} ($x,$y)", (a shr sh) and 0xFF, (b shr sh) and 0xFF, 2)
+            val depth = SubjectMask(64, 64, ByteArray(64 * 64) { ((it % 64) * 4).toByte() })
+            assertTileMatchesFull(src, layers, 128, 128, 128, pad, 2, label = "${layers[0].detail.type} ") { setDepth(depth) }
         }
-        }
+    }
+
+    // --- AI eraser (M6) ---
+
+    private fun redPatch(w: Int, h: Int) = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(220, 20, 20)) }
+
+    @Test
+    fun retouchShowsItsPatchOnlyInsideItsRectAndMask() {
+        val n = 400
+        val src = gray(n, n) { _, _ -> 100 }
+        val patch = Patch(0.25f, 0.25f, 0.75f, 0.75f, redPatch(50, 50))
+        // no mask: the whole rectangle
+        val plain = pixels(src, listOf(Layer(1, kind = LayerKind.Retouch, patch = patch)), deband = false)
+        assertNear("inside", 220, Color.red(plain[200 * n + 200]), 2)
+        assertNear("outside", 100, Color.red(plain[50 * n + 50]), 1)
+        // painted mask: only under the stroke
+        val stroke = Stroke(listOf(0.5f, 0.5f), 0.08f, 0f, 1f)
+        val masked = Layer(1, kind = LayerKind.Retouch, patch = patch, mask = Mask(listOf(BrushStep(listOf(stroke)))))
+        val out = pixels(src, listOf(masked), deband = false)
+        assertNear("under the stroke", 220, Color.red(out[200 * n + 200]), 2)
+        assertNear("in the rectangle, off the stroke", 100, Color.red(out[120 * n + 120]), 1)
+    }
+
+    @Test
+    fun retouchedExportTileMatchesTheFullRender() {
+        val n = 400
+        val src = pattern(n, n)
+        val layers = listOf(Layer(1, kind = LayerKind.Retouch, patch = Patch(0.3f, 0.3f, 0.6f, 0.6f, pattern(37, 37)),
+            mask = Mask(listOf(BrushStep(listOf(Stroke(listOf(0.45f, 0.45f), 0.1f, 0.5f, 1f)))))))
+        assertTileMatchesFull(src, layers, 128, 128, 128, 16, 2)
+    }
+
+    @Test
+    fun eraserContinuesStripesAcrossTheHole() {
+        val model = java.io.File(ctx.getExternalFilesDir("models"), "lama_f16.mnn")
+        org.junit.Assume.assumeTrue("push lama_f16.mnn (models/lama_f16.mnn.part1 + part2 joined) first", model.exists())
+        // vertical stripes 16 px wide, with a solid block in the middle to remove
+        val w = 640
+        val h = 480
+        val photo = gray(w, h) { x, y -> if (x in 280 until 360 && y in 200 until 280) 30 else if (x / 16 % 2 == 0) 60 else 200 }
+        val hole = ByteArray(w * h) { i -> if (i % w in 276 until 364 && i / w in 196 until 284) 1 else 0 }
+        val t = System.nanoTime()
+        val (box, px) = Segment.erase(model, photo, hole) ?: error("erase failed")
+        android.util.Log.d("Bloom", "eraser test: ${(System.nanoTime() - t) / 1_000_000} ms")
+        assertTrue("box covers the hole: ${box.toList()}", box[0] <= 276 && box[1] <= 196 && box[2] >= 364 && box[3] >= 284)
+        // inside the old block, columns that were dark stripes stay darker than the light ones
+        val col = { x: Int -> (210 until 270).map { y -> Color.red(px.getPixel(x - box[0], y - box[1])) }.average() }
+        val dark = (290 until 350).filter { it / 16 % 2 == 0 }.map(col).average()
+        val light = (290 until 350).filter { it / 16 % 2 == 1 }.map(col).average()
+        assertTrue("stripes continue: dark $dark, light $light", light - dark > 40)
     }
 
     // --- AI subject (M3) ---
@@ -600,21 +616,13 @@ class PipelineTest {
     @Test
     fun subjectStepsFollowTheSubjectMask() {
         // subject = left half of the upright image; brighten the subject, then the background
-        val mask = SubjectMask(Segment.SIZE, Segment.SIZE, ByteArray(Segment.SIZE * Segment.SIZE) { if (it % Segment.SIZE < Segment.SIZE / 2) -1 else 0 })
+        val mask = leftHalf(Segment.SIZE)
         for (background in listOf(false, true)) {
             val layer = Layer(1, mask = Mask(listOf(SubjectStep(background = background)))).with(ColorParam.Exposure, 50f)
-            val out = Offscreen().use {
-                val p = Pipeline()
-                try {
-                    p.setSource(gray(64, 32) { _, _ -> 100 })
-                    p.setSubjects(mapOf(emptyList<Float>() to mask))
-                    val b = p.renderToBitmap(listOf(layer))
-                    intArrayOf(Color.red(b.getPixel(8, 16)), Color.red(b.getPixel(56, 16)))
-                } finally {
-                    p.release()
-                }
-            }
-            val (left, right) = if (background) out[1] to out[0] else out[0] to out[1]
+            val out = redsOf(gray(64, 32) { _, _ -> 100 }, listOf(layer)) { setSource(it); setSubjects(mapOf(emptyList<Float>() to mask)) }
+            val a = out[16 * 64 + 8]
+            val b = out[16 * 64 + 56]
+            val (left, right) = if (background) b to a else a to b
             assertTrue("background=$background: selected side brightened ($left)", left > 140)
             assertEquals("background=$background: other side untouched", 100.0, right.toDouble(), 1.0) // ±1: deband dither
         }
@@ -645,17 +653,8 @@ class PipelineTest {
         floatArrayOf(1f, 1f, 1f), floatArrayOf(4f, 4f, 4f), floatArrayOf(1f, 1f, 1f), floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 0f, 0f),
     )
 
-    private fun hdrReds(layers: List<Layer>, gain: HdrGain?, level: Int = 250): IntArray = Offscreen().use {
-        val p = Pipeline()
-        try {
-            p.setSource(gray(32, 32) { _, _ -> level })
-            p.setGainmap(gain)
-            val out = p.renderToBitmap(layers)
-            IntArray(32 * 32).also { out.getPixels(it, 0, 32, 0, 0, 32, 32) }.map { Color.red(it) }.toIntArray()
-        } finally {
-            p.release()
-        }
-    }
+    private fun hdrReds(layers: List<Layer>, gain: HdrGain?, level: Int = 250) =
+        redsOf(gray(32, 32) { _, _ -> level }, layers) { setSource(it); setGainmap(gain) }
 
     private val minusTwo = Layer(1).with(ColorParam.Exposure, -200f / 3)
 
@@ -709,17 +708,8 @@ class PipelineTest {
         BrushStep(listOf(Stroke(listOf(x, y), r, softness = 0f, flow = 1f)), add)
 
     /** Renders onto a gray w×h image and returns the red channel of every pixel, row by row. */
-    private fun reds(layers: List<Layer>, w: Int = 16, h: Int = 16, setup: (Pipeline, Bitmap) -> Unit = { p, b -> p.setSource(b) }): IntArray =
-        Offscreen().use {
-            val p = Pipeline()
-            try {
-                setup(p, Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(128, 128, 128)) })
-                val out = p.renderToBitmap(layers)
-                IntArray(w * h).also { out.getPixels(it, 0, w, 0, 0, w, h) }.map { Color.red(it) }.toIntArray()
-            } finally {
-                p.release()
-            }
-        }
+    private fun reds(layers: List<Layer>, w: Int = 16, h: Int = 16, setup: Pipeline.(Bitmap) -> Unit = { setSource(it) }) =
+        redsOf(gray(w, h) { _, _ -> 128 }, layers, setup = setup)
 
     @Test
     fun maskWithoutVisibleStepsCoversTheWholeLayer() {
@@ -775,7 +765,7 @@ class PipelineTest {
         val layers = listOf(plusOne.copy(mask = mask))
         val upright = reds(layers, 16, 8)
         val orient = Matrix().apply { postRotate(90f, 0.5f, 0.5f) }
-        val tiles = (0..1).map { ty -> reds(layers, 8, 8) { p, b -> p.setSource(b, 0, ty * 8, 8, 16, orient, 2f) } }
+        val tiles = (0..1).map { ty -> reds(layers, 8, 8) { setSource(it, 0, ty * 8, 8, 16, orient, 2f) } }
         for (sy in 0 until 16) for (sx in 0 until 8) {
             // rotating 90° clockwise moves sensor pixel (sx, sy) to upright (15 - sy, sx)
             val sensor = tiles[sy / 8][(sy % 8) * 8 + sx]
@@ -784,22 +774,14 @@ class PipelineTest {
     }
 
     private fun assertNear(msg: String, expected: Int, actual: Int, tol: Int) =
-        org.junit.Assert.assertTrue("$msg: expected $expected, got $actual", kotlin.math.abs(expected - actual) <= tol)
+        assertTrue("$msg: expected $expected, got $actual", abs(expected - actual) <= tol)
+
+    /** Each of R, G and B of ARGB [actual] is within [tol] of [expected]'s. */
+    private fun assertRgbNear(msg: String, expected: Int, actual: Int, tol: Int) {
+        for (sh in listOf(16, 8, 0)) assertNear(msg, (expected shr sh) and 0xFF, (actual shr sh) and 0xFF, tol)
+    }
 
     // --- color / luminance ranges, feather, eyedropper (M2b) ---
-
-    /** Renders [layers] over [src] and returns every pixel (ARGB), row by row. */
-    private fun pixels(src: Bitmap, layers: List<Layer>, setup: (Pipeline, Bitmap) -> Unit = { p, b -> p.setSource(b) }): IntArray =
-        Offscreen().use {
-            val p = Pipeline()
-            try {
-                setup(p, src)
-                val out = p.renderToBitmap(layers)
-                IntArray(out.width * out.height).also { out.getPixels(it, 0, out.width, 0, 0, out.width, out.height) }
-            } finally {
-                p.release()
-            }
-        }
 
     @Test
     fun luminanceStepSelectsOnlyItsRange() {
@@ -827,8 +809,7 @@ class PipelineTest {
     @Test
     fun featherSoftensAnEdgeEvenly() {
         // 200 px tall: feather 1 = 6 px radius. Hard dab edge 50 px right of centre.
-        val gray = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(128, 128, 128)) }
-        val out = pixels(gray, listOf(plusOne.copy(mask = Mask(listOf(dab(0.5f, 0.5f, 0.25f).copy(feather = 1f))))))
+        val out = pixels(gray(200, 200) { _, _ -> 128 }, listOf(plusOne.copy(mask = Mask(listOf(dab(0.5f, 0.5f, 0.25f).copy(feather = 1f))))))
         fun f(x: Int) = (Color.red(out[100 * 200 + x]) - 128) / (plusOneValue - 128)
         assertEquals("on the edge", 0.5, f(150), 0.12)
         assertTrue("well inside: ${f(140)}", f(140) > 0.9)
@@ -842,27 +823,15 @@ class PipelineTest {
             for (y in 0 until 200) for (x in 0 until 200) setPixel(x, y, Color.rgb(x, y, 128))
         }
         val layers = listOf(plusOne.copy(mask = Mask(listOf(dab(0.45f, 0.5f, 0.2f).copy(feather = 1f), LuminanceStep.Midtones.copy(add = false, feather = 0.5f)))))
-        val full = pixels(src, layers)
         // tile covering x, y in 40..140 plus 8 px of overlap, as export does
-        val tile = Bitmap.createBitmap(src, 32, 32, 116, 116)
-        val part = pixels(tile, layers) { p, b -> p.setSource(b, 32, 32, 200, 200) }
-        for (y in 40 until 140) for (x in 40 until 140) {
-            val a = full[y * 200 + x]
-            val b = part[(y - 32) * 116 + (x - 32)]
-            for (sh in listOf(16, 8, 0)) assertNear("($x,$y)", (a shr sh) and 0xFF, (b shr sh) and 0xFF, 2)
-        }
+        assertTileMatchesFull(src, layers, 40, 40, 100, 8, 2, deband = true)
     }
 
     @Test
     fun eyedropperReadsTheLayersBelow() = Offscreen().use {
         val p = Pipeline()
-        try {
-            p.setSource(Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(128, 128, 128)) })
-            val c = p.sample(listOf(plusOne), 0.5f, 0.5f)
-            c.forEach { assertEquals(plusOneValue / 255, it.toDouble(), 2.0 / 255) }
-        } finally {
-            p.release()
-        }
+        p.setSource(gray(16, 16) { _, _ -> 128 })
+        p.sample(listOf(plusOne), 0.5f, 0.5f).forEach { assertEquals(plusOneValue / 255, it.toDouble(), 2.0 / 255) }
     }
 
     @Test

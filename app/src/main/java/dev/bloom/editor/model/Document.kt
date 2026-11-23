@@ -14,23 +14,29 @@ enum class Blend(val label: String) { Normal("Normal"), Multiply("Multiply"), Sc
  * [radius] is a fraction of the image height; [softness] and [flow] are 0..1.
  */
 data class Stroke(val points: List<Float>, val radius: Float, val softness: Float, val flow: Float) {
-    /** Adds dabs from the last one toward (x, y), a quarter radius apart. [aspect] is image width / height. */
-    fun lineTo(x: Float, y: Float, aspect: Float): Stroke {
-        if (points.isEmpty()) return copy(points = listOf(x, y))
-        val lx = points[points.size - 2]
-        val ly = points[points.size - 1]
-        val d = hypot((x - lx) * aspect, y - ly)
-        val step = radius * 0.25f
-        val n = (d / step).toInt()
-        if (n == 0) return this
-        val added = ArrayList<Float>(n * 2)
-        for (i in 1..n) {
-            val t = i * step / d
-            added += lx + (x - lx) * t
-            added += ly + (y - ly) * t
-        }
-        return copy(points = points + added)
+    /** Adds dabs from the last one toward (x, y), a quarter radius apart; this stroke itself when none fit. */
+    fun lineTo(x: Float, y: Float, aspect: Float) =
+        points.dabsTo(x, y, aspect, radius * 0.25f).let { if (it === points) this else copy(points = it) }
+}
+
+/**
+ * These x,y dab centres plus dabs from the last one toward (x, y), [step] apart (a fraction of the image height;
+ * [aspect] is image width / height). The same list when no dab fits.
+ */
+fun List<Float>.dabsTo(x: Float, y: Float, aspect: Float, step: Float): List<Float> {
+    if (isEmpty()) return listOf(x, y)
+    val lx = this[size - 2]
+    val ly = this[size - 1]
+    val d = hypot((x - lx) * aspect, y - ly)
+    val n = (d / step).toInt()
+    if (n == 0) return this
+    val out = ArrayList<Float>(size + n * 2).apply { addAll(this@dabsTo) }
+    for (i in 1..n) {
+        val t = i * step / d
+        out += lx + (x - lx) * t
+        out += ly + (y - ly) * t
     }
+    return out
 }
 
 /**
@@ -109,7 +115,7 @@ data class Mask(val steps: List<MaskStep> = emptyList(), val invert: Boolean = f
     /** A mask with no visible steps leaves the whole layer on. */
     val active: Boolean get() = steps.any { it.visible }
 
-    /** Color and Luminance steps sample the layers below, so the mask changes when they do. */
+    /** Color, Luminance and Subject steps sample the layers below, so the mask changes when they do. */
     val readsBelow: Boolean get() = steps.any { it.visible && (it is ColorStep || it is LuminanceStep || it is SubjectStep) }
 
     /** Largest feather of a visible step (0..1); export tiles need that much overlap. */
@@ -201,9 +207,14 @@ private fun tangents(p: List<Float>): FloatArray {
     return m
 }
 
-/** One Color layer. Values are slider units (-100..100), indexed by [ColorParam.ordinal]. */
-/** What a layer does. Color uses [Layer.values] and [Layer.curves]; Blur and Sharpen use [Layer.detail]; Liquify [Layer.warp]. */
-enum class LayerKind { Color, Blur, Sharpen, Liquify }
+/**
+ * What a layer does. Color uses [Layer.values] and [Layer.curves]; Blur and Sharpen use [Layer.detail]; Liquify
+ * [Layer.warp]; Retouch [Layer.patch]. The shader reads the ordinal (uKind), so don't reorder.
+ */
+enum class LayerKind { Color, Blur, Sharpen, Liquify, Retouch }
+
+/** A Retouch layer's filled pixels (AI eraser) and where they go: upright 0..1, right / bottom exclusive. */
+class Patch(val left: Float, val top: Float, val right: Float, val bottom: Float, val pixels: android.graphics.Bitmap)
 
 /**
  * Blur and Sharpen settings, 0..100 unless noted. Blur: [amount] is the radius (Gaussian: 100 = sigma 2% of the image
@@ -228,6 +239,7 @@ data class Detail(
  */
 enum class BlurType { Gaussian, Lens, Motion, Zoom }
 
+/** One layer. Color [values] are slider units (-100..100), indexed by [ColorParam.ordinal]. */
 data class Layer(
     val id: Long,
     val values: List<Float> = List(ColorParam.entries.size) { 0f },
@@ -239,6 +251,7 @@ data class Layer(
     val kind: LayerKind = LayerKind.Color,
     val detail: Detail = Detail(),
     val warp: List<WarpStroke> = emptyList(),
+    val patch: Patch? = null,
 ) {
     /** Whether the layer changes the photo at all (mask and blend aside). */
     val edited: Boolean get() = when (kind) {
@@ -246,6 +259,7 @@ data class Layer(
         LayerKind.Blur -> detail.amount > 0f
         LayerKind.Sharpen -> detail.amount > 0f || detail.clarity != 0f
         LayerKind.Liquify -> warp.isNotEmpty()
+        LayerKind.Retouch -> patch != null
     }
     operator fun get(p: ColorParam) = values[p.ordinal]
     fun with(p: ColorParam, v: Float) = copy(values = values.toMutableList().also { it[p.ordinal] = v })
@@ -262,7 +276,7 @@ data class Document(val layers: List<Layer> = emptyList(), val deband: Boolean =
     }
 }
 
-/** Undo/redo over immutable snapshots; documents hold parameters only, so snapshots are cheap. */
+/** Undo/redo over immutable snapshots; snapshots share unchanged layers (and Retouch patch bitmaps), so they are cheap. */
 data class History(
     val past: List<Document> = emptyList(),
     val current: Document = Document(),

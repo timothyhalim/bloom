@@ -100,9 +100,10 @@ object ImageIo {
             postRotate(rotation.toFloat(), 0.5f, 0.5f)
             if (flipped) postScale(-1f, 1f, 0.5f, 0.5f)
         }
-        val aspect = if (rotation % 180 == 0) w.toFloat() / h else h.toFloat() / w
-        // Feather and deband read neighbours across tile edges, so each tile is rendered with that much overlap and cropped back.
+        val uprightW = if (rotation % 180 == 0) w else h
         val uprightH = if (rotation % 180 == 0) h else w
+        val aspect = uprightW.toFloat() / uprightH
+        // Feather and deband read neighbours across tile edges, so each tile is rendered with that much overlap and cropped back.
         val feather = layers.filter { it.visible }.maxOfOrNull { it.mask.maxFeather } ?: 0f
         // Subject edges look up to 3 mask texels away (joint bilateral upsampling).
         val subjectReach = if (subjects.isNotEmpty() && layers.any { l -> l.visible && l.mask.steps.any { it.visible && it is SubjectStep } }) 3f / Segment.SIZE else 0f
@@ -115,7 +116,6 @@ object ImageIo {
         val region = BitmapFactory.Options().apply { inPreferredColorSpace = SRGB }
         // ponytail: whole image in memory (8 bytes/px for PNG, ~400 MB at 50 MP); stream rows to the encoder if phones run out
         val upright = Matrix()
-        val uprightW = if (rotation % 180 == 0) w else h
         // Cropped or scaled: tiles cover the output, each rendered from the source rect its corners map back to.
         val (cw, ch) = crop.size(aspect)
         val ow = if (warped) (cw * uprightH * scale).roundToInt().coerceAtLeast(1) else 0
@@ -136,6 +136,7 @@ object ImageIo {
         val pipeline = gpu?.let { Pipeline() }
         pipeline?.setSubjects(subjects)
         pipeline?.setDepth(depth)
+        pipeline?.deband = deband
         if (pipeline != null && raw == null && Build.VERSION.SDK_INT >= 34) {
             // The whole photo's gain map, at the preview's size so export matches it; sensor orientation like the tiles.
             cr.openInputStream(src)!!.use {
@@ -149,6 +150,8 @@ object ImageIo {
         val step = if (warped) (TILE * minOf(scale, 1f)).toInt().coerceAtLeast(64) else TILE
         val tiles = ((outW + step - 1) / step) * ((outH + step - 1) / step)
         var done = 0
+        fun read(r: Rect): Bitmap = if (raw != null) Bitmap.createBitmap(raw, r.left, r.top, r.width(), r.height()) else decoder!!.decodeRegion(r, region)
+        fun upload(r: Rect) = read(r).let { pipeline!!.setSource(it, r.left, r.top, w, h, orient, aspect); it.recycle() }
         try {
             if (warped) for (oy in 0 until outH step step) for (ox in 0 until outW step step) {
                 val tw = minOf(step, outW - ox)
@@ -164,35 +167,23 @@ object ImageIo {
                     (maxOf(b.left.toInt() - margin, 0) / 64) * 64, (maxOf(b.top.toInt() - margin, 0) / 64) * 64,
                     minOf(b.right.toInt() + margin + 1, w), minOf(b.bottom.toInt() + margin + 1, h),
                 )
-                val tile = if (raw != null) Bitmap.createBitmap(raw, r.left, r.top, r.width(), r.height()) else decoder!!.decodeRegion(r, region)
-                pipeline!!.setSource(tile, r.left, r.top, w, h, orient, aspect)
-                pipeline.deband = deband
-                tile.recycle()
+                upload(r)
                 // sensor 0..1 -> this source rect's texture 0..1
                 val toTex = floatArrayOf(w.toFloat() / r.width(), 0f, -r.left.toFloat() / r.width(), 0f, h.toFloat() / r.height(), -r.top.toFloat() / r.height(), 0f, 0f, 1f)
-                val part = pipeline.renderToBitmap(layers, png, Crop.mul(toTex, tileToSensor), tw, th)
+                val part = pipeline!!.renderToBitmap(layers, png, Crop.mul(toTex, tileToSensor), tw, th)
                 canvas.drawBitmap(part, ox.toFloat(), oy.toFloat(), null)
                 part.recycle()
                 progress(tilesFrom + (0.95f - tilesFrom) * ++done / tiles)
             } else for (y in 0 until h step TILE) for (x in 0 until w step TILE) {
                 val r = Rect(maxOf(x - pad, 0), maxOf(y - pad, 0), minOf(x + TILE + pad, w), minOf(y + TILE + pad, h))
-                var tile = if (raw != null) Bitmap.createBitmap(raw, r.left, r.top, r.width(), r.height()) else decoder!!.decodeRegion(r, region)
-                if (pipeline != null) {
-                    pipeline.setSource(tile, r.left, r.top, w, h, orient, aspect)
-                    pipeline.deband = deband
-                    tile.recycle()
-                    val padded = pipeline.renderToBitmap(layers, png)
-                    tile = if (pad == 0) padded
-                    else Bitmap.createBitmap(padded, x - r.left, y - r.top, minOf(TILE, w - x), minOf(TILE, h - y)).also { padded.recycle() }
-                } else if (pad > 0) {
-                    tile = Bitmap.createBitmap(tile, x - r.left, y - r.top, minOf(TILE, w - x), minOf(TILE, h - y))
-                }
+                val padded = if (pipeline == null) read(r) else { upload(r); pipeline.renderToBitmap(layers, png) }
+                val tile = if (pad == 0) padded
+                else Bitmap.createBitmap(padded, x - r.left, y - r.top, minOf(TILE, w - x), minOf(TILE, h - y)).also { if (it !== padded) padded.recycle() }
                 canvas.drawBitmap(tile, x.toFloat(), y.toFloat(), null)
                 tile.recycle()
                 progress(tilesFrom + (0.95f - tilesFrom) * ++done / tiles)
             }
         } finally {
-            pipeline?.release()
             gpu?.close()
             decoder?.recycle()
             raw?.recycle()

@@ -6,7 +6,6 @@ import android.graphics.Bitmap
 import android.graphics.RectF
 import android.opengl.GLES30.*
 import android.opengl.GLSurfaceView
-import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -63,14 +62,24 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
 
     /** One-finger events in upright image coordinates (0..1). Null = one finger pans. */
     var onTool: ((ToolTouch, Float, Float) -> Unit)? = null
+        set(v) { field = v; lastTouch = null; placeRing() }
+
+    // The brush ring rests where the finger last lifted (shown size, in what is shown 0..1); hidden while drawing.
+    private var lastTouch: Pair<Float, Float>? = null
+
+    private fun placeRing() {
+        renderer.ring = lastTouch?.takeIf { brushRadiusPx > 0f }?.let { (u, v) -> outputToView(u, v).let { (x, y) -> floatArrayOf(x, y, brushRadiusPx) } }
+        requestRender()
+    }
 
     /** Show the loupe while a tool finger is down (painting, eyedropper). */
     var loupe = false
 
     /** Brush ring radius on screen in px, drawn at the finger and in the loupe; 0 = no ring. */
     var brushRadiusPx = 0f
+        set(v) { field = v; placeRing() }
 
-    /** Brush softness 0..1: a faint inner ring marks where the brush starts to fade. */
+    /** Brush softness 0..1: the ring is solid where the brush is at full strength and dashed where it fades out. */
     var brushSoftness: Float
         get() = renderer.softness
         set(v) { renderer.softness = v }
@@ -148,6 +157,14 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
         requestRender()
     }
 
+    /** Layer [id]'s mask as rendered in the preview (preview width × height bytes), delivered on the main thread; null if none. */
+    fun maskOf(layers: List<Layer>, id: Long, done: (ByteArray?) -> Unit) {
+        queueEvent {
+            val m = renderer.maskPixels(layers, id)
+            post { done(m) }
+        }
+    }
+
     /** Eyedropper: color of [layers] at upright (u, v), sRGB 0..1, delivered on the main thread. */
     fun sample(layers: List<Layer>, u: Float, v: Float, done: (FloatArray) -> Unit) {
         queueEvent {
@@ -161,7 +178,7 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
     fun toImage(x: Float, y: Float): Pair<Float, Float> = viewToOutput(x, y).let { (u, v) -> Crop.map(crop, u, v) ?: (-1f to -1f) }
 
     /** Upright photo 0..1 -> view px. */
-    fun toView(u: Float, v: Float): Pair<Float, Float> = (Crop.map(uncrop, u, v) ?: (-1f to -1f)).let { (ou, ov) -> outputToView(ou, ov) }
+    fun toView(u: Float, v: Float): Pair<Float, Float> = toOutput(u, v).let { (ou, ov) -> outputToView(ou, ov) }
 
     /** Upright photo 0..1 -> what is shown, 0..1. */
     fun toOutput(u: Float, v: Float): Pair<Float, Float> = Crop.map(uncrop, u, v) ?: (-1f to -1f)
@@ -216,7 +233,7 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
         val oy = panY + cy
         shown = floatArrayOf(sx, sy, panX, oy)
         renderer.setTransform(sx, sy, panX, oy)
-        requestRender()
+        placeRing()
         onTransform?.invoke()
         onViewport?.invoke(
             if (zoom <= 1.01f || (sx <= 1f && sy <= a)) null
@@ -273,6 +290,10 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
                 val d = resources.displayMetrics.density
                 floatArrayOf(e.x, e.y, ou, ov, brushRadiusPx, d)
             } else null
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> renderer.ring = null
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { lastTouch = ou to ov; placeRing() }
+            }
             requestRender()
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { toolDown = true; tool(ToolTouch.Down, u, v) }
@@ -297,14 +318,13 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
     @Volatile var overlay: Long? = null // layer id
     @Volatile var deband = true
     @Volatile var softness = 0f
+    @Volatile var ring: FloatArray? = null // resting brush ring: view x, y (px from the top), radius px
     @Volatile var finger: FloatArray? = null // view x, y, shown u, v, brush ring px, density; null = no loupe
     @Volatile var crop = IDENTITY // shown 0..1 -> upright photo 0..1, row-major
 
     private var bitmap: Bitmap? = null // kept to re-upload after EGL context loss
     private var pipeline: Pipeline? = null
     private var program = 0
-    private var uScale = 0
-    private var uOffset = 0
     private var viewW = 1
     private var viewH = 1
 
@@ -313,6 +333,8 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
     }
 
     fun sample(layers: List<Layer>, u: Float, v: Float): FloatArray? = pipeline?.takeIf { bitmap != null }?.sample(layers, u, v)
+
+    fun maskPixels(layers: List<Layer>, id: Long): ByteArray? = pipeline?.takeIf { bitmap != null }?.let { it.render(layers); it.maskPixels(id) }
 
     private var subjects = emptyMap<List<Float>, SubjectMask>() // kept like the bitmap, for re-upload after context loss
 
@@ -336,8 +358,6 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         glClearColor(0.055f, 0.055f, 0.055f, 1f)
         program = link(DISPLAY_VERTEX, DISPLAY_FRAGMENT)
-        uScale = glGetUniformLocation(program, "uScale")
-        uOffset = glGetUniformLocation(program, "uOffset")
         glUseProgram(program)
         glUniform1i(glGetUniformLocation(program, "uMask"), 1)
         pipeline = Pipeline().also { p ->
@@ -358,7 +378,6 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
             glClear(GL_COLOR_BUFFER_BIT)
             return
         }
-        val start = System.nanoTime()
         val ls = layers
         p.deband = deband
         val tex = p.render(ls)
@@ -369,6 +388,8 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         glViewport(0, 0, viewW, viewH)
         glClear(GL_COLOR_BUFFER_BIT)
         glUseProgram(program)
+        val uScale = glGetUniformLocation(program, "uScale")
+        val uOffset = glGetUniformLocation(program, "uOffset")
         val tr = t
         glUniform2f(uScale, tr[0], tr[1])
         glUniform2f(uOffset, tr[2], tr[3])
@@ -384,8 +405,9 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         val uRing = glGetUniformLocation(program, "uRing")
         glUniform1f(glGetUniformLocation(program, "uSoft"), softness)
         glUniform4f(uLoupe, 0f, 0f, 0f, 0f)
-        // brush ring at the finger (GL window coordinates have y up)
-        glUniform3f(uRing, f?.get(0) ?: 0f, viewH - (f?.get(1) ?: 0f), f?.get(4) ?: 0f)
+        // the resting brush ring (GL window coordinates have y up); while drawing only the loupe shows one
+        val rg = ring
+        glUniform3f(uRing, rg?.get(0) ?: 0f, viewH - (rg?.get(1) ?: 0f), if (f == null) rg?.get(2) ?: 0f else 0f)
         drawFullQuad()
         if (f != null) {
             // Loupe: 104dp circle, top-left; moves to the top-right when the finger is within 150dp of that corner.
@@ -404,9 +426,6 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
             glUniform3f(uRing, cx, cy, f[4] * zoom)
             drawFullQuad()
         }
-        // ponytail: glFinish + log for the M1 fps check; drop once a perf overlay exists.
-        glFinish()
-        Log.d("Bloom", "frame ${layers.size} layers ${(System.nanoTime() - start) / 100_000 / 10f} ms")
     }
 
     private companion object {
@@ -431,7 +450,7 @@ uniform vec2 uFinger; // shown uv under the finger
 uniform vec2 uUvPerPx; // shown uv per screen px at the current zoom
 uniform mat3 uCrop; // shown uv -> photo uv (projective)
 uniform vec3 uRing; // brush ring centre x, y (window px) and radius px; radius 0 = none
-uniform float uSoft; // brush softness: a faint inner ring at (1 - uSoft) of the radius
+uniform float uSoft; // brush softness: full strength inside (1 - uSoft) of the radius, fading out to the radius
 out vec4 outColor;
 """ + DITHER + """
 void main() {
@@ -459,17 +478,20 @@ void main() {
         c = mix(c, vec3(step(0.5, fract(diag / 16.0))), edge);
     }
     if (uRing.z > 0.0) {
-        // white ring with a dark halo, readable on any photo
-        float e = abs(length(gl_FragCoord.xy - uRing.xy) - uRing.z);
-        c = mix(c, vec3(0.0), 0.5 * (1.0 - smoothstep(1.0, 2.5, e)));
-        c = mix(c, vec3(1.0), 1.0 - smoothstep(0.5, 1.2, e));
-        // softness: a faint dashed ring where the brush starts to fade
+        // white rings with a dark halo, readable on any photo: solid where the brush is at full strength,
+        // dashed at its edge when it fades out to there (softness 0: one solid ring at the edge)
         vec2 d = gl_FragCoord.xy - uRing.xy;
+        float len = length(d);
+        bool soft = uSoft > 0.02;
         float inner = uRing.z * (1.0 - uSoft);
-        if (uSoft > 0.02 && inner > 2.0) {
-            float ei = abs(length(d) - inner);
-            float dash = step(0.5, fract(atan(d.y, d.x) * inner / 25.0));
-            c = mix(c, vec3(1.0), 0.6 * dash * (1.0 - smoothstep(0.4, 1.0, ei)));
+        float dash = soft ? step(0.5, fract(atan(d.y, d.x) * uRing.z / 25.0)) : 1.0;
+        float eo = abs(len - uRing.z);
+        c = mix(c, vec3(0.0), 0.5 * dash * (1.0 - smoothstep(1.0, 2.5, eo)));
+        c = mix(c, vec3(1.0), dash * (1.0 - smoothstep(0.5, 1.2, eo)));
+        if (soft && inner > 2.0) {
+            float ei = abs(len - inner);
+            c = mix(c, vec3(0.0), 0.5 * (1.0 - smoothstep(1.0, 2.5, ei)));
+            c = mix(c, vec3(1.0), 1.0 - smoothstep(0.5, 1.2, ei));
         }
     }
     outColor = vec4(dither(c), 1.0);

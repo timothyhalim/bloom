@@ -1,38 +1,30 @@
 package dev.bloom.editor.ui
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bloom.editor.PhotoView
 import dev.bloom.editor.ToolTouch
 import dev.bloom.editor.model.Layer
+import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.WarpStroke
 import dev.bloom.editor.model.WarpTool
-import kotlin.math.roundToInt
 
 /**
  * One finger paints the selected Liquify brush; each touch is one stroke (one undo step once applied).
@@ -42,7 +34,8 @@ class LiquifyTouch(private val state: EditorState, private val photoView: PhotoV
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val hold = object : Runnable {
         override fun run() {
-            val d = state.draft ?: return
+            // stop if the tool changed mid-hold: Up then goes to another handler
+            val d = state.draft?.takeIf { it.kind == LayerKind.Liquify && !state.maskMode } ?: return
             val last = d.warp.lastOrNull() ?: return
             val n = last.points.size
             state.draft = d.copy(warp = d.warp.dropLast(1) + last.copy(points = last.points + last.points[n - 2] + last.points[n - 1]))
@@ -76,16 +69,22 @@ class LiquifyTouch(private val state: EditorState, private val photoView: PhotoV
     }
 }
 
-/** A brush's outline mid-photo: the full radius, and (faint) where its softness starts to fade it. */
+/** A brush's outline mid-photo while its Size or Softness slider moves. */
 @Composable
 fun BrushRing(sizeDp: Float, softness: Float, photoView: PhotoView) {
     Canvas(Modifier.fillMaxSize()) {
         val (x, y) = photoView.outputToView(0.5f, 0.5f)
         val c = Offset(x, y)
         val r = sizeDp.dp.toPx()
-        drawCircle(Color.Black.copy(alpha = 0.5f), r, c, style = Stroke(3.dp.toPx()))
-        drawCircle(Color.White, r, c, style = Stroke(1.5.dp.toPx()))
-        if (softness > 0.02f) drawCircle(Color.White.copy(alpha = 0.6f), r * (1 - softness), c, style = Stroke(1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))))
+        // as on the photo: solid where the brush is at full strength, dashed at its edge when it fades out there
+        val soft = softness > 0.02f
+        val dash = if (soft) PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx())) else null
+        drawCircle(Color.Black.copy(alpha = 0.5f), r, c, style = Stroke(3.dp.toPx(), pathEffect = dash))
+        drawCircle(Color.White, r, c, style = Stroke(1.5.dp.toPx(), pathEffect = dash))
+        if (soft) {
+            drawCircle(Color.Black.copy(alpha = 0.5f), r * (1 - softness), c, style = Stroke(3.dp.toPx()))
+            drawCircle(Color.White, r * (1 - softness), c, style = Stroke(1.5.dp.toPx()))
+        }
     }
 }
 
@@ -100,26 +99,18 @@ private val WarpTool.icon get() = when (this) {
 /** One box above the Liquify bar, like the mask brush's: Size, and More for Strength and Softness. */
 @Composable
 fun LiquifyRows(state: EditorState, box: Modifier) {
-    Column(box) {
-        if (state.warpMore) {
-            SliderRow("Strength", state.warpStrength, 5f..100f) { state.warpStrength = it }
-            SliderRow("Softness", state.warpSoftness, 0f..100f) { state.warpSoftness = it; state.showRing(state.warpSize, it) }
-        }
+    ToolBox(state.warpMore, { state.warpMore = !state.warpMore }, box, moreRows = {
+        SliderRow("Strength", state.warpStrength, 5f..100f) { state.warpStrength = it }
+        SliderRow("Softness", state.warpSoftness, 0f..100f) { state.warpSoftness = it; state.showRing(state.warpSize, it) }
         // Twirl's direction, as its own pair of buttons, with the other settings
-        if (state.warpMore && state.warpTool == WarpTool.Twirl) Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (state.warpTool == WarpTool.Twirl) Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Direction", Modifier.width(84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
             ParamChip(Icons.Rotate, "Clockwise", false, !state.warpReverse) { state.warpReverse = false }
             ParamChip(Icons.RotateBack, "Counterclockwise", false, state.warpReverse) { state.warpReverse = true }
         }
-        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-            // the selected brush's name, as Color names its slider; the slider under it is the brush size
-            ToolLabel(state.warpTool.name, "Size")
-            Slider(state.warpSize, { state.warpSize = it.roundToInt().toFloat(); state.showRing(state.warpSize, state.warpSoftness) }, Modifier.weight(1f), valueRange = 10f..150f, colors = sliderColors())
-            Text("${state.warpSize.roundToInt()}", Modifier.width(36.dp), fontSize = 14.sp, color = Bloom.On)
-            IconButton({ state.warpMore = !state.warpMore }) {
-                Icon(Icons.Up, if (state.warpMore) "Less" else "More settings", Modifier.rotate(if (state.warpMore) 180f else 0f), tint = Bloom.On)
-            }
-        }
+    }) {
+        // the selected brush's name, as Color names its slider; the slider under it is the brush size
+        MainSlider(state.warpTool.name, "Size", state.warpSize, 10f..150f) { state.warpSize = it; state.showRing(it, state.warpSoftness) }
     }
 }
 
@@ -130,6 +121,5 @@ fun RowScope.LiquifyBar(state: EditorState, d: Layer, onDiscard: () -> Unit) {
     Row(Modifier.weight(1f).scrollFade(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
         for (t in WarpTool.entries) ParamChip(t.icon, t.name, false, state.warpTool == t) { state.warpTool = t }
     }
-    MaskButton(d.mask) { state.maskMode = true }
-    IconButton(state::apply) { Icon(Icons.Check, if (state.editingId != null) "Apply changes" else "Apply as Liquify layer", tint = Bloom.Pollen) }
+    MaskAndApply(state, d)
 }

@@ -1,6 +1,5 @@
 package dev.bloom.editor.ui
 
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Modifier
@@ -11,7 +10,6 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -61,11 +59,12 @@ fun BloomTheme(content: @Composable () -> Unit) = MaterialTheme(
  * Use in place of horizontalScroll on the row's viewport.
  */
 @Composable
-fun Modifier.scrollFade(state: ScrollState = rememberScrollState(), width: Dp = 28.dp): Modifier =
-    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen } // DstIn needs its own layer
+fun Modifier.scrollFade(): Modifier {
+    val state = rememberScrollState()
+    return graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen } // DstIn needs its own layer
         .drawWithContent {
             drawContent()
-            val w = width.toPx()
+            val w = 28.dp.toPx()
             if (state.value > 0) drawRect(
                 Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), 0f, w), size = Size(w, size.height), blendMode = BlendMode.DstIn,
             )
@@ -80,6 +79,7 @@ fun Modifier.scrollFade(state: ScrollState = rememberScrollState(), width: Dp = 
             if (state.value < state.maxValue) drawPath(Path().apply { moveTo(size.width - 1.dp.toPx(), cy); lineTo(size.width - 1.dp.toPx() - t, cy - t); lineTo(size.width - 1.dp.toPx() - t, cy + t); close() }, Bloom.OnVariant)
         }
         .horizontalScroll(state)
+}
 
 /** Stroke icons on a 24 grid, same paths as the mockup. */
 object Icons {
@@ -134,6 +134,9 @@ object Icons {
     // Twirl: two separate arrows chasing round a circle, clockwise (y down: sweep 1)
     val Twirl = icon("M5.42 9.61A7 7 0 0 1 18.58 9.61M19.61 6.79L18.58 9.61 15.98 8.11M18.58 14.39A7 7 0 0 1 5.42 14.39M4.39 17.21L5.42 14.39 8.02 15.89")
     val RotateBack = icon("M4 12a8 8 0 1 0 2.3-5.7M4 3v4h4")
+    // AI: a big and a small spark
+    val Sparkle = icon("M10 3l1.8 5.2L17 10l-5.2 1.8L10 17l-1.8-5.2L3 10l5.2-1.8zM18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z")
+    val Eraser = icon("M15 4l5 5-9.5 9.5H6L3 15.5zM8.5 10.5l5 5M10.5 20.5H21")
     val Liquify = icon("M3 8c3-3 6 3 9 0s6-3 9 0M3 16c3-3 6 3 9 0s6-3 9 0")
     val Crop = icon("M6 2v16h16M2 6h16v16")
     val Rotate = icon("M20 12a8 8 0 1 1-2.3-5.7M20 3v4h-4")

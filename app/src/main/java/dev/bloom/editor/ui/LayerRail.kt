@@ -17,6 +17,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -84,7 +85,7 @@ fun LayerRail(
     layers: List<Layer>, // top first
     pending: LayerKind?, // kind of the draft layer when it is new
     activeId: Long?,
-    preview: Bitmap?,
+    preview: Bitmap,
     onTap: (Layer, Float) -> Unit,
     onToggle: (Layer) -> Unit,
     onMove: (Layer, Int) -> Unit, // new top-first index
@@ -128,7 +129,7 @@ fun LayerRail(
                         .clickable(role = Role.Button) { onPhotoTap(photoY) },
                     active = activeId == PHOTO_ID, desc = "Photo layer",
                 ) {
-                    preview?.let { Image(remember(it) { it.asImageBitmap() }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+                    Image(remember(preview) { preview.asImageBitmap() }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 }
             }
             if (scroll.value > 0) Arrow(Icons.Up, "Scroll layers up", Modifier.align(Alignment.TopCenter)) {
@@ -214,7 +215,7 @@ private fun RailItem(
                             val to = (idx + (dy / rowPx).roundToInt()).coerceIn(0, n - 1)
                             lifted = false
                             dy = 0f
-                                            if (to != idx) onMove(l, to)
+                            if (to != idx) onMove(l, to)
                         }
                     }
                 }
@@ -270,52 +271,49 @@ private fun Arrow(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: S
 }
 
 /** How each kind of layer is named and drawn on the rail and in its bubble. */
-val LayerKind.label get() = when (this) {
-    LayerKind.Color -> "Color"
-    LayerKind.Blur -> "Blur"
-    LayerKind.Sharpen -> "Sharpen"
-    LayerKind.Liquify -> "Liquify"
-}
+val LayerKind.label get() = name
 val LayerKind.icon get() = when (this) {
     LayerKind.Color -> Icons.Adjust
     LayerKind.Blur -> Icons.Blur
     LayerKind.Sharpen -> Icons.Sharpen
     LayerKind.Liquify -> Icons.Liquify
+    LayerKind.Retouch -> Icons.Eraser
 }
 
-/** Bubble id of the Photo layer; Color layer ids start at 1. */
+/** Bubble id of the Photo layer; layer ids start at 1. */
 const val PHOTO_ID = 0L
+
+/** A settings bubble's frame, with its tail pointing at the rail. */
+@Composable
+private fun Bubble(modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    Box(modifier) {
+        Column(Modifier.width(236.dp).background(Bloom.SurfaceHigh, shape).border(1.dp, Bloom.Outline, shape).padding(bottom = 8.dp), content = content)
+        Box(Modifier.align(Alignment.TopEnd).padding(top = 34.dp).offset(x = 6.dp).size(12.dp).rotate(45f).background(Bloom.SurfaceHigh).border(1.dp, Bloom.Outline))
+    }
+}
 
 /** Settings bubble for the Photo layer: Smooth banding, on by default; sources deeper than 8 bits don't need it. */
 @Composable
 fun PhotoBubble(deband: Boolean, deep: Boolean, onDeband: (Boolean) -> Unit, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(12.dp)
-    Box(modifier) {
-        Column(Modifier.width(236.dp).background(Bloom.SurfaceHigh, shape).border(1.dp, Bloom.Outline, shape).padding(bottom = 8.dp)) {
-            Text("Photo", Modifier.height(48.dp).padding(start = 16.dp, top = 14.dp), color = Bloom.On)
-            Row(
-                Modifier.fillMaxWidth().toggleable(deband && !deep, enabled = !deep, role = Role.Switch, onValueChange = onDeband)
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                    Text("Smooth banding", fontSize = 14.sp, color = if (deep) Bloom.Outline else Bloom.On)
-                    Text(
-                        if (deep) "Not needed: this photo has more than 8 bits" else "Removes steps in skies when you push edits",
-                        fontSize = 11.sp, color = Bloom.OnVariant,
-                    )
-                }
-                Switch(deband && !deep, null, enabled = !deep)
+    Bubble(modifier) {
+        Text("Photo", Modifier.height(48.dp).padding(start = 16.dp, top = 14.dp), color = Bloom.On)
+        Row(
+            Modifier.fillMaxWidth().toggleable(deband && !deep, enabled = !deep, role = Role.Switch, onValueChange = onDeband)
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                Text("Smooth banding", fontSize = 14.sp, color = if (deep) Bloom.Outline else Bloom.On)
+                Text(
+                    if (deep) "Not needed: this photo has more than 8 bits" else "Removes steps in skies when you push edits",
+                    fontSize = 11.sp, color = Bloom.OnVariant,
+                )
             }
+            Switch(deband && !deep, null, enabled = !deep)
         }
-        BubbleTail(Modifier.align(Alignment.TopEnd))
     }
 }
-
-@Composable
-private fun BubbleTail(modifier: Modifier) = Box(
-    modifier.padding(top = 34.dp).offset(x = 6.dp).size(12.dp).rotate(45f).background(Bloom.SurfaceHigh).border(1.dp, Bloom.Outline),
-)
 
 /** Settings bubble for one layer, pointing at its thumbnail on the rail. */
 @Composable
@@ -331,45 +329,41 @@ fun LayerBubble(
     modifier: Modifier = Modifier,
 ) {
     var blendMenu by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(12.dp)
-    Box(modifier) {
-        Column(Modifier.width(236.dp).background(Bloom.SurfaceHigh, shape).border(1.dp, Bloom.Outline, shape).padding(bottom = 8.dp)) {
-            Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(layer.kind.label, Modifier.weight(1f), color = Bloom.On)
-                IconButton(onClick = onVisible) {
-                    Icon(if (layer.visible) Icons.Eye else Icons.EyeOff, if (layer.visible) "Hide layer" else "Show layer", tint = Bloom.On)
-                }
+    Bubble(modifier) {
+        Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(layer.kind.label, Modifier.weight(1f), color = Bloom.On)
+            IconButton(onClick = onVisible) {
+                Icon(if (layer.visible) Icons.Eye else Icons.EyeOff, if (layer.visible) "Hide layer" else "Show layer", tint = Bloom.On)
             }
-            Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Opacity", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-                Slider(
-                    value = layer.opacity * 100f, onValueChange = { onOpacity(it.roundToInt() / 100f) }, onValueChangeFinished = onOpacityDone,
-                    valueRange = 0f..100f, modifier = Modifier.weight(1f), colors = sliderColors(),
-                )
-                Text("${(layer.opacity * 100).roundToInt()}%", Modifier.width(40.dp).padding(start = 4.dp), fontSize = 13.sp, color = Bloom.On)
-            }
-            Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Blend", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-                Box {
-                    TextButton({ blendMenu = true }) { Text(layer.blend.label + " ▾", color = Bloom.On) }
-                    DropdownMenu(blendMenu, { blendMenu = false }, containerColor = Bloom.SurfaceHigh) {
-                        Blend.entries.forEach { b ->
-                            DropdownMenuItem(
-                                text = { Text(b.label, color = Bloom.On) },
-                                onClick = { blendMenu = false; onBlend(b) },
-                                trailingIcon = if (b == layer.blend) ({ Icon(Icons.Check, "Current", tint = Bloom.Pollen) }) else null,
-                            )
-                        }
+        }
+        Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Opacity", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+            Slider(
+                value = layer.opacity * 100f, onValueChange = { onOpacity(it.roundToInt() / 100f) }, onValueChangeFinished = onOpacityDone,
+                valueRange = 0f..100f, modifier = Modifier.weight(1f), colors = sliderColors(),
+            )
+            Text("${(layer.opacity * 100).roundToInt()}%", Modifier.width(40.dp).padding(start = 4.dp), fontSize = 13.sp, color = Bloom.On)
+        }
+        Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Blend", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+            Box {
+                TextButton({ blendMenu = true }) { Text(layer.blend.label + " ▾", color = Bloom.On) }
+                DropdownMenu(blendMenu, { blendMenu = false }, containerColor = Bloom.SurfaceHigh) {
+                    Blend.entries.forEach { b ->
+                        DropdownMenuItem(
+                            text = { Text(b.label, color = Bloom.On) },
+                            onClick = { blendMenu = false; onBlend(b) },
+                            trailingIcon = if (b == layer.blend) ({ Icon(Icons.Check, "Current", tint = Bloom.Pollen) }) else null,
+                        )
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-                BubbleAction(Icons.Brush, "Edit", Modifier.weight(1f), onEdit)
-                BubbleAction(Icons.Mask, "Edit mask", Modifier.weight(1f), onEditMask)
-                BubbleAction(Icons.Trash, "Delete", Modifier.weight(1f), onDelete)
-            }
         }
-        BubbleTail(Modifier.align(Alignment.TopEnd))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+            BubbleAction(Icons.Brush, "Edit", Modifier.weight(1f), onEdit)
+            BubbleAction(Icons.Mask, "Edit mask", Modifier.weight(1f), onEditMask)
+            BubbleAction(Icons.Trash, "Delete", Modifier.weight(1f), onDelete)
+        }
     }
 }
 
