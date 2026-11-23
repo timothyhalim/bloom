@@ -14,10 +14,11 @@ enum class Capability(val label: String) {
 }
 
 /**
- * One AI job: [image] (a crop of the photo, or the whole photo for SEGMENT), [mask] (image-sized bytes, non-zero = the
- * area to change), the pins for SEGMENT (x, y in 0..1, label), and the prompt for GEN_FILL.
+ * One AI job: [image] (a crop of the photo, or the whole photo for SEGMENT and UPSCALE; none for EDIT_COMMAND), [mask]
+ * (image-sized bytes, non-zero = the area to change), the pins for SEGMENT (x, y in 0..1, label), the prompt for
+ * GEN_FILL or the whole message for EDIT_COMMAND, and the factor for UPSCALE.
  */
-class AiRequest(val image: Bitmap, val mask: ByteArray? = null, val pins: List<Float> = emptyList(), val prompt: String = "")
+class AiRequest(val image: Bitmap? = null, val mask: ByteArray? = null, val pins: List<Float> = emptyList(), val prompt: String = "", val scale: Int = 2)
 
 sealed interface AiResult {
     /** ERASE, GEN_FILL, UPSCALE: the new image (any size; the caller scales it to the crop). */
@@ -25,6 +26,9 @@ sealed interface AiResult {
 
     /** SEGMENT: the subject's mask over the photo. */
     class Mask(val mask: SubjectMask) : AiResult
+
+    /** EDIT_COMMAND: the model's reply, unchecked; [EditOps.parse] reads it. */
+    class Text(val text: String) : AiResult
 }
 
 /** Thrown for a failure the user should read as is: the provider's own message, or why a reply was refused. */

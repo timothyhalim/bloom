@@ -28,16 +28,16 @@ class IoPaint(url: String, private val key: String?, private val found: Map<Capa
     override suspend fun test() = models(Http.call(base + CONFIG, headers = auth).json())
 
     override suspend fun run(cap: Capability, model: String, req: AiRequest, status: (String) -> Unit): AiResult {
-        val image = b64(png(req.image))
+        val image = b64(png(req.image!!))
         val (path, body) = when (cap) {
-            Capability.UPSCALE -> PLUGIN to buildJsonObject { put("name", model); put("image", image); put("scale", 2.0) }
+            Capability.UPSCALE -> PLUGIN to buildJsonObject { put("name", model); put("image", image); put("scale", req.scale.toDouble()) }
             Capability.ERASE, Capability.GEN_FILL -> {
                 val current = Http.call(base + MODEL, headers = auth).json().jsonObject["name"]?.jsonPrimitive?.contentOrNull
                 if (current != model) {
                     status("Loading $model on the server…")
                     Http.call(base + MODEL, "POST", buildJsonObject { put("name", model) }.toString().toByteArray(), headers = auth, timeout = 600_000)
                 }
-                INPAINT to inpaint(image, b64(maskPng(req.mask!!, req.image.width, req.image.height)), req.prompt)
+                INPAINT to inpaint(image, b64(maskPng(req.mask!!, req.image!!.width, req.image.height)), req.prompt)
             }
             else -> throw AiError("IOPaint can't ${cap.label.lowercase()}")
         }

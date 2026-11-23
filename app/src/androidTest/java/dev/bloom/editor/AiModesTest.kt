@@ -93,6 +93,50 @@ class AiModesTest {
     }
 
     @Test
+    fun upscaleReplacesThePhotoWithABiggerOneAndUndoBringsItBack() {
+        val s = FakeServer { r ->
+            if (r.path == IoPaint.PLUGIN) FakeServer.Reply(200, png(Bitmap.createBitmap(IntArray(600 * 800) { Color.BLUE }, 600, 800, Bitmap.Config.ARGB_8888)), "image/png")
+            else FakeServer.Reply("{}", 404)
+        }.also { server = it }
+        val state = rule.showEditor(photo = false)
+        val file = java.io.File(rule.activity.cacheDir, "upscale_test.jpg").apply { outputStream().use { testPhoto().compress(Bitmap.CompressFormat.JPEG, 95, it) } }
+        val p = Project.create(rule.activity.contentResolver, rule.activity.filesDir, android.net.Uri.fromFile(file))
+        val original = android.net.Uri.fromFile(p.original)
+        rule.runOnIdle {
+            state.load(original, ImageIo.loadPreview(rule.activity.contentResolver, original), p)
+            state.ai = AiConfig(listOf(pc(s.url, mapOf(Capability.UPSCALE to listOf("RealESRGAN")))), consented = setOf("pc"))
+        }
+        rule.onNodeWithContentDescription("AI").performClick()
+        rule.onNodeWithContentDescription("Upscale").performClick()
+        rule.onNodeWithText("300 × 400 → 600 × 800 px").assertExists()
+        rule.onNodeWithContentDescription("4 times").performClick()
+        rule.onNodeWithText("300 × 400 → 1200 × 1600 px").assertExists()
+        rule.onNodeWithContentDescription("2 times").performClick()
+        rule.onNodeWithContentDescription("Upscale the photo").performClick()
+        rule.waitUntil(10_000) { state.doc.source.isNotEmpty() }
+        rule.waitUntil(5_000) { state.preview?.width == 600 }
+        rule.runOnIdle {
+            assertEquals(null, state.draft)
+            assertEquals(600 to 800, state.photoSize)
+            assertTrue(state.source.toString().contains("upscaled_"))
+            val body = s.requests.single { it.path == IoPaint.PLUGIN }.text
+            assertTrue(body.contains("\"name\":\"RealESRGAN\"") && body.contains("\"scale\":2.0"))
+            state.history = state.history.undo()
+        }
+        rule.waitUntil(5_000) { state.preview?.width == 300 }
+        rule.runOnIdle {
+            assertEquals(original, state.source)
+            assertEquals("", state.doc.source)
+            state.history = state.history.redo()
+        }
+        rule.waitUntil(5_000) { state.preview?.width == 600 }
+        // the saved project opens on the upscaled photo
+        rule.runOnIdle { p.save(state.doc, state.preview!!, emptyMap(), null) }
+        val (_, saved) = Project.open(p.dir)
+        assertEquals(600 to 800, ImageIo.size(rule.activity.contentResolver, android.net.Uri.fromFile(p.photo(saved))))
+    }
+
+    @Test
     fun aDifferentProviderFromTheConsentSheetBecomesTheModesChoice() {
         val s = ioPaint()
         val state = rule.showEditor()

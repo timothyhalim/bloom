@@ -141,6 +141,7 @@ object Icons {
     // AI: a big and a small spark
     val Sparkle = icon("M10 3l1.8 5.2L17 10l-5.2 1.8L10 17l-1.8-5.2L3 10l5.2-1.8zM18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z")
     val Fill = icon("M4 20h16M7 16V12l7-7 4 4-7 7zM18 2l.7 1.8L20.5 4.5l-1.8.7L18 7l-.7-1.8-1.8-.7 1.8-.7z")
+    val Upscale = icon("M4 14v6h6M4 20l6-6M14 4h6v6M20 4l-6 6")
     val Eraser = icon("M15 4l5 5-9.5 9.5H6L3 15.5zM8.5 10.5l5 5M10.5 20.5H21")
     val Liquify = icon("M3 8c3-3 6 3 9 0s6-3 9 0M3 16c3-3 6 3 9 0s6-3 9 0")
     val Crop = icon("M6 2v16h16M2 6h16v16")

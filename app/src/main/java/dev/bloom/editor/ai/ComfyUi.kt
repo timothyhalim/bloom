@@ -37,8 +37,8 @@ class ComfyUi(url: String, private val key: String?, private val workflows: Map<
 
     override suspend fun run(cap: Capability, model: String, req: AiRequest, status: (String) -> Unit): AiResult {
         val workflow = workflows[cap] ?: throw AiError("No ComfyUI workflow for ${cap.label}")
-        val image = upload(png(req.image), status)
-        val mask = req.mask?.let { upload(maskPng(it, req.image.width, req.image.height), status) }
+        val image = upload(png(req.image!!), status)
+        val mask = req.mask?.let { upload(maskPng(it, req.image!!.width, req.image.height), status) }
         val prompt = fill(Json.parseToJsonElement(workflow).jsonObject, image, mask, req.prompt)
         val queued = Http.call(base + PROMPT, "POST", buildJsonObject { put("prompt", prompt); put("client_id", UUID.randomUUID().toString()) }.toString().toByteArray(), headers = auth).json()
         val id = queued.jsonObject["prompt_id"]?.jsonPrimitive?.contentOrNull ?: throw AiError("ComfyUI didn't queue the workflow")

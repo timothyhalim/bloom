@@ -143,10 +143,11 @@ import kotlin.math.roundToInt
 
 /** Everything the editor shows. Committed edits live in [history]; the open tool edits [draft] until ✓. */
 class EditorState {
-    var source by mutableStateOf<Uri?>(null)
+    var source by mutableStateOf<Uri?>(null) // the photo file: the project's original, or its upscaled copy
     var preview by mutableStateOf<Bitmap?>(null)
+    var photoSize by mutableStateOf<Pair<Int, Int>?>(null) // the source's upright size, px; null for a raw file
     var history by mutableStateOf(History(current = Document()))
-    var project: Project? = null // where the photo autosaves
+    var project by mutableStateOf<Project?>(null) // where the photo autosaves
     var opened: Document? = null // the project's document as opened; null for a new one
     var draft by mutableStateOf<Layer?>(null)
     // The open tool's own undo steps: the draft (or crop) after each gesture. ✓ then commits the session as one document step.
@@ -189,6 +190,7 @@ class EditorState {
     var warpReverse by mutableStateOf(false) // Twirl counterclockwise
     var aiMode by mutableStateOf(Capability.ERASE) // the AI tool's mode, if a provider still offers it
     var fillPrompt by mutableStateOf("") // what Fill paints
+    var upscaleBy by mutableIntStateOf(2)
     var running by mutableStateOf<String?>(null) // an AI job running: what it is doing ("Downloading…", "Erasing…", "Queued, 3 ahead")
     var runCancel by mutableStateOf<(() -> Unit)?>(null) // a remote job running: stops it
     var ai by mutableStateOf(AiConfig()) // AI providers and choices (Settings)
@@ -542,10 +544,10 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
             runCatching {
                 withContext(Dispatchers.IO) {
                     val (p, doc) = Project.open(dir)
-                    Triple(p, doc, ImageIo.loadPreview(context.contentResolver, Uri.fromFile(p.original)))
+                    Triple(p, doc, ImageIo.loadPreview(context.contentResolver, Uri.fromFile(p.photo(doc))))
                 }
             }
-                .onSuccess { (p, doc, bmp) -> state.load(Uri.fromFile(p.original), bmp, p, doc); photoView.setImage(bmp) }
+                .onSuccess { (p, doc, bmp) -> state.load(Uri.fromFile(p.photo(doc)), bmp, p, doc); photoView.setImage(bmp) }
                 .onFailure { android.util.Log.e("Bloom", "open project failed", it); snackbar.showSnackbar("Can't open project: ${it.message ?: it}") }
         }
     }
@@ -569,7 +571,18 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         val p = state.project ?: return
         save(p, state.doc, state.preview ?: return, state.subjects, state.depth)
     }
-    LaunchedEffect(state.source) { snapshotFlow { state.doc }.drop(1).collectLatest { delay(2000); autosave() } }
+    LaunchedEffect(state.project) { snapshotFlow { state.doc }.drop(1).collectLatest { delay(2000); autosave() } }
+    LaunchedEffect(state.source) { state.photoSize = state.source?.let { withContext(Dispatchers.IO) { ImageIo.size(context.contentResolver, it) } } }
+    // Upscale swaps the photo for a bigger copy, undo and redo swap it back: layers, masks and crop are in 0..1 of the
+    // photo, so they stay put; subject and depth masks are kept too
+    LaunchedEffect(state.doc.source) {
+        val p = state.project ?: return@LaunchedEffect
+        val uri = Uri.fromFile(p.photo(state.doc))
+        if (uri == state.source) return@LaunchedEffect
+        runCatching { withContext(Dispatchers.IO) { ImageIo.loadPreview(context.contentResolver, uri) } }
+            .onSuccess { state.source = uri; state.preview = it; photoView.setImage(it) }
+            .onFailure { if (it is CancellationException) throw it; snackbar.showSnackbar("Can't open the photo: ${reason(it)}") }
+    }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { scope.launch { autosave() } }
 
     // Back to Home. Keep saves the project (one with no edits is removed); Discard removes a new project, or takes an
@@ -646,6 +659,33 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                 val area = r.getOrElse { snackbar.showSnackbar("Couldn't $verb: ${reason(it)}"); return@launch }
                 val what = "a ${area.crop.width} × ${area.crop.height} px crop of the photo around the painted area, and its mask" + if (prompt.isEmpty()) "" else ", with your prompt"
                 send(cap, what) { c -> runFill(cap, c, area, prompt, d.id, photo) }
+            }
+        }
+    }
+
+    // Upscale: the whole photo goes to the provider; the result replaces it as the project's photo (one undo step)
+    fun upscale() {
+        val p = state.project ?: return
+        val src = state.source ?: return
+        val (w, h) = state.photoSize ?: return
+        val by = state.upscaleBy
+        send(Capability.UPSCALE, "the whole photo, $w × $h px") { c ->
+            runJob(c, "Upscaling…", "upscale") {
+                val photo = withContext(Dispatchers.IO) { ImageIo.loadPreview(context.contentResolver, src, Int.MAX_VALUE) }
+                val out = (provider(c).run(Capability.UPSCALE, c.model, AiRequest(photo, scale = by)) { state.running = it } as AiResult.Image).bitmap
+                photo.recycle()
+                checkUpscaled(w, h, out.width, out.height)
+                state.running = "Saving…"
+                val name = withContext(Dispatchers.IO) {
+                    // a model with another factor (a 4× ComfyUI workflow asked for 2×) is resampled to what was asked
+                    val sized = if (out.width == w * by && out.height == h * by) out else Bitmap.createScaledBitmap(out, w * by, h * by, true).also { out.recycle() }
+                    p.addUpscaled(sized).also {
+                        sized.recycle()
+                        ImageIo.copyExif(context.contentResolver, Uri.fromFile(p.original), File(p.dir, it), upright = true)
+                    }
+                }
+                state.edit { it.copy(source = name) }
+                state.close()
             }
         }
     }
@@ -765,6 +805,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                     onRun = {
                         when (aiMode) {
                             Capability.ERASE, Capability.GEN_FILL -> fill(aiMode)
+                            Capability.UPSCALE -> upscale()
                             else -> Unit
                         }
                     },

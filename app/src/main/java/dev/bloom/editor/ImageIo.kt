@@ -64,17 +64,20 @@ object ImageIo {
         return HdrGain(g.gainmapContents, g.ratioMin, g.ratioMax, g.gamma, g.epsilonSdr, g.epsilonHdr)
     }
 
-    /** Downsampled, upright bitmap for on-screen preview. Ultra HDR photos keep their gain map (rotated with them). */
-    fun loadPreview(cr: ContentResolver, uri: Uri): Bitmap {
+    /**
+     * Upright bitmap at most [maxSide] px long (downsampled by powers of two), for on-screen preview by default. Ultra HDR
+     * photos keep their gain map (rotated with them).
+     */
+    fun loadPreview(cr: ContentResolver, uri: Uri, maxSide: Int = PREVIEW_MAX): Bitmap {
         if (Raw.isRaw(cr, uri)) Raw.decode(cr, uri, half = true)?.let { raw ->
-            val s = PREVIEW_MAX.toFloat() / maxOf(raw.width, raw.height)
+            val s = maxSide.toFloat() / maxOf(raw.width, raw.height)
             if (s >= 1f) return raw
             return Bitmap.createScaledBitmap(raw, (raw.width * s).toInt(), (raw.height * s).toInt(), true).also { raw.recycle() }
         }
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         cr.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, bounds) }
         val opts = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, PREVIEW_MAX)
+            inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSide)
             inPreferredColorSpace = SRGB
         }
         val bmp = cr.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, opts) }
@@ -86,6 +89,16 @@ object ImageIo {
         }
         return if (m.isIdentity) bmp else Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
     }
+
+    /** The photo's upright size in px; null for a raw file (known only once decoded) or one that can't be read. */
+    fun size(cr: ContentResolver, uri: Uri): Pair<Int, Int>? = runCatching {
+        if (Raw.isRaw(cr, uri)) return null
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        cr.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, o) }
+        if (o.outWidth <= 0 || o.outHeight <= 0) return null
+        val turned = cr.openInputStream(uri)!!.use { ExifInterface(it) }.rotationDegrees % 180 != 0
+        if (turned) o.outHeight to o.outWidth else o.outWidth to o.outHeight
+    }.getOrNull()
 
     /**
      * Full-resolution export with [layers] applied tile by tile on the GPU, then [crop] and [scale] (output size / full).
@@ -260,7 +273,7 @@ object ImageIo {
         ExifInterface.TAG_DEFAULT_CROP_SIZE,
     )
 
-    private fun copyExif(cr: ContentResolver, src: Uri, file: File, upright: Boolean) {
+    fun copyExif(cr: ContentResolver, src: Uri, file: File, upright: Boolean) {
         // Some raw formats (CR3) have no EXIF ExifInterface can read; the photo matters more than its tags.
         val from = runCatching { cr.openInputStream(src)!!.use { ExifInterface(it) } }.getOrNull() ?: return
         val to = ExifInterface(file)

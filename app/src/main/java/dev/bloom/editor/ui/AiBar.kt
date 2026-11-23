@@ -36,12 +36,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.bloom.editor.ai.AiError
 import dev.bloom.editor.ai.Capability
+import dev.bloom.editor.ai.Http
 import dev.bloom.editor.ai.Choice
 import dev.bloom.editor.model.Layer
+import kotlin.math.abs
 
 /** The AI tool's modes in bar order; each shows only when some provider can run it. Background joins with M8.5. */
-val AI_MODES = listOf(Capability.ERASE, Capability.GEN_FILL)
+val AI_MODES = listOf(Capability.ERASE, Capability.GEN_FILL, Capability.UPSCALE)
 
 /** Modes that run on the area painted into the layer's mask. */
 val PAINTED = setOf(Capability.ERASE, Capability.GEN_FILL)
@@ -49,6 +52,7 @@ val PAINTED = setOf(Capability.ERASE, Capability.GEN_FILL)
 private val Capability.icon: ImageVector get() = when (this) {
     Capability.ERASE -> Icons.Eraser
     Capability.GEN_FILL -> Icons.Fill
+    Capability.UPSCALE -> Icons.Upscale
     else -> Icons.Sparkle
 }
 
@@ -67,6 +71,15 @@ fun AiRows(state: EditorState, mode: Capability, box: Modifier) {
         }) {
             TwoLineLabel("Fill", "Prompt")
             PromptField(state.fillPrompt, "What to paint there", Modifier.weight(1f)) { state.fillPrompt = it }
+        }
+        Capability.UPSCALE -> Row(box.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            TwoLineLabel("Upscale", "Factor")
+            for (f in listOf(2, 4)) Chip("$f×", state.upscaleBy == f, "$f times") { state.upscaleBy = f }
+            val size = state.photoSize
+            Text(
+                if (size == null) "Works on JPEG, PNG, WebP and HEIC photos" else upscaleInfo(size.first, size.second, state.upscaleBy).first,
+                Modifier.weight(1f).padding(horizontal = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant,
+            )
         }
         else -> ToolBox(state.maskMore, { state.maskMore = !state.maskMore }, box, moreRows = { BrushRows(state) }) {
             MainSlider("Erase", "Size", state.brushSize, 4f..150f) { state.brushSize = it; state.showRing(it, state.softness) }
@@ -91,10 +104,12 @@ fun RowScope.AiBar(
     if (mode in PAINTED) MaskButton(d.mask) { if (idle) state.maskMode = true }
     val ready = idle && choice != null && when (mode) {
         Capability.GEN_FILL -> d.mask.active && state.fillPrompt.isNotBlank()
+        Capability.UPSCALE -> state.project != null && state.photoSize?.let { upscaleInfo(it.first, it.second, state.upscaleBy).second } == true
         else -> d.mask.active
     }
     val run = when (mode) {
         Capability.GEN_FILL -> "Fill the painted area"
+        Capability.UPSCALE -> "Upscale the photo"
         else -> "Erase the painted area"
     }
     Column(
@@ -134,4 +149,15 @@ private fun PromptField(text: String, hint: String, modifier: Modifier, onChange
         singleLine = true, textStyle = TextStyle(color = Bloom.On, fontSize = 14.sp), cursorBrush = SolidColor(Bloom.Pollen),
         decorationBox = { field -> Box { if (text.isEmpty()) Text(hint, color = Bloom.Outline, fontSize = 14.sp); field() } },
     )
+}
+
+/** What Upscale makes of a [w] × [h] photo [by] times: "3000 × 4000 → 6000 × 8000 px", and whether that is allowed. */
+internal fun upscaleInfo(w: Int, h: Int, by: Int): Pair<String, Boolean> {
+    val ok = w.toLong() * h * by * by <= Http.MAX_PIXELS
+    return "$w × $h → ${w * by} × ${h * by} px" + (if (ok) "" else ", over ${Http.MAX_PIXELS / 1_000_000} MP") to ok
+}
+
+/** Refuses a provider's upscaled image that isn't the [w] × [h] photo made bigger: smaller, or another shape (1 % slack). */
+internal fun checkUpscaled(w: Int, h: Int, rw: Int, rh: Int) {
+    if (rw <= w || rh <= h || abs(rw.toFloat() / rh * h / w - 1f) > 0.01f) throw AiError("The server's image isn't this photo made bigger ($rw × $rh px)")
 }

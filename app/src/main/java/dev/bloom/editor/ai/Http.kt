@@ -25,6 +25,9 @@ class Response(val code: Int, val body: ByteArray, val type: String?) {
 object Http {
     const val MAX_REPLY = 64 shl 20
 
+    /** The largest image a provider may send back (and Upscale may make): more would run the phone out of memory. */
+    const val MAX_PIXELS = 64_000_000L
+
     /**
      * [method] [url] with [body]; a reply of 400 or more throws an [AiError] with the server's message. [status] gets
      * "Uploading n %" for a large body. [retry] = false for requests that must not run twice (a paid job).
@@ -143,6 +146,6 @@ fun decodeImage(bytes: ByteArray): Bitmap {
     val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
     if (o.outWidth <= 0 || o.outHeight <= 0) throw AiError("The server didn't send an image")
-    if (o.outWidth.toLong() * o.outHeight > 64_000_000) throw AiError("The server's image is too large")
+    if (o.outWidth.toLong() * o.outHeight > Http.MAX_PIXELS) throw AiError("The server's image is too large")
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw AiError("The server didn't send an image")
 }

@@ -35,7 +35,8 @@ private class Head(val name: String)
 
 /**
  * A saved project: a folder under files/projects with `original.<ext>` (a byte copy of the opened file, so it decodes
- * as before), `doc.json`, `patch_*.png` (Retouch pixels, lossless) and `thumb.jpg` (the result, for Home).
+ * as before), `doc.json`, `patch_*.png` (Retouch pixels, lossless), `upscaled_*.jpg` (Upscale results; the one
+ * [Document.source] names is used) and `thumb.jpg` (the result, for Home).
  * doc.json appears with the first edit; a folder without one is a photo opened and never edited.
  */
 class Project(val dir: File) {
@@ -45,6 +46,17 @@ class Project(val dir: File) {
     private var deleted = false
 
     val original: File get() = dir.listFiles().orEmpty().first { it.name.startsWith("original") }
+
+    /** The photo [doc] edits: an upscaled copy when it names one that is here, else the original. */
+    fun photo(doc: Document): File =
+        doc.source.takeIf { it.isNotEmpty() }?.let { File(dir, it) }?.takeIf { it.parentFile == dir && it.isFile } ?: original
+
+    /** Saves [b], an upscaled copy of the photo, and returns its file name for [Document.source]. */
+    fun addUpscaled(b: Bitmap): String {
+        val name = "upscaled_${System.currentTimeMillis()}.jpg"
+        write(File(dir, name)) { check(b.compress(Bitmap.CompressFormat.JPEG, 95, it)) { "can't encode the upscaled photo" } }
+        return name
+    }
 
     val json = Json {
         ignoreUnknownKeys = true // a file from a newer Bloom still opens, minus what this one doesn't know
@@ -133,6 +145,8 @@ class Project(val dir: File) {
             check(s.version <= VERSION) { "it was saved by a newer Bloom" }
             p.name = s.name
             p.saved = s.doc
+            // copies an undone Upscale left behind; history doesn't outlive the session
+            dir.listFiles { f -> f.name.startsWith("upscaled_") && f.name != s.doc.source }?.forEach { it.delete() }
             return p to s.doc
         }
 

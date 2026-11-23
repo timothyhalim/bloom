@@ -306,6 +306,7 @@ data class Group(val id: Long, val name: String = "", val opacity: Float = 1f, v
 
 /**
  * Layers bottom to top, the order they render in. [deband] smooths 8-bit banding in the photo itself. [crop] applies after all layers.
+ * [source] is the photo file in the project folder these edits apply to: empty for the original, or an upscaled copy.
  * A group's members are always next to each other; every operation here keeps it so, and drops groups left empty.
  */
 @Serializable
@@ -314,9 +315,10 @@ data class Document(
     val deband: Boolean = true,
     val crop: Crop = Crop(),
     val groups: List<Group> = emptyList(),
+    val source: String = "",
 ) {
     /** Anything changed from the photo as opened. */
-    val edited: Boolean get() = layers.isNotEmpty() || !deband || !crop.isIdentity
+    val edited: Boolean get() = layers.isNotEmpty() || !deband || !crop.isIdentity || source.isNotEmpty()
 
     /** Layers as they render: a hidden group hides its members, and its opacity scales theirs. */
     // ponytail: group opacity scales each layer, not the group's composite; render the group to its own target if blends look off

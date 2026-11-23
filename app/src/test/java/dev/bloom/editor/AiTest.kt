@@ -16,11 +16,14 @@ import dev.bloom.editor.ai.OpenAiCompatible
 import dev.bloom.editor.ai.ProviderConfig
 import dev.bloom.editor.ai.ProviderType
 import dev.bloom.editor.ai.Response
+import dev.bloom.editor.ui.checkUpscaled
+import dev.bloom.editor.ui.upscaleInfo
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -172,12 +175,33 @@ class AiTest {
             fail()
         } catch (e: AiError) {
         }
-        // every model builds its input; fill sends the prompt, upscale no mask
+        // every model builds its input; fill sends the prompt, upscale no mask but the factor
         for ((id, m) in Fal.MODELS) {
-            val input = m.second("data:image/png;base64,AA", "data:image/png;base64,BB", "sky")
+            val input = m.second("data:image/png;base64,AA", "data:image/png;base64,BB", AiRequest(prompt = "sky", scale = 4))
             assertTrue(id, input["image_url"] != null)
             assertEquals(id, m.first == Capability.UPSCALE, input["mask_url"] == null)
             assertEquals(id, m.first == Capability.GEN_FILL, input["prompt"] != null)
+            if (m.first == Capability.UPSCALE) assertTrue(id, input.values.contains(JsonPrimitive(4)))
+        }
+    }
+
+    @Test
+    fun upscaleInfoLineAndSizeCap() {
+        assertEquals("3000 × 4000 → 6000 × 8000 px" to true, upscaleInfo(3000, 4000, 2))
+        assertEquals("3000 × 4000 → 12000 × 16000 px, over 64 MP" to false, upscaleInfo(3000, 4000, 4))
+        assertTrue(upscaleInfo(4000, 4000, 2).second) // exactly 64 MP
+        assertFalse(upscaleInfo(4001, 4000, 2).second)
+        assertFalse("no Int overflow", upscaleInfo(50_000, 50_000, 4).second)
+    }
+
+    @Test
+    fun anUpscaledImageMustBeThePhotoMadeBigger() {
+        checkUpscaled(300, 400, 600, 800)
+        checkUpscaled(300, 400, 1200, 1601) // a pixel off from rounding
+        for ((w, h) in listOf(300 to 400, 150 to 200, 800 to 600, 600 to 900)) try {
+            checkUpscaled(300, 400, w, h)
+            fail("$w × $h")
+        } catch (e: AiError) {
         }
     }
 

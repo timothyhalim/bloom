@@ -21,14 +21,14 @@ class OnDevice(private val context: Context) : AiProvider {
         val get = { name: String -> ModelStore.get(context, name) { status("Downloading AI model… ${(it * 100).toInt()}%") } }
         when (cap) {
             Capability.SEGMENT -> {
-                val m = if (req.pins.isEmpty()) Segment.subject(get("subject"), req.image)
-                else Segment.pinned(get("sam_encoder"), get("sam_decoder"), req.image, req.pins)
+                val m = if (req.pins.isEmpty()) Segment.subject(get("subject"), req.image!!)
+                else Segment.pinned(get("sam_encoder"), get("sam_decoder"), req.image!!, req.pins)
                 AiResult.Mask(m ?: error("the model couldn't run on this phone"))
             }
             Capability.ERASE -> {
                 val file = get("eraser")
                 status("Erasing…")
-                AiResult.Image(Segment.erase(file, req.image, req.mask!!) ?: error("the model couldn't run on this phone"))
+                AiResult.Image(Segment.erase(file, req.image!!, req.mask!!) ?: error("the model couldn't run on this phone"))
             }
             else -> error("${cap.label} doesn't run on the phone")
         }

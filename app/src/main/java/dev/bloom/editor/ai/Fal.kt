@@ -36,10 +36,10 @@ class Fal(private val key: String, private val found: Map<Capability, List<Strin
     override suspend fun run(cap: Capability, model: String, req: AiRequest, status: (String) -> Unit): AiResult {
         val (c, input) = MODELS[model] ?: throw AiError("Unknown fal model $model")
         if (c != cap) throw AiError("$model can't ${cap.label.lowercase()}")
-        val image = uri(png(req.image))
-        val mask = req.mask?.let { uri(maskPng(it, req.image.width, req.image.height)) }
+        val image = uri(png(req.image!!))
+        val mask = req.mask?.let { uri(maskPng(it, req.image!!.width, req.image.height)) }
         // not retried: a lost reply may still have started a paid job
-        val sub = Http.call("$queue/$model", "POST", input(image, mask, req.prompt).toString().toByteArray(), headers = auth, retry = false, status = status).json()
+        val sub = Http.call("$queue/$model", "POST", input(image, mask, req).toString().toByteArray(), headers = auth, retry = false, status = status).json()
         val (statusUrl, resultUrl, cancelUrl) = submitted(sub, queue)
         try {
             var seconds = 0
@@ -71,14 +71,14 @@ class Fal(private val key: String, private val found: Map<Capability, List<Strin
 
         private fun uri(png: ByteArray) = "data:image/png;base64," + Base64.getEncoder().encodeToString(png)
 
-        /** Model ids (fal.ai/models, checked 2026-11) with what they do and their input from the image, mask (white = change) and prompt. */
-        val MODELS: Map<String, Pair<Capability, (String, String?, String) -> JsonObject>> = linkedMapOf(
+        /** Model ids (fal.ai/models, checked 2026-11) with what they do and their input from the image, mask (white = change) and request. */
+        val MODELS: Map<String, Pair<Capability, (String, String?, AiRequest) -> JsonObject>> = linkedMapOf(
             "fal-ai/object-removal/mask" to (Capability.ERASE to { i, m, _ -> buildJsonObject { put("image_url", i); put("mask_url", m); put("mask_expansion", 0) } }),
             "fal-ai/bria/eraser" to (Capability.ERASE to { i, m, _ -> buildJsonObject { put("image_url", i); put("mask_url", m) } }),
-            "fal-ai/flux-pro/v1/fill" to (Capability.GEN_FILL to { i, m, p -> buildJsonObject { put("image_url", i); put("mask_url", m); put("prompt", p); put("output_format", "png") } }),
-            "fal-ai/flux-lora/inpainting" to (Capability.GEN_FILL to { i, m, p -> buildJsonObject { put("image_url", i); put("mask_url", m); put("prompt", p) } }),
-            "fal-ai/esrgan" to (Capability.UPSCALE to { i, _, _ -> buildJsonObject { put("image_url", i); put("scale", 2) } }),
-            "fal-ai/clarity-upscaler" to (Capability.UPSCALE to { i, _, _ -> buildJsonObject { put("image_url", i); put("upscale_factor", 2) } }),
+            "fal-ai/flux-pro/v1/fill" to (Capability.GEN_FILL to { i, m, r -> buildJsonObject { put("image_url", i); put("mask_url", m); put("prompt", r.prompt); put("output_format", "png") } }),
+            "fal-ai/flux-lora/inpainting" to (Capability.GEN_FILL to { i, m, r -> buildJsonObject { put("image_url", i); put("mask_url", m); put("prompt", r.prompt) } }),
+            "fal-ai/esrgan" to (Capability.UPSCALE to { i, _, r -> buildJsonObject { put("image_url", i); put("scale", r.scale) } }),
+            "fal-ai/clarity-upscaler" to (Capability.UPSCALE to { i, _, r -> buildJsonObject { put("image_url", i); put("upscale_factor", r.scale) } }),
         )
 
         /** The status, result and cancel URLs from a submit reply; each must be on [queue], since the key goes there. */
