@@ -1,5 +1,5 @@
 // On-device models through MNN, all as Modules on one shared runtime: IS-Net (subject mask), MobileSAM (tap-to-select),
-// Depth Anything (lens blur depth) and LaMa (eraser).
+// Depth Anything (lens blur depth), LaMa (eraser), Real-ESRGAN (upscale) and RVM (person matte).
 #include <jni.h>
 #include <android/bitmap.h>
 #include <android/log.h>
@@ -280,6 +280,65 @@ Java_dev_bloom_editor_Segment_erase(JNIEnv *env, jclass, jstring modelPath, jstr
     return ok;
 }
 
+// --- Real-ESRGAN: 4x upscale, one tile per call (Segment.upscale tiles the photo and blends the seams). ---
+namespace {
+Net upscaleNet;
+}  // namespace
+
+// The [n] x [m] px region of [src] at ([x0], [y0]) made [by] (2 or 4) times bigger, weighted by wx (n * by) x wy (m * by)
+// and added into [dst] at (x0 * by, y0 * by). Both RGBA. False if the model can't run.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_bloom_editor_Segment_upscaleTile(JNIEnv *env, jclass, jstring modelPath, jstring cachePath, jobject src, jint x0, jint y0, jint n, jint m,
+                                          jobject dst, jint by, jfloatArray wxArr, jfloatArray wyArr, jboolean gpu) {
+    std::lock_guard<std::mutex> guard(lock);
+    auto rt = getRuntime(gpu, str(env, cachePath));
+    if (!rt || !load(upscaleNet, str(env, modelPath), {"input"}, {"output"}, rt)) return false;
+    if (env->GetArrayLength(wxArr) != n * by || env->GetArrayLength(wyArr) != m * by) return false;
+    std::vector<float> wx(n * by), wy(m * by);
+    env->GetFloatArrayRegion(wxArr, 0, n * by, wx.data());
+    env->GetFloatArrayRegion(wyArr, 0, m * by, wy.data());
+    AndroidBitmapInfo si;
+    const uint8_t *in = lockRgba(env, src, si);
+    if (!in) return false;
+    VARP x = _Input({1, 3, m, n}, NCHW, halide_type_of<float>());
+    float *xp = x->writeMap<float>();
+    for (int y = 0; y < m; y++)
+        for (int c = 0; c < n; c++)
+            for (int k = 0; k < 3; k++) xp[(k * m + y) * n + c] = in[(y0 + y) * si.stride + (x0 + c) * 4 + k] / 255.f;
+    AndroidBitmap_unlockPixels(env, src);
+    auto out = forward(upscaleNet, {x});
+    const float *r = out.empty() ? nullptr : out[0]->readMap<float>();
+    auto i = out.empty() ? nullptr : out[0]->getInfo();
+    if (!r || !i || i->size != 3 * 16 * n * m) return false;
+    AndroidBitmapInfo di;
+    uint8_t *o = lockRgba(env, dst, di);
+    if (!o) return false;
+    const int W = 4 * n, H = 4 * m, f = 4 / by;  // f x f output texels average into one pixel
+    for (int y = 0; y < m * by; y++)
+        for (int c = 0; c < n * by; c++) {
+            uint8_t *p = o + (y0 * by + y) * di.stride + (x0 * by + c) * 4;
+            float w = wx[c] * wy[y] * 255.f / float(f * f);
+            for (int k = 0; k < 3; k++) {
+                float v = 0;
+                for (int j = 0; j < f; j++)
+                    for (int q = 0; q < f; q++) v += std::min(1.f, std::max(0.f, r[(k * H + y * f + j) * W + c * f + q]));  // it overshoots
+                // ponytail: overlaps add rounded 8-bit parts (off by at most 2 levels at tile corners); a float strip buffer if it shows
+                p[k] = uint8_t(std::min(255.f, p[k] + v * w + 0.5f));
+            }
+            p[3] = 255;
+        }
+    AndroidBitmap_unlockPixels(env, dst);
+    return true;
+}
+
+// Frees Real-ESRGAN after a run: upscaling is occasional.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_bloom_editor_Segment_upscaleEnd(JNIEnv *, jclass) {
+    std::lock_guard<std::mutex> guard(lock);
+    upscaleNet = {};
+    ExecutorScope::Current()->gc(Executor::FULL);
+}
+
 // Frees every model, the SAM embedding and the shared runtime (low memory). The next run loads them again.
 extern "C" JNIEXPORT void JNICALL
 Java_dev_bloom_editor_Segment_release0(JNIEnv *, jclass) {
@@ -288,6 +347,7 @@ Java_dev_bloom_editor_Segment_release0(JNIEnv *, jclass) {
     sam = {};
     depthNet = {};
     eraseNet = {};
+    upscaleNet = {};
     ExecutorScope::Current()->gc(Executor::FULL);
     runtime.reset();
 }

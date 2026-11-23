@@ -631,7 +631,8 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     }
 
     // Runs an AI job with [c], the AI tool locked with its status showing; [failed] names it in an error ("erase").
-    fun runJob(c: Choice, status: String, failed: String, work: suspend () -> Unit) {
+    // Cancel shows for remote jobs and [stoppable] ones: the phone's models can't stop mid-run, but Upscale stops between tiles.
+    fun runJob(c: Choice, status: String, failed: String, stoppable: Boolean = false, work: suspend () -> Unit) {
         val remote = c.provider != OnDevice.ID
         state.running = if (remote) "Sending to ${state.ai.name(c.provider)}…" else status
         val job = scope.launch {
@@ -642,8 +643,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
             android.util.Log.e("Bloom", "$failed failed", e)
             snackbar.showSnackbar("Couldn't $failed: ${reason(e)}")
         }
-        // the phone's models can't stop mid-run
-        if (remote && job.isActive) state.runCancel = { job.cancel() }
+        if ((remote || stoppable) && job.isActive) state.runCancel = { job.cancel() }
     }
 
     // AI Erase and Fill: fill the layer's mask from the photo (LaMa on the phone, or the chosen provider; Fill with the
@@ -691,7 +691,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         val (w, h) = state.photoSize ?: return
         val by = state.upscaleBy
         send(Capability.UPSCALE, "the whole photo, $w × $h px") { c ->
-            runJob(c, "Upscaling…", "upscale") {
+            runJob(c, "Upscaling…", "upscale", stoppable = true) {
                 val photo = withContext(Dispatchers.IO) { ImageIo.loadPreview(context.contentResolver, src, Int.MAX_VALUE) }
                 val out = (provider(c).run(Capability.UPSCALE, c.model, AiRequest(photo, scale = by)) { state.running = it } as AiResult.Image).bitmap
                 photo.recycle()

@@ -4,14 +4,19 @@ import android.content.Context
 import dev.bloom.editor.ModelStore
 import dev.bloom.editor.Segment
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
-/** The phone itself: IS-Net / MobileSAM subject masks and the LaMa eraser through [Segment], models from [ModelStore]. */
+/**
+ * The phone itself: IS-Net / MobileSAM subject masks, the LaMa eraser and Real-ESRGAN upscaling through [Segment],
+ * models from [ModelStore].
+ */
 class OnDevice(private val context: Context) : AiProvider {
     override fun models(cap: Capability) = when (cap) {
         // IS-Net finds the subject by itself, MobileSAM follows pins: which one runs depends on the pins, not a choice
         Capability.SEGMENT -> listOf("IS-Net + MobileSAM")
         Capability.ERASE -> listOf("LaMa")
+        Capability.UPSCALE -> listOf("Real-ESRGAN")
         else -> emptyList()
     }
 
@@ -29,6 +34,18 @@ class OnDevice(private val context: Context) : AiProvider {
                 val file = get("eraser")
                 status("Erasing…")
                 AiResult.Image(Segment.erase(file, req.image!!, req.mask!!) ?: error("the model couldn't run on this phone"))
+            }
+            Capability.UPSCALE -> {
+                val file = get("upscale")
+                val img = req.image!!
+                val t = System.nanoTime()
+                val out = try {
+                    Segment.upscale(file, img, req.scale) { i, n -> ensureActive(); status("Tile $i / $n") }
+                } catch (e: OutOfMemoryError) {
+                    throw AiError("Not enough memory for a ${img.width * req.scale} × ${img.height * req.scale} px photo")
+                }
+                android.util.Log.d("Bloom", "upscale ${img.width}x${img.height} ×${req.scale}: ${(System.nanoTime() - t) / 1_000_000} ms")
+                AiResult.Image(out ?: error("the model couldn't run on this phone"))
             }
             else -> error("${cap.label} doesn't run on the phone")
         }

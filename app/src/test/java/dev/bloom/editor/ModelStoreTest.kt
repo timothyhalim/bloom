@@ -95,13 +95,18 @@ class ModelStoreTest {
     @Test
     fun everyListedModelHasAFileUrlHashAndSize() {
         val models = Json.parseToJsonElement(File("src/main/assets/models.json").readText()).jsonObject
-        assertEquals(setOf("subject", "sam_encoder", "sam_decoder", "depth", "eraser"), models.keys)
+        assertEquals(setOf("subject", "sam_encoder", "sam_decoder", "depth", "eraser", "upscale"), models.keys)
         for ((name, m) in models) {
             val o = m.jsonObject
             assertTrue(name, o.getValue("file").jsonPrimitive.content.isNotEmpty())
             assertTrue(name, o.getValue("url").jsonPrimitive.content.split(' ').all { it.startsWith("https://") })
             assertTrue(name, Regex("[0-9a-f]{64}").matches(o.getValue("sha256").jsonPrimitive.content))
             assertTrue(name, o.getValue("size").jsonPrimitive.long > 0)
+            // the copy in the repo is the one listed
+            File("../models", o.getValue("file").jsonPrimitive.content).takeIf { it.exists() }?.let {
+                assertEquals(name, o.getValue("sha256").jsonPrimitive.content, sha(it.readBytes()))
+                assertEquals(name, o.getValue("size").jsonPrimitive.long, it.length())
+            }
         }
         assertEquals("LaMa is split in two", 2, models.getValue("eraser").jsonObject.getValue("url").jsonPrimitive.content.split(' ').size)
     }

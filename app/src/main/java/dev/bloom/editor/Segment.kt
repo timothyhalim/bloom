@@ -1,6 +1,7 @@
 package dev.bloom.editor
 
 import dev.bloom.editor.model.Eraser
+import dev.bloom.editor.model.Upscale
 import android.graphics.Bitmap
 import java.io.File
 
@@ -129,6 +130,37 @@ object Segment {
         return big
     }
 
+    /**
+     * Real-ESRGAN: [photo] made [by] (2 or 4) times bigger, in overlapping tiles blended at their seams. [tile] gets
+     * (tile number from 1, tiles) before each; throwing from it stops the run. Throws OutOfMemoryError when the result's
+     * bitmap doesn't fit. The model is freed afterwards.
+     */
+    fun upscale(model: File, photo: Bitmap, by: Int, tile: (Int, Int) -> Unit): Bitmap? {
+        if (!loaded) return null
+        val src = if (photo.config == Bitmap.Config.ARGB_8888) photo else photo.copy(Bitmap.Config.ARGB_8888, false)
+        var out: Bitmap? = null
+        try {
+            out = Bitmap.createBitmap(photo.width * by, photo.height * by, Bitmap.Config.ARGB_8888)
+            val (tw, xs) = Upscale.tiles(photo.width)
+            val (th, ys) = Upscale.tiles(photo.height)
+            val wx = xs.indices.map { Upscale.weights(xs, tw, it, by) }
+            for ((j, y) in ys.withIndex()) {
+                val wy = Upscale.weights(ys, th, j, by)
+                for ((i, x) in xs.withIndex()) {
+                    tile(j * xs.size + i + 1, xs.size * ys.size)
+                    if (!upscaleTile(model.path, cache(model), src, x, y, tw, th, out, by, wx[i], wy, gpu)) return null.also { out.recycle() }
+                }
+            }
+            return out
+        } catch (e: Throwable) {
+            out?.recycle()
+            throw e
+        } finally {
+            if (src !== photo) src.recycle()
+            upscaleEnd()
+        }
+    }
+
     /** [src] scaled to [w]×[h] as a new ARGB_8888 bitmap (what the native side reads); [src] is left alone. */
     private fun argb(src: Bitmap, w: Int, h: Int, mutable: Boolean = false): Bitmap {
         val s = Bitmap.createScaledBitmap(src, w, h, true) // may be src itself when the size matches
@@ -153,6 +185,14 @@ object Segment {
 
     @JvmStatic
     private external fun depth(model: String, cache: String, photo: Bitmap, gpu: Boolean): ByteArray?
+
+    @JvmStatic
+    private external fun upscaleTile(
+        model: String, cache: String, src: Bitmap, x: Int, y: Int, w: Int, h: Int, dst: Bitmap, by: Int, wx: FloatArray, wy: FloatArray, gpu: Boolean,
+    ): Boolean
+
+    @JvmStatic
+    private external fun upscaleEnd()
 
     @JvmStatic
     private external fun erase(model: String, cache: String, crop: Bitmap, mask: ByteArray, gpu: Boolean): Boolean

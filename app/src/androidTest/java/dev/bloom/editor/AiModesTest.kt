@@ -108,7 +108,8 @@ class AiModesTest {
         val original = android.net.Uri.fromFile(p.original)
         rule.runOnIdle {
             state.load(original, ImageIo.loadPreview(rule.activity.contentResolver, original), p)
-            state.ai = AiConfig(listOf(pc(s.url, mapOf(Capability.UPSCALE to listOf("RealESRGAN")))), consented = setOf("pc"))
+            // the phone upscales too; this test is about the server
+            state.ai = AiConfig(listOf(pc(s.url, mapOf(Capability.UPSCALE to listOf("RealESRGAN")))), mapOf(Capability.UPSCALE to Choice("pc", "RealESRGAN")), consented = setOf("pc"))
         }
         rule.onNodeWithContentDescription("AI").performClick()
         rule.onNodeWithContentDescription("Upscale").performClick()
