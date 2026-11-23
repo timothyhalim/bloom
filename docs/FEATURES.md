@@ -18,6 +18,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Launcher icon: adaptive (navy gradient + sparkles background, flower foreground, white monochrome for themed icons), PNGs rasterized from design/icon_foreground.svg and design/icon.svg; Play store icon app/src/main/ic_launcher-playstore.png | app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml, AndroidManifest.xml | none | manual |
 | Edge-to-edge window with dark transparent system bars | MainActivity.kt:15 | none | manual |
 | One PhotoView created per activity, follows the lifecycle (pause/resume GL) | MainActivity.kt:16-17, PhotoView.kt:311-312 | none | manual |
+| Crash reports (ACRA, both flavors): after a crash a dialog asks "Share the crash report?"; unanswered, it asks again on the next launch (reports under a minute old wait). Share opens the system share sheet with the report text; Don't share deletes it. No network sender, no server. Report holds only stack trace, app version name/code, Android version, brand, model, available/total memory, crash date | BloomApp.kt, app/src/main/resources/META-INF/services/org.acra.sender.ReportSenderFactory | none | manual (`am crash`) |
 | First run (no photo): empty state shows "Bloom", tagline "Edit in layers. Everything runs on your phone." | ui/EditorScreen.kt:682-686 | none | UI |
 | Empty state is opaque, so a closed photo never shows through | ui/EditorScreen.kt:552-554 | none | UI |
 | "Open photo" petal button opens the system photo picker, images only | ui/EditorScreen.kt:687-693, 497 | none | UI |
@@ -504,6 +505,8 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | GPU backend (AUTO) on phones, CPU on the emulator; one shared runtime and GPU program cache file | Segment.kt:20, 114, cpp/segment.cpp:52-91 | none | manual |
 | Native lib missing: model calls return null ("couldn't run on this phone") | Segment.kt:17, 24, ui/EditorScreen.kt:357, 381 | none | unit |
 | Depth input: long side ~518, multiples of 14 | Segment.kt:57-64 | none | unit (extract size math) |
+| Low memory: on trim level RUNNING_CRITICAL or above (incl. UI_HIDDEN, BACKGROUND) every loaded model, the SAM embedding and the MNN runtime are freed on a background thread (log "trim memory N: AI models freed"); each reloads on next use. Subject and depth masks are kept (~1 MB each; dropping them would blank the preview until recomputed) | BloomApp.kt (onTrimMemory), Segment.kt (release), cpp/segment.cpp (release0) | none | manual (`am send-trim-memory`) |
+| Out of memory in a model run: "Couldn't … : not enough memory. Close other apps and try again" instead of a crash or a byte count | ui/EditorScreen.kt (reason) | none | UI |
 | Spec: Settings › On-device models (size, delete); not built | design/UI.md:47 | none | n/a |
 
 ## 25. Export
@@ -512,6 +515,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 |---|---|---|---|
 | Export uses the document at the moment of export (layers, crop, deband, size, subjects, depth) | ui/EditorScreen.kt:476-494 | none | UI |
 | Result snackbar "Saved" / "Export failed: …" | ui/EditorScreen.kt:492 | none | UI |
+| Out of memory: "Not enough memory to export. Pick a smaller Size in the Export menu" | ui/EditorScreen.kt (export) | none | UI |
 | Progress 0..1 rises monotonically and ends at 1 | ImageIo.kt:87-89, 176, 184, 198 | GPU: pngExportKeepsLevelsBetweenEightBitSteps (asserts progress) | GPU |
 | Full resolution, 1024 px tiles, rendered on an offscreen GL context | ImageIo.kt:30, 135-185, gl/Offscreen.kt | GPU: paddedTileMatchesFullRenderWithFeather | GPU |
 | No visible layers and no crop/scale: tiles copied without the GPU | ImageIo.kt:135, 179 | none | GPU |
@@ -563,6 +567,10 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Stroke icons on a 24 grid, no icon library | ui/Theme.kt:85-152 | none | n/a |
 | Every icon button has a contentDescription (tool names, "X. Back to tools", mask button, apply) | ui/EditorScreen.kt:798, 807; ui/MaskBar.kt:102, 114 | none | UI (semantics) |
 | Changed state isn't color-only: dots on changed params, sign badges, strike-through for hidden | ui/EditorScreen.kt:920-921, ui/MaskBar.kt:440-441, ui/LayerRail.kt:239 | none | UI |
+| Touch targets at least 48 dp: param chips, mask type and text chips, color sample swatches (24 dp drawn), rail items (rail 48 dp wide), collapsed rail tab; exception: the rail's scroll arrows (48×32, overlaying the list; screen readers scroll the list instead) | ui/EditorScreen.kt (ParamChip), ui/MaskBar.kt, ui/LayerRail.kt | none | UI (uiautomator dump) |
+| Sliders read their name and value ("Exposure", "+1.0 EV"; "Opacity", "80%") | ui/LayerRail.kt (sliderLabel) | none | UI (semantics) |
+| The bubble's tap-outside layer is hidden from screen readers (Back closes the bubble) | ui/EditorScreen.kt (bubble) | none | UI |
+| Font scale up to 2.0: slider labels, value texts, tool rows, bubble actions and the Open photo button grow instead of clipping; font scale changes keep the open photo (no activity restart) | ui/*.kt (widthIn/heightIn), AndroidManifest.xml (configChanges) | none | manual (font_scale 1.3, 2.0) |
 | Spec: light theme, Appearance settings, tabular figures, motion (200 ms cross-fades), canvas a11y actions (zoom/pan), RTL mirroring; not built | design/UI.md:48, 356, 411-421, 443 | none | n/a |
 
 ## 29. Rendering pipeline core

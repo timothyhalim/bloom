@@ -1,5 +1,7 @@
 package dev.bloom.editor.ui
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.geometry.Offset
@@ -105,8 +107,8 @@ fun LiquifyRows(state: EditorState, box: Modifier) {
         SliderRow("Strength", state.warpStrength, 5f..100f) { state.warpStrength = it }
         SliderRow("Softness", state.warpSoftness, 0f..100f) { state.warpSoftness = it; state.showRing(state.warpSize, it) }
         // Twirl's direction, as its own pair of buttons, with the other settings
-        if (state.warpTool == WarpTool.Twirl) Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Direction", Modifier.width(84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+        if (state.warpTool == WarpTool.Twirl) Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Direction", Modifier.widthIn(min = 84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
             ParamChip(Icons.Rotate, "Clockwise", false, !state.warpReverse) { state.warpReverse = false }
             ParamChip(Icons.RotateBack, "Counterclockwise", false, state.warpReverse) { state.warpReverse = true }
         }

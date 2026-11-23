@@ -28,7 +28,16 @@ object Segment {
 
     private var encoded: Bitmap? = null // the photo the MobileSAM embedding belongs to
 
+    /** Frees every loaded model and the embedding (low memory); each loads again on its next use. */
+    @Synchronized
+    fun release() {
+        if (!loaded) return
+        encoded = null
+        release0()
+    }
+
     /** MobileSAM: the object at [pins] (x, y in 0..1 over the upright photo, label 1 = include / 0 = exclude). */
+    @Synchronized // with release(), so the embedding isn't freed between encoding and decoding
     fun pinned(encoder: File, decoder: File, photo: Bitmap, pins: List<Float>): SubjectMask? {
         if (!loaded) return null
         val s = SIZE.toFloat() / maxOf(photo.width, photo.height)
@@ -112,6 +121,9 @@ object Segment {
 
     // MobileSAM, depth and LaMa share one MNN runtime, so one cache file for their compiled GPU programs
     private fun cache(model: File) = File(model.parentFile, "mnn.cache").path
+
+    @JvmStatic
+    private external fun release0()
 
     @JvmStatic
     private external fun run(model: String, cache: String, square: Bitmap, gpu: Boolean): ByteArray?

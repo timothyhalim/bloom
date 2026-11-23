@@ -1,9 +1,11 @@
 package dev.bloom.editor.ui
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -143,7 +145,7 @@ fun RowScope.MaskBar(state: EditorState) {
 fun MaskRows(state: EditorState, box: Modifier) {
     val mask = state.draft?.mask ?: return
     val sel = state.stepIndex?.let { mask.steps.getOrNull(it) }
-    if (mask.steps.isNotEmpty()) Row(box.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+    if (mask.steps.isNotEmpty()) Row(box.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f).scrollFade().padding(start = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             mask.steps.forEachIndexed { i, s ->
                 StepChip(s, i == state.stepIndex, onClick = { state.selectStep(i) }) { by ->
@@ -183,9 +185,9 @@ fun MaskRows(state: EditorState, box: Modifier) {
         SignToggle(state)
         when (state.maskTool) {
             MaskTool.Brush -> {
-                Text("Size", Modifier.width(36.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-                Slider(state.brushSize, { state.brushSize = it.roundToInt().toFloat(); state.showRing(state.brushSize, state.softness) }, Modifier.weight(1f), valueRange = 4f..150f, colors = sliderColors())
-                Text("${state.brushSize.roundToInt()}", Modifier.width(36.dp), fontSize = 14.sp, color = Bloom.On)
+                Text("Size", Modifier.widthIn(min = 36.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+                Slider(state.brushSize, { state.brushSize = it.roundToInt().toFloat(); state.showRing(state.brushSize, state.softness) }, Modifier.weight(1f).sliderLabel("Brush size", "${state.brushSize.roundToInt()}"), valueRange = 4f..150f, colors = sliderColors())
+                Text("${state.brushSize.roundToInt()}", Modifier.widthIn(min = 36.dp), fontSize = 14.sp, color = Bloom.On)
             }
             MaskTool.Gradient -> Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 val g = sel as? GradientStep
@@ -226,7 +228,7 @@ private fun MaskActions(state: EditorState) {
     var menu by remember { mutableStateOf(false) }
     val d = state.draft ?: return
     val others = state.doc.layers.withIndex().filter { (_, l) -> l.id != d.id && l.mask.steps.isNotEmpty() }
-    Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box {
             TextButton({ menu = true }, enabled = others.isNotEmpty()) { Text("Copy mask from…", fontSize = 12.sp, color = if (others.isNotEmpty()) Bloom.On else Bloom.Outline) }
             DropdownMenu(menu, { menu = false }, containerColor = Bloom.SurfaceHigh) {
@@ -263,18 +265,19 @@ private fun RowScope.ColorControls(state: EditorState, c: ColorStep?) {
     val i = state.stepIndex!!
     c.samples.chunked(3).forEachIndexed { k, (r, g, b) ->
         Box(
-            Modifier.padding(end = 4.dp).size(24.dp).clip(RoundedCornerShape(12.dp)).background(Color(r, g, b))
-                .border(1.dp, Bloom.On, RoundedCornerShape(12.dp))
+            // a 24 dp swatch in a 48 dp touch target
+            Modifier.size(48.dp)
                 .clickable(enabled = c.samples.size > 3) { state.replaceStep(i, c.copy(samples = c.samples.filterIndexed { j, _ -> j / 3 != k })) }
-                .semantics { contentDescription = "Sample ${k + 1}" + if (c.samples.size > 3) ". Tap to remove" else "" },
+                .semantics { contentDescription = "Sample ${k + 1}" + if (c.samples.size > 3) ". Tap to remove" else "" }
+                .padding(12.dp).clip(RoundedCornerShape(12.dp)).background(Color(r, g, b)).border(1.dp, Bloom.On, RoundedCornerShape(12.dp)),
         )
     }
     if (c.samples.size / 3 < ColorStep.MAX_SAMPLES) {
-        IconButton({ state.addingSample = !state.addingSample }, Modifier.size(36.dp).semantics { selected = state.addingSample }) {
+        IconButton({ state.addingSample = !state.addingSample }, Modifier.semantics { selected = state.addingSample }) {
             Icon(Icons.Plus, if (state.addingSample) "Next tap adds a sample. Tap to cancel" else "Add another sample", tint = if (state.addingSample) Bloom.Pollen else Bloom.On)
         }
     }
-    Slider(c.range * 100f, { state.replaceStep(i, c.copy(range = it.roundToInt() / 100f)) }, Modifier.weight(1f), valueRange = 0f..100f, colors = sliderColors())
+    Slider(c.range * 100f, { state.replaceStep(i, c.copy(range = it.roundToInt() / 100f)) }, Modifier.weight(1f).sliderLabel("Color range", "${(c.range * 100).roundToInt()}"), valueRange = 0f..100f, colors = sliderColors())
 }
 
 /** Brightness strip with four handles: the step rises from a to b, is full to c, and falls to none at d. */
@@ -338,10 +341,10 @@ private fun SignToggle(state: EditorState) {
 @Composable
 internal fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
     // lines up with the Size row below: label after the 48dp sign button, value column, then the More button's width
-    Row(Modifier.fillMaxWidth().height(48.dp).padding(end = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.width(84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
-        Slider(value, { onChange(it.roundToInt().toFloat()) }, Modifier.weight(1f), valueRange = range, colors = sliderColors())
-        Text("${value.roundToInt()}", Modifier.width(36.dp), fontSize = 14.sp, color = Bloom.On)
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(end = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.widthIn(min = 84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+        Slider(value, { onChange(it.roundToInt().toFloat()) }, Modifier.weight(1f).sliderLabel(label, "${value.roundToInt()}"), valueRange = range, colors = sliderColors())
+        Text("${value.roundToInt()}", Modifier.widthIn(min = 36.dp), fontSize = 14.sp, color = Bloom.On)
     }
 }
 
@@ -353,7 +356,7 @@ internal fun ToolBox(
 ) {
     Column(box) {
         if (more) moreRows()
-        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             main()
             IconButton(onMore) { Icon(Icons.Up, if (more) "Less" else moreDesc, Modifier.rotate(if (more) 180f else 0f), tint = Bloom.On) }
         }
@@ -381,9 +384,10 @@ internal fun BrushRows(state: EditorState) {
 internal fun Chip(label: String, selected: Boolean, desc: String? = null, onClick: () -> Unit) {
     val shape = RoundedCornerShape(10.dp)
     Row(
-        Modifier.height(40.dp).clip(shape).then(if (selected) Modifier.background(Bloom.SurfaceHigh) else Modifier)
+        Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).clip(shape).then(if (selected) Modifier.background(Bloom.SurfaceHigh) else Modifier)
             .clickable(role = Role.Tab, onClick = onClick).semantics { this.selected = selected; desc?.let { contentDescription = it } }
             .padding(horizontal = 10.dp),
+        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, fontSize = 12.sp, color = if (selected) Bloom.On else Bloom.OnVariant, fontWeight = FontWeight.Medium)
@@ -394,7 +398,7 @@ internal fun Chip(label: String, selected: Boolean, desc: String? = null, onClic
 @Composable
 private fun TypeButton(icon: androidx.compose.ui.graphics.vector.ImageVector, add: Boolean, selected: Boolean, desc: String, onClick: () -> Unit) {
     Box(
-        Modifier.size(44.dp, 40.dp).clip(RoundedCornerShape(10.dp)).then(if (selected) Modifier.background(Bloom.SurfaceHigh) else Modifier)
+        Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).then(if (selected) Modifier.background(Bloom.SurfaceHigh) else Modifier)
             .clickable(role = Role.Tab, onClick = onClick).semantics { this.selected = selected; contentDescription = desc },
         contentAlignment = Alignment.Center,
     ) {
@@ -414,7 +418,7 @@ private fun StepChip(s: MaskStep, selected: Boolean, onClick: () -> Unit, onMove
     var lifted by remember { mutableStateOf(false) }
     val move by rememberUpdatedState(onMove)
     Box(
-        Modifier.size(48.dp, 36.dp)
+        Modifier.size(48.dp)
             .zIndex(if (lifted) 1f else 0f)
             .graphicsLayer { translationX = dx; if (lifted) { scaleX = 1.15f; scaleY = 1.15f; shadowElevation = 12f } }
             .pointerInput(Unit) {
@@ -424,8 +428,6 @@ private fun StepChip(s: MaskStep, selected: Boolean, onClick: () -> Unit, onMove
                     onDragCancel = { dx = 0f; lifted = false },
                 ) { c, d -> c.consume(); dx += d.x }
             }
-            .clip(shape)
-            .border(if (selected) 2.dp else 1.dp, if (selected) Bloom.Pollen else Bloom.Outline, shape)
             .clickable(role = Role.Tab, onClick = onClick)
             .semantics {
                 this.selected = selected
@@ -434,7 +436,11 @@ private fun StepChip(s: MaskStep, selected: Boolean, onClick: () -> Unit, onMove
                     CustomAccessibilityAction("Move left") { move(-1); true },
                     CustomAccessibilityAction("Move right") { move(1); true },
                 )
-            },
+            }
+            // a 36 dp tall chip in a 48 dp touch target
+            .padding(vertical = 6.dp)
+            .clip(shape)
+            .border(if (selected) 2.dp else 1.dp, if (selected) Bloom.Pollen else Bloom.Outline, shape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(s.icon(), null, Modifier.size(20.dp), tint = if (s.visible) Bloom.On else Bloom.Outline)

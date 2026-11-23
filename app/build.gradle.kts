@@ -1,8 +1,13 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application") // AGP 9 compiles Kotlin itself
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
+// Release signing: keystore.properties at the project root (gitignored, see docs/RELEASE.md); without it release builds are unsigned.
+val keystore = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
 
 android {
     namespace = "dev.bloom.editor"
@@ -30,6 +35,23 @@ android {
         create("play") { dimension = "store" }
     }
 
+    signingConfigs {
+        if (keystore != null) create("release") {
+            storeFile = rootProject.file(keystore.getProperty("storeFile"))
+            storePassword = keystore.getProperty("storePassword")
+            keyAlias = keystore.getProperty("keyAlias")
+            keyPassword = keystore.getProperty("keyPassword")
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
+
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -44,6 +66,8 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("androidx.heifwriter:heifwriter:1.2.0") // HEIC/AVIF export
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    implementation("ch.acra:acra-core:5.14.2") // crash reports, shared only if the user agrees (BloomApp.kt)
+    implementation("ch.acra:acra-dialog:5.14.2")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")

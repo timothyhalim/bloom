@@ -279,3 +279,15 @@ Java_dev_bloom_editor_Segment_erase(JNIEnv *env, jclass, jstring modelPath, jstr
                         (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
     return ok;
 }
+
+// Frees every model, the SAM embedding and the shared runtime (low memory). The next run loads them again.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_bloom_editor_Segment_release0(JNIEnv *, jclass) {
+    std::lock_guard<std::mutex> guard(lock);
+    isnet = {};
+    sam = {};
+    depthNet = {};
+    eraseNet = {};
+    ExecutorScope::Current()->gc(Executor::FULL);
+    runtime.reset();
+}

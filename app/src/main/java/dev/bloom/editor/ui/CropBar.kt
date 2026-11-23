@@ -1,5 +1,7 @@
 package dev.bloom.editor.ui
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
@@ -51,12 +53,13 @@ private val cropParams = listOf(
 /** One Crop slider row, ending in space the width of the More button so it lines up with the row below. */
 @Composable
 private fun CropSlider(state: EditorState, c: Crop, aspect: Float, p: CropParam) {
-    Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(p.name, Modifier.width(100.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(p.name, Modifier.widthIn(min = 100.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
         // straightening or perspective resets the crop to the largest that fits, at the locked ratio or the crop's own
         val set = { v: Float -> state.crop = p.set(c, v).maximized(aspect, state.cropRatio ?: c.size(aspect).let { (w, h) -> w / h }) }
-        Slider(p.get(c), { set(if (p.degrees) (it * 10).roundToInt() / 10f else it.roundToInt().toFloat()) }, Modifier.weight(1f), valueRange = p.range, colors = sliderColors())
-        Text(if (p.degrees) "%.1f°".format(p.get(c)) else signed(p.get(c)), Modifier.width(48.dp), fontSize = 14.sp, color = Bloom.On)
+        val shown = if (p.degrees) "%.1f°".format(p.get(c)) else signed(p.get(c))
+        Slider(p.get(c), { set(if (p.degrees) (it * 10).roundToInt() / 10f else it.roundToInt().toFloat()) }, Modifier.weight(1f).sliderLabel(p.name, shown), valueRange = p.range, colors = sliderColors())
+        Text(shown, Modifier.widthIn(min = 48.dp), fontSize = 14.sp, color = Bloom.On)
         Spacer(Modifier.width(48.dp))
     }
 }

@@ -1,5 +1,7 @@
 package dev.bloom.editor.ui
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import android.graphics.Bitmap
 import android.graphics.RectF
 import android.net.Uri
@@ -67,6 +69,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -428,7 +431,7 @@ fun EditorScreen(photoView: PhotoView) {
         r.exceptionOrNull()?.let { if (it is CancellationException) throw it; android.util.Log.e("Bloom", "depth failed", it) }
         if (state.preview !== photo) return@LaunchedEffect
         state.depth = r.getOrNull()
-        state.depthStatus = r.exceptionOrNull()?.let { "Couldn't measure depth: ${it.message}" }
+        state.depthStatus = r.exceptionOrNull()?.let { "Couldn't measure depth: ${reason(it)}" }
     }
     // Subject masks are found once per photo and pin set, when a Subject or Background step needs one.
     LaunchedEffect(state.preview, neededSubjects, state.aiRetry) {
@@ -450,7 +453,7 @@ fun EditorScreen(photoView: PhotoView) {
             r.exceptionOrNull()?.let { if (it is CancellationException) throw it; android.util.Log.e("Bloom", "subject failed", it) }
             if (state.preview !== photo) return@LaunchedEffect
             r.onSuccess { state.subjects = state.subjects + (pins to it) }
-            state.subjectStatus = r.exceptionOrNull()?.let { "Couldn't find the subject: ${it.message}" }
+            state.subjectStatus = r.exceptionOrNull()?.let { "Couldn't find the subject: ${reason(it)}" }
             if (r.isFailure) return@LaunchedEffect
         }
     }
@@ -584,7 +587,7 @@ fun EditorScreen(photoView: PhotoView) {
                     }
                 }
                 state.erasing = null
-                r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "erase failed", it); snackbar.showSnackbar("Couldn't erase: ${it.message}") }
+                r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "erase failed", it); snackbar.showSnackbar("Couldn't erase: ${reason(it)}") }
                 val (box, px) = r.getOrNull() ?: return@launch
                 if (state.draft?.id != d.id) return@launch
                 val w = photo.width.toFloat()
@@ -614,7 +617,9 @@ fun EditorScreen(photoView: PhotoView) {
             }
             exporting = null
             r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "export failed", it) }
-            snackbar.showSnackbar(r.fold({ "Saved" }, { "Export failed: ${it.message ?: it}" }))
+            snackbar.showSnackbar(
+                r.fold({ "Saved" }, { if (it is OutOfMemoryError) "Not enough memory to export. Pick a smaller Size in the Export menu" else "Export failed: ${it.message ?: it}" }),
+            )
         }
     }
     val savers = ImageIo.Format.entries.associateWith { f -> rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(f.mime)) { export(it, f) } }
@@ -716,9 +721,9 @@ fun EditorScreen(photoView: PhotoView) {
                     val l = doc.layers.firstOrNull { it.id == id }
                     val g = doc.groups.firstOrNull { it.id == id }
                     if (l == null && g == null && id != PHOTO_ID) return@let
-                    // tap outside closes the bubble and does nothing else
-                    Box(Modifier.fillMaxSize().clickable(noRipple, null) { state.bubble = null })
-                    val at = Modifier.align(Alignment.TopEnd).padding(end = 52.dp)
+                    // tap outside closes the bubble and does nothing else; screen readers close it with Back instead of a screen-sized button
+                    Box(Modifier.fillMaxSize().clearAndSetSemantics {}.clickable(noRipple, null) { state.bubble = null })
+                    val at = Modifier.align(Alignment.TopEnd).padding(end = 56.dp)
                         .offset { IntOffset(0, (y - canvasTop - 40.dp.toPx()).roundToInt().coerceAtLeast(0)) }
                     val opacity = state.opacityPreview?.takeIf { it.first == id }?.second
                     if (g != null) {
@@ -931,7 +936,7 @@ private fun EmptyState(
 private fun OpenButtons(onOpen: () -> Unit, onOpenFile: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Row(
-            Modifier.height(52.dp).clip(RoundedCornerShape(20.dp, 6.dp, 20.dp, 6.dp)).background(Bloom.Pollen)
+            Modifier.heightIn(min = 52.dp).clip(RoundedCornerShape(20.dp, 6.dp, 20.dp, 6.dp)).background(Bloom.Pollen)
                 .clickable(role = Role.Button, onClick = onOpen).padding(horizontal = 28.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1000,13 +1005,13 @@ private fun ColorRows(state: EditorState, d: Layer, c: ColorEffect, box: Modifie
         CurvesRow(state, box)
         return
     }
-    Row(box.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(p.name, Modifier.width(92.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+    Row(box.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(p.name, Modifier.widthIn(min = 92.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
         Slider(
             value = c[p], onValueChange = { state.draft = d.copy(effect = c.with(p, snap(p, it))) },
-            valueRange = -100f..100f, modifier = Modifier.weight(1f), colors = sliderColors(),
+            valueRange = -100f..100f, modifier = Modifier.weight(1f).sliderLabel(p.name, shown(p, c[p]) + if (p == ColorParam.Exposure) " EV" else ""), colors = sliderColors(),
         )
-        Text(shown(p, c[p]), Modifier.width(44.dp), fontSize = 14.sp, color = Bloom.On)
+        Text(shown(p, c[p]), Modifier.widthIn(min = 44.dp), fontSize = 14.sp, color = Bloom.On)
         IconButton({ state.draft = d.copy(effect = c.with(p, 0f)) }) { Icon(Icons.Reset, "Reset ${p.name}", tint = Bloom.On) }
     }
 }
@@ -1099,8 +1104,8 @@ private fun DetailRows(state: EditorState, d: Layer, e: DetailEffect, box: Modif
     }
     val set = { p: DetailParam, v: Float -> state.draft = d.copy(effect = e.copy(detail = p.set(det, v))) }
     ToolBox(state.detailMore, { state.detailMore = !state.detailMore }, box, moreRows = {
-        if (!e.sharpen) Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Type", Modifier.width(84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+        if (!e.sharpen) Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Type", Modifier.widthIn(min = 84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
             for (t in BlurType.entries) ParamChip(t.icon, "${t.name} blur", false, det.type == t) { state.draft = d.copy(effect = e.copy(detail = det.copy(type = t))) }
         }
         for (p in params.drop(1)) SliderRow(p.name, p.get(det), p.range) { set(p, it) }
@@ -1117,13 +1122,13 @@ private fun DetailRows(state: EditorState, d: Layer, e: DetailEffect, box: Modif
 /** A tool's main slider: on the left what is selected and under it what the slider sets, then the slider and its value. */
 @Composable
 internal fun RowScope.MainSlider(title: String, sub: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
-    Column(Modifier.width(84.dp).padding(start = 16.dp)) {
+    Column(Modifier.widthIn(min = 84.dp).padding(start = 16.dp)) {
         // the same style as every slider label (Color, mask); the second line a step quieter
         Text(title, fontSize = 12.sp, lineHeight = 14.sp, color = Bloom.OnVariant)
         Text(sub, fontSize = 11.sp, lineHeight = 13.sp, color = Bloom.OnVariant.copy(alpha = 0.7f))
     }
-    Slider(value, { onChange(it.roundToInt().toFloat()) }, Modifier.weight(1f), valueRange = range, colors = sliderColors())
-    Text("${value.roundToInt()}", Modifier.width(36.dp), fontSize = 14.sp, color = Bloom.On)
+    Slider(value, { onChange(it.roundToInt().toFloat()) }, Modifier.weight(1f).sliderLabel("$title $sub", "${value.roundToInt()}"), valueRange = range, colors = sliderColors())
+    Text("${value.roundToInt()}", Modifier.widthIn(min = 36.dp), fontSize = 14.sp, color = Bloom.On)
 }
 
 /** Lens blur's focus point or Zoom blur's centre on the photo, at ([u], [v]): tap or drag the photo to move it. */
@@ -1155,7 +1160,7 @@ private val ColorParam.icon get() = when (this) {
 @Composable
 internal fun ParamChip(icon: ImageVector, desc: String, changed: Boolean, selected: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(42.dp, 44.dp).clip(RoundedCornerShape(10.dp))
+        Modifier.size(48.dp).clip(RoundedCornerShape(10.dp))
             .then(if (selected) Modifier.background(Bloom.SurfaceHigh).drawBehind {
                 drawLine(Bloom.Pollen, Offset(8.dp.toPx(), size.height - 1.dp.toPx()), Offset(size.width - 8.dp.toPx(), size.height - 1.dp.toPx()), 2.dp.toPx())
             } else Modifier)
@@ -1183,6 +1188,9 @@ private fun shown(p: ColorParam, v: Float): String {
         else -> "0"
     }
 }
+
+// runCatching catches OutOfMemoryError too; its own message is a byte count
+private fun reason(e: Throwable) = if (e is OutOfMemoryError) "not enough memory. Close other apps and try again" else e.message
 
 internal fun signed(v: Float): String {
     val i = v.roundToInt()

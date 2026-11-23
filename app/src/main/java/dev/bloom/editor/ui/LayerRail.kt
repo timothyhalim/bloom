@@ -1,5 +1,9 @@
 package dev.bloom.editor.ui
 
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.stateDescription
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.CornerRadius
@@ -127,14 +131,18 @@ fun LayerRail(
 
     if (collapsed) {
         Box(
-            modifier.padding(top = 8.dp).size(20.dp, 48.dp)
-                .background(Bloom.SurfaceContainer, RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
-                .clickable { collapsed = false }.semantics { contentDescription = "Show layers" },
-            contentAlignment = Alignment.Center,
-        ) { Icon(Icons.Back, null, Modifier.size(14.dp), tint = Bloom.On) }
+            // a 20 dp tab at the edge in a 48 dp touch target
+            modifier.padding(top = 8.dp).size(48.dp).clickable { collapsed = false }.semantics { contentDescription = "Show layers" },
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Box(
+                Modifier.size(20.dp, 48.dp).background(Bloom.SurfaceContainer, RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Back, null, Modifier.size(14.dp), tint = Bloom.On) }
+        }
         return
     }
-    Column(modifier.padding(top = 8.dp, end = 4.dp).width(44.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.padding(top = 8.dp, end = 4.dp).width(48.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(
             Modifier.height(48.dp).systemGestureExclusion()
                 .semantics {
@@ -155,7 +163,7 @@ fun LayerRail(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
-                Modifier.height(28.dp).background(if (layersHidden) Bloom.PollenContainer else Bloom.SurfaceContainer, CircleShape)
+                Modifier.heightIn(min = 28.dp).background(if (layersHidden) Bloom.PollenContainer else Bloom.SurfaceContainer, CircleShape)
                     .border(1.dp, if (layersHidden) Bloom.Pollen else Bloom.Outline, CircleShape).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -295,7 +303,7 @@ private fun Thumb(
     member: Boolean = false, desc: String = "", content: @Composable () -> Unit,
 ) {
     val shape = RoundedCornerShape(8.dp)
-    Box(modifier.size(44.dp, 48.dp).semantics { if (desc.isNotEmpty()) contentDescription = desc }, contentAlignment = Alignment.Center) {
+    Box(modifier.size(48.dp).semantics { if (desc.isNotEmpty()) contentDescription = desc }, contentAlignment = Alignment.Center) {
         // a line down the left joins a group's members under its header
         if (member) Box(Modifier.align(Alignment.CenterStart).padding(start = 1.dp).size(2.dp, 48.dp).background(Bloom.Outline))
         Box(
@@ -328,7 +336,7 @@ private fun Thumb(
 @Composable
 private fun Arrow(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        modifier.size(44.dp, 32.dp).clickable(onClick = onClick).semantics { contentDescription = desc },
+        modifier.size(48.dp, 32.dp).clickable(onClick = onClick).semantics { contentDescription = desc },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -367,7 +375,7 @@ private fun Bubble(modifier: Modifier, content: @Composable ColumnScope.() -> Un
 @Composable
 fun PhotoBubble(deband: Boolean, deep: Boolean, onDeband: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     Bubble(modifier) {
-        Text("Photo", Modifier.height(48.dp).padding(start = 16.dp, top = 14.dp), color = Bloom.On)
+        Text("Photo", Modifier.heightIn(min = 48.dp).padding(start = 16.dp, top = 14.dp), color = Bloom.On)
         Row(
             Modifier.fillMaxWidth().toggleable(deband && !deep, enabled = !deep, role = Role.Switch, onValueChange = onDeband)
                 .padding(horizontal = 16.dp, vertical = 4.dp),
@@ -389,7 +397,7 @@ fun PhotoBubble(deband: Boolean, deep: Boolean, onDeband: (Boolean) -> Unit, mod
 @Composable
 private fun TitleRow(name: String, default: String, visible: Boolean, what: String, onRename: (String) -> Unit, onVisible: () -> Unit, extra: @Composable () -> Unit = {}) {
     var editing by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         if (editing) {
             var text by remember { mutableStateOf(TextFieldValue(name, TextRange(name.length))) }
             val focus = remember { FocusRequester() }
@@ -416,13 +424,13 @@ private fun TitleRow(name: String, default: String, visible: Boolean, what: Stri
 
 @Composable
 private fun OpacityRow(opacity: Float, onOpacity: (Float) -> Unit, onOpacityDone: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Opacity", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Opacity", Modifier.widthIn(min = 56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
         Slider(
             value = opacity * 100f, onValueChange = { onOpacity(it.roundToInt() / 100f) }, onValueChangeFinished = onOpacityDone,
-            valueRange = 0f..100f, modifier = Modifier.weight(1f), colors = sliderColors(),
+            valueRange = 0f..100f, modifier = Modifier.weight(1f).sliderLabel("Opacity", "${(opacity * 100).roundToInt()}%"), colors = sliderColors(),
         )
-        Text("${(opacity * 100).roundToInt()}%", Modifier.width(40.dp).padding(start = 4.dp), fontSize = 13.sp, color = Bloom.On)
+        Text("${(opacity * 100).roundToInt()}%", Modifier.widthIn(min = 40.dp).padding(start = 4.dp), fontSize = 13.sp, color = Bloom.On)
     }
 }
 
@@ -453,8 +461,8 @@ fun LayerBubble(
     Bubble(modifier) {
         TitleRow(layer.name, layer.kind.label, layer.visible, "layer", onRename, onVisible)
         OpacityRow(layer.opacity, onOpacity, onOpacityDone)
-        Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Blend", Modifier.width(56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Blend", Modifier.widthIn(min = 56.dp), fontSize = 12.sp, color = Bloom.OnVariant)
             Box {
                 TextButton({ blendMenu = true }) { Text(layer.blend.label + " ▾", color = Bloom.On) }
                 DropdownMenu(blendMenu, { blendMenu = false }, containerColor = Bloom.SurfaceHigh) {
@@ -516,11 +524,11 @@ fun GroupBubble(
 private fun BubbleAction(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit, enabled: Boolean = true) {
     val tint = if (enabled) Bloom.On else Bloom.Outline
     Column(
-        modifier.height(52.dp).clip(RoundedCornerShape(8.dp)).clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        modifier.heightIn(min = 52.dp).clip(RoundedCornerShape(8.dp)).clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
     ) {
         Icon(icon, null, Modifier.size(20.dp), tint = tint)
-        Text(label, fontSize = 11.sp, color = tint)
+        Text(label, fontSize = 11.sp, color = tint, textAlign = TextAlign.Center)
     }
 }
 
@@ -529,6 +537,9 @@ fun sliderColors() = SliderDefaults.colors(
     thumbColor = Bloom.On, activeTrackColor = Bloom.Pollen, inactiveTrackColor = Bloom.Outline,
     activeTickColor = Bloom.Pollen, inactiveTickColor = Bloom.Outline,
 )
+
+/** A slider's name and value as read out ("Exposure", "+1.0 EV") instead of the bare percentage. */
+fun Modifier.sliderLabel(name: String, value: String) = semantics { contentDescription = name; stateDescription = value }
 
 /** Minimap shown while zoomed past the view: whole photo plus the visible rectangle. Tap or drag to move there. */
 @Composable
