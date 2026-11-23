@@ -249,6 +249,32 @@ class PipelineTest {
     }
 
     @Test
+    fun jpegExportKeepsSensorOrientationAndExifButNotPixelLayoutTags() {
+        val src = Bitmap.createBitmap(128, 256, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GRAY) }
+        val f = java.io.File(ctx.cacheDir, "t_exif.jpg").apply { outputStream().use { src.compress(Bitmap.CompressFormat.JPEG, 100, it) } }
+        androidx.exifinterface.media.ExifInterface(f).apply {
+            setAttribute(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90.toString())
+            setAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE, "BloomCam")
+            setAttribute(androidx.exifinterface.media.ExifInterface.TAG_MODEL, "B1")
+            setAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL, "2026:01:02 03:04:05")
+            setAttribute(androidx.exifinterface.media.ExifInterface.TAG_PIXEL_X_DIMENSION, "9999")
+            saveAttributes()
+        }
+        val dst = java.io.File(ctx.cacheDir, "t_exif_out.jpg")
+        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(f), android.net.Uri.fromFile(dst), ctx.cacheDir, listOf(Layer(1)), false, ImageIo.Format.JPEG)
+        val exif = androidx.exifinterface.media.ExifInterface(dst)
+        assertEquals(90, exif.rotationDegrees)
+        assertEquals("BloomCam", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE))
+        assertEquals("B1", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MODEL))
+        assertEquals("2026:01:02 03:04:05", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL))
+        assertTrue("the stale size isn't copied", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_PIXEL_X_DIMENSION) != "9999")
+        // pixels stay in sensor orientation; the tag turns them
+        val out = android.graphics.BitmapFactory.decodeFile(dst.path)
+        assertEquals(128, out.width)
+        assertEquals(256, out.height)
+    }
+
+    @Test
     fun heicExport() { exportAs(ImageIo.Format.HEIC) }
 
     @Test

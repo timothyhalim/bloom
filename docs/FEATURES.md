@@ -19,20 +19,20 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Edge-to-edge window with dark transparent system bars | MainActivity.kt:15 | none | manual |
 | One PhotoView created per activity, follows the lifecycle (pause/resume GL) | MainActivity.kt:16-17, PhotoView.kt:311-312 | none | manual |
 | Crash reports (ACRA, both flavors): after a crash a dialog asks "Share the crash report?"; unanswered, it asks again on the next launch (reports under a minute old wait). Share opens the system share sheet with the report text; Don't share deletes it. No network sender, no server. Report holds only stack trace, app version name/code, Android version, brand, model, available/total memory, crash date | BloomApp.kt, app/src/main/resources/META-INF/services/org.acra.sender.ReportSenderFactory | none | manual (`am crash`) |
-| First run (no photo): empty state shows "Bloom", tagline "Edit in layers. Everything runs on your phone." | ui/EditorScreen.kt:682-686 | none | UI |
-| Empty state is opaque, so a closed photo never shows through | ui/EditorScreen.kt:552-554 | none | UI |
-| "Open photo" petal button opens the system photo picker, images only | ui/EditorScreen.kt:687-693, 497 | none | UI |
-| "Open file (RAW: CR3, NEF, ARW, DNG…)" opens the document picker with `image/*` and `application/octet-stream` (CR3 shows as octet-stream) | ui/EditorScreen.kt:694-698, 439, 554 | none | UI |
-| With no photo: Back, Undo, Redo, Compare and Export are disabled; layer rail, navigator and tool bar hidden | ui/EditorScreen.kt:638-665, 552-555 | none | UI |
-| Spec: Home has a Settings icon, privacy line and recent-projects grid; not built (no projects yet, M7) | design/UI.md:38-39 | none | n/a |
+| First run (no photo): empty state shows "Bloom", tagline "Edit in layers. Everything runs on your phone." | ui/EditorScreen.kt:682-686 | UI: ProjectsTest.firstRunHomeHasTheTaglineAndOpenButtonsAndNoEditing | UI |
+| Empty state is opaque, so a closed photo never shows through | ui/EditorScreen.kt:552-554 | UI: BackTest.backGoesFromMaskModeToTheToolToToolsToHome (Home shows after close; opacity itself manual) | UI |
+| "Open photo" petal button opens the system photo picker, images only | ui/EditorScreen.kt:687-693, 497 | UI: ProjectsTest.openPhotoAsksThePickerForImagesAndOpensACopyAsANewProject | UI |
+| "Open file (RAW: CR3, NEF, ARW, DNG…)" opens the document picker with `image/*` and `application/octet-stream` (CR3 shows as octet-stream) | ui/EditorScreen.kt:694-698, 439, 554 | UI: ProjectsTest.openFileAsksForImagesAndRawsAndCancelDoesNothing | UI |
+| With no photo: Back, Undo, Redo, Compare and Export are disabled; layer rail, navigator and tool bar hidden | ui/EditorScreen.kt:638-665, 552-555 | UI: ProjectsTest.firstRunHomeHasTheTaglineAndOpenButtonsAndNoEditing | UI |
+| Spec: Home has a Settings icon and privacy line; not built (the recent-projects grid is built, see §30) | design/UI.md:38-39 | none | n/a |
 
 ## 2. Open and load
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Opening decodes on IO thread, then replaces the photo and drops all edits, AI masks, depth and history | ui/EditorScreen.kt:430-436, 274-284 | none | UI |
-| Open failure shows snackbar "Can't open image: <reason>" and keeps the current photo | ui/EditorScreen.kt:434 | none | UI |
-| Cancelling the picker (null uri) does nothing | ui/EditorScreen.kt:431 | none | UI |
+| Opening decodes on IO thread, then replaces the photo and drops all edits, AI masks, depth and history | ui/EditorScreen.kt:430-436, 274-284 | UI: ProjectsTest.openPhotoAsksThePickerForImagesAndOpensACopyAsANewProject, UndoTest.openingAnotherPhotoClearsHistory | UI |
+| Open failure shows snackbar "Can't open image: <reason>" and keeps the current photo | ui/EditorScreen.kt:434 | UI: ProjectsTest.aFileThatIsNoImageShowsWhyAndLeavesNoProject | UI |
+| Cancelling the picker (null uri) does nothing | ui/EditorScreen.kt:431 | UI: ProjectsTest.openFileAsksForImagesAndRawsAndCancelDoesNothing | UI |
 | Preview downsampled by power of two so the long side is ≤ 2048 | ImageIo.kt:29, 33-37, 59 | unit: MathTest.sampleSizeKeepsLongSideUnderMax | unit |
 | Preview is made upright from EXIF rotation and flip | ImageIo.kt:64-69 | none | GPU (instrumented decode) |
 | Wide-gamut photos (P3 etc.) are converted to sRGB on decode | ImageIo.kt:40, 60 | none | GPU (instrumented decode) |
@@ -87,12 +87,12 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Compare drops layers only; the crop still applies | ui/EditorScreen.kt:172-173, 340-342 | none | UI |
 | Compare disabled (outline tint, no gesture) without a photo | ui/EditorScreen.kt:646-650 | none | UI |
 | Spec: Compare shows an "Original" tag and is a toggle under TalkBack; not built | design/UI.md:216 | none | n/a |
-| Export button: Pollen petal when enabled; disabled while a tool is open or exporting | ui/EditorScreen.kt:654-665 | none | UI |
+| Export button: Pollen petal when enabled; disabled while a tool is open or exporting | ui/EditorScreen.kt:654-665 | UI: ExportMenuTest.exportIsOffWhileAToolIsOpen, ProjectsTest.firstRunHomeHasTheTaglineAndOpenButtonsAndNoEditing | UI |
 | Export progress: ring + "NN%" in the Export button while exporting | ui/EditorScreen.kt:660-663 | none | UI |
-| Export menu: "Size: 100%" cycles 100 → 50 → 25 → 100 in place, menu stays open | ui/EditorScreen.kt:666-668 | none | UI |
-| Export size choice is kept for the session (not persisted) | ui/EditorScreen.kt:475 | none | UI |
-| Export menu: one entry per format: JPEG, WebP, HEIC, AVIF, "16-bit PNG (larger, for further editing)"; each opens Save-as with `bloom_<millis>.<ext>` and its MIME type | ui/EditorScreen.kt:876-891, 620, 672 | none | UI |
-| HEIC shown only on API 29+ with a HEVC/HEIC encoder; AVIF only on API 34+ with an AV1 encoder | ImageIo.kt:36-47 | GPU: heicExport, avifExport (skip without encoder) | GPU |
+| Export menu: "Size: 100%" cycles 100 → 50 → 25 → 100 in place, menu stays open | ui/EditorScreen.kt:666-668 | UI: ExportMenuTest.sizeCyclesInPlaceAndTheMenuStaysOpen | UI |
+| Export size choice is kept for the session (not persisted) | ui/EditorScreen.kt:475 | UI: ExportMenuTest.aFormatAsksWhereToSaveWithATimestampedName | UI |
+| Export menu: one entry per format: JPEG, WebP, HEIC, AVIF, "16-bit PNG (larger, for further editing)"; each opens Save-as with `bloom_<millis>.<ext>` and its MIME type | ui/EditorScreen.kt:876-891, 620, 672 | UI: ExportMenuTest.theMenuListsTheFormatsThisPhoneCanWrite, aFormatAsksWhereToSaveWithATimestampedName | UI |
+| HEIC shown only on API 29+ with a HEVC/HEIC encoder; AVIF only on API 34+ with an AV1 encoder | ImageIo.kt:36-47 | GPU: heicExport, avifExport (skip without encoder), UI: ExportMenuTest.theMenuListsTheFormatsThisPhoneCanWrite | GPU |
 
 ## 5. Undo / redo (history)
 
@@ -275,7 +275,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
 | One box: main row + More (caret rotates; "Less") that stacks extra rows above | ui/MaskBar.kt:348-360 | none | UI |
-| More (mask) open/closed is remembered across sessions | ui/EditorScreen.kt:315 | none | UI |
+| More (mask) open/closed is remembered across sessions | ui/EditorScreen.kt:315 | UI: SettingsTest.savedToolSettingsLoadOnStart | UI |
 | More: "Copy mask from…" lists other layers with steps as "<Kind> layer N"; disabled when none | ui/MaskBar.kt:225-241 | none | UI |
 | Copy mask replaces this layer's steps and invert, clears the selection | ui/MaskBar.kt:236-237 | none | UI |
 | More: "Clear mask" removes all steps and Invert; disabled when already empty | ui/MaskBar.kt:242-244 | none | UI |
@@ -389,7 +389,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | More (Lens): Range 0..100 (default 10), Highlights 0..100 (default 30) | ui/EditorScreen.kt:834-838, model/Document.kt:225-228 | none | UI |
 | More (Motion): Angle 0..180 | ui/EditorScreen.kt:832 | none | UI |
 | More (Sharpen): Radius 0..100 (default 30), Clarity −100..100 | ui/EditorScreen.kt:820-824 | none | UI |
-| More (Detail) remembered across sessions | ui/EditorScreen.kt:317 | none | UI |
+| More (Detail) remembered across sessions | ui/EditorScreen.kt:317 | UI: SettingsTest.savedToolSettingsLoadOnStart | UI |
 | Blur/Sharpen with Amount 0 (and Clarity 0) is "not edited": ✓ adds nothing | model/Document.kt:259-260 | none | unit |
 | Gaussian blur follows the bell curve (sigma 2% of height at 100) | gl/Pipeline.kt:428-452 | GPU: gaussianBlurFollowsTheBellCurve | GPU |
 | Masked blur doesn't smear the subject into the background (mask-weighted) | gl/Pipeline.kt:1073-1075 | GPU: maskedBlurDoesntSmearTheSubjectIntoTheBackground | GPU |
@@ -427,7 +427,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | GPU reads where the grid points (bilinear) | gl/Pipeline.kt:332-357 | GPU: liquifyReadsWhereTheGridPoints | GPU |
 | Liquified export tile matches the full render (overlap = largest offset) | ImageIo.kt:112, model/Liquify.kt:69 | GPU: liquifiedExportTileMatchesTheFullRender | GPU |
 | Liquify layer is maskable | ui/LiquifyBar.kt:124 | none | GPU |
-| Liquify tool, Strength, Softness, Size, Direction, More remembered across sessions | ui/EditorScreen.kt:309-322 | none | UI |
+| Liquify tool, Strength, Softness, Size, Direction, More remembered across sessions | ui/EditorScreen.kt:309-322 | UI: SettingsTest.savedToolSettingsLoadOnStart, changesAreSavedAsTheyHappen | UI |
 
 ## 22. Crop
 
@@ -452,7 +452,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | More ("Rotate and perspective"): Rotate ±45° in 0.1° steps, shown "N.N°" | ui/CropBar.kt:45-62 | none | UI |
 | More: Vertical and Horizontal keystone −100..100 | ui/CropBar.kt:47-48 | none | UI |
 | Straighten/keystone reset the crop to the largest that fits at the locked or current ratio | ui/CropBar.kt:56-57 | unit: CropTest.straightenedCropFitsInsideThePhoto (fit) | unit + UI |
-| Crop More remembered across sessions | ui/EditorScreen.kt:318 | none | UI |
+| Crop More remembered across sessions | ui/EditorScreen.kt:318 | UI: SettingsTest.savedToolSettingsLoadOnStart | UI |
 | Bar: Turn 90° clockwise (crop turns with it; locked ratio inverts) | ui/CropBar.kt:207, model/Crop.kt:111 | unit: CropTest.quarterTurnIsClockwise, CropTest.turningKeepsTheSameCropOfThePhoto | unit |
 | Bar: Flip horizontally (as seen, crop mirrored) | ui/CropBar.kt:208, model/Crop.kt:114 | unit: CropTest.flipMirrorsAndTwiceIsIdentity | unit |
 | Four turns / two flips = identity | model/Crop.kt:111-114 | unit: CropTest.quarterTurnIsClockwise, CropTest.flipMirrorsAndTwiceIsIdentity | unit |
@@ -513,21 +513,21 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Export uses the document at the moment of export (layers, crop, deband, size, subjects, depth) | ui/EditorScreen.kt:476-494 | none | UI |
-| Result snackbar "Saved" / "Export failed: …" | ui/EditorScreen.kt:492 | none | UI |
+| Export uses the document at the moment of export (layers, crop, deband, size, subjects, depth) | ui/EditorScreen.kt:476-494 | UI: ExportMenuTest.exportWritesTheFileAndSaysSaved (partial: writes the file) | UI |
+| Result snackbar "Saved" / "Export failed: …" | ui/EditorScreen.kt:492 | UI: ExportMenuTest.exportWritesTheFileAndSaysSaved ("Saved" only) | UI |
 | Out of memory: "Not enough memory to export. Pick a smaller Size in the Export menu" | ui/EditorScreen.kt (export) | none | UI |
 | Progress 0..1 rises monotonically and ends at 1 | ImageIo.kt:87-89, 176, 184, 198 | GPU: pngExportKeepsLevelsBetweenEightBitSteps (asserts progress) | GPU |
 | Full resolution, 1024 px tiles, rendered on an offscreen GL context | ImageIo.kt:30, 135-185, gl/Offscreen.kt | GPU: paddedTileMatchesFullRenderWithFeather | GPU |
 | No visible layers and no crop/scale: tiles copied without the GPU | ImageIo.kt:135, 179 | none | GPU |
 | Tiles overlap by the largest reach (feather, deband, subject edge, blur, liquify); blur pads align to 64 px | ImageIo.kt:106-115 | GPU: paddedTileMatchesFullRenderWithFeather, blurredExportTileMatchesTheFullRender | GPU |
-| JPEG: quality 95, sensor orientation kept with EXIF orientation tag | ImageIo.kt:194, 131-132 | none | GPU |
+| JPEG: quality 95, sensor orientation kept with EXIF orientation tag | ImageIo.kt:194, 131-132 | GPU: jpegExportKeepsSensorOrientationAndExifButNotPixelLayoutTags | GPU |
 | WebP: lossy, quality 95, drawn upright, EXIF copied; fails clearly past 16383 px a side | ImageIo.kt:222-231 | GPU: webpExport | GPU |
 | HEIC / AVIF: quality 95 via androidx.heifwriter (bitmap input), drawn upright, no EXIF. Long side capped by GL_MAX_TEXTURE_SIZE | ImageIo.kt:216-221 | GPU: heicExport, avifExport | GPU |
 | 16-bit PNG keeps levels between 8-bit steps | ImageIo.kt:133, gl/Pipeline.kt:461-486 | GPU: pngExportKeepsLevelsBetweenEightBitSteps | GPU |
 | Everything but JPEG (and anything cropped or scaled) drawn upright; orientation tag reset to normal | ImageIo.kt:125-130, 237 | GPU: pngExportIsUpright | GPU |
 | Masks line up in rotated (EXIF) tiles | ImageIo.kt:95-102 | GPU: rotatedExportTilesMatchTheUprightPreview | GPU |
 | Size 50% / 25%: output averages source pixels (n×n box) | ImageIo.kt:150, gl/Pipeline.kt:857-859 | GPU: halfSizeExportAveragesPixels | GPU |
-| EXIF copied from the source, minus pixel-layout and thumbnail tags | ImageIo.kt:204-239 | none | GPU (instrumented, file I/O) |
+| EXIF copied from the source, minus pixel-layout and thumbnail tags | ImageIo.kt:204-239 | GPU: jpegExportKeepsSensorOrientationAndExifButNotPixelLayoutTags, webpExport | GPU (instrumented, file I/O) |
 | Source without readable EXIF (CR3): export still succeeds without tags | ImageIo.kt:230 | none | GPU |
 | RAW export: full decode (35% of the progress bar), always upright | ImageIo.kt:84-89, 196 | none | manual |
 | Ultra HDR: export uses the whole photo's gain map at preview size, so it matches the preview | ImageIo.kt:140-148 | none | GPU |
@@ -553,9 +553,9 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| SharedPreferences "tools" saves brush size, softness, flow, Liquify size/strength/softness, Twirl direction, More states (mask, Liquify, Detail, Crop), Liquify tool | ui/EditorScreen.kt:302-330 | none | UI (relaunch activity) |
-| Saved on every change (snapshotFlow) | ui/EditorScreen.kt:323-329 | none | UI |
-| Unknown saved Liquify tool name ignored | ui/EditorScreen.kt:322 | none | unit |
+| SharedPreferences "tools" saves brush size, softness, flow, Liquify size/strength/softness, Twirl direction, More states (mask, Liquify, Detail, Crop), Liquify tool | ui/EditorScreen.kt:302-330 | UI: SettingsTest.savedToolSettingsLoadOnStart | UI (relaunch activity) |
+| Saved on every change (snapshotFlow) | ui/EditorScreen.kt:323-329 | UI: SettingsTest.changesAreSavedAsTheyHappen | UI |
+| Unknown saved Liquify tool name ignored | ui/EditorScreen.kt:322 | UI: SettingsTest.anUnknownSavedLiquifyBrushIsIgnored | unit |
 | Not persisted: export size, rail collapsed, mask sign, current Color parameter, edits (no projects until M7) | ui/EditorScreen.kt:475, ui/LayerRail.kt:96, ui/EditorScreen.kt:125 | none | n/a |
 
 ## 28. Theme, scroll indicators, accessibility basics
@@ -586,6 +586,20 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Mask geometry in upright coordinates, so preview and rotated tiles agree | gl/Pipeline.kt:72-74, 718-724 | GPU: rotatedExportTilesMatchTheUprightPreview | GPU |
 | Eyedropper sample is 3×3 averaged sRGB of the layers below | gl/Pipeline.kt:487-497 | GPU: eyedropperReadsTheLayersBelow | GPU |
 | Mask readback for AI Erase (preview size bytes) | gl/Pipeline.kt:322-330, PhotoView.kt:161-166 | none | GPU |
+
+## 30. Projects and Home
+
+| Feature / behaviour | Where (file:line) | Test today | Testable how |
+|---|---|---|---|
+| Home lists projects with edits as a 3-column grid of thumbnails, most recently saved first; with none it shows the tagline | ui/EditorScreen.kt (EmptyState), Project.kt (list) | UI: ProjectsTest.homeListsSavedProjectsAndATapOpensOne, firstRunHomeHasTheTaglineAndOpenButtonsAndNoEditing | UI |
+| Tap a project opens it with its document (not an undo step) | ui/EditorScreen.kt (openProject) | UI: ProjectsTest.homeListsSavedProjectsAndATapOpensOne | UI |
+| Long-press asks "Delete <name>? Its edits can't be brought back. The photo in your gallery stays." Delete / Cancel | ui/EditorScreen.kt (deleting) | UI: ProjectsTest.longPressAsksBeforeDeletingAProject | UI |
+| Opening a photo copies it into a new project folder (original.<ext>); a file that fails to open leaves no project | Project.kt (create), ui/EditorScreen.kt (open) | UI: ProjectsTest.openPhotoAsksThePickerForImagesAndOpensACopyAsANewProject, aFileThatIsNoImageShowsWhyAndLeavesNoProject | UI |
+| Autosave: the committed document 2 s after it last changed, and when the app leaves the screen | ui/EditorScreen.kt (autosave) | UI: ProjectsTest.editsAutosaveAfterTwoSeconds (on leaving the screen: none) | UI |
+| Close: Keep project saves (a project left with no edits is removed, without asking); Discard deletes a new project, or takes a reopened one back to how it was opened; Cancel stays | ui/EditorScreen.kt (closeProject, keepAsk) | UI: ProjectsTest.keepSavesANewProjectToHomeAndDiscardOfAReopenedOneRestoresIt, discardDeletesANewProject, BackTest.closingAPhotoWithEditsAsksKeepDiscardOrCancel | UI |
+| A photo closed without edits leaves no project | ui/EditorScreen.kt (closeProject) | UI: ProjectsTest.aPhotoClosedWithoutEditsLeavesNoProject | UI |
+| Saved project reopens with its document, Retouch patch pixels (lossless) and a thumbnail of the crop; an unused patch file is removed | Project.kt (save, open) | GPU: ProjectSaveTest.savedProjectReopensWithPatchPixelsAndThumbnail | GPU |
+| doc.json round trip | Project.kt | unit: ProjectTest.documentSurvivesJson | unit |
 
 ## Differences from the spec
 
