@@ -13,6 +13,7 @@ import dev.bloom.editor.model.Layer
 import dev.bloom.editor.ui.EditorState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Test
 import kotlin.random.Random
 
@@ -58,6 +59,12 @@ class HistoryTest {
         assertEquals(History.LIMIT, h.past.size)
         h = h.undo().push(Document())
         assertFalse(h.canRedo)
+    }
+
+    @Test
+    fun pushingTheSameDocumentAddsNoStep() {
+        val h = History(current = Document(listOf(Layer(1))))
+        assertSame(h, h.push(Document(listOf(Layer(1)))))
     }
 
     @Test

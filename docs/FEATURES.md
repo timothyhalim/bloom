@@ -5,7 +5,7 @@ Paths are under `app/src/main/java/dev/bloom/editor/` unless they start with `ap
 Line numbers are as of commit `df876e7`.
 
 Columns:
-- **Test today**: `unit: Class.test` (JVM, `app/src/test`), `GPU: test` (`app/src/androidTest/.../PipelineTest.kt`, on a device), or `none`. GPU tests marked *(model)* skip unless the model file was pushed to the device.
+- **Test today**: `unit: Class.test` (JVM, `app/src/test`), `UI: Class.test` (Compose UI test on a device, `app/src/androidTest`), `GPU: test` (`app/src/androidTest/.../PipelineTest.kt`, on a device), or `none`. GPU tests marked *(model)* skip unless the model file was pushed to the device.
 - **Testable how**: `unit` (JVM), `GPU` (instrumented, offscreen GL), `UI` (Compose UI test, instrumented), `manual`.
 - **BROKEN (user report)**: reported by the user; see the notes in that row.
 
@@ -80,9 +80,9 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
 | Back ("Close photo") closes the photo; asks first if there are edits (see §24) | ui/EditorScreen.kt:641, 510-513 | none | UI |
-| Undo button, enabled only with a photo, no tool open, and history to undo | ui/EditorScreen.kt:642 | none | UI |
-| Redo button, enabled only with a photo, no tool open, and history to redo | ui/EditorScreen.kt:643 | none | UI |
-| Undo/Redo disabled while any tool or Crop is open (`idle`) | ui/EditorScreen.kt:639 | none | UI |
+| Undo button, enabled only with a photo, no tool open, and history to undo | ui/EditorScreen.kt:642 | UI: UndoTest.applyingAToolIsOneUndoStep, undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
+| Redo button, enabled only with a photo, no tool open, and history to redo | ui/EditorScreen.kt:643 | UI: UndoTest.applyingAToolIsOneUndoStep, undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
+| Undo/Redo step the open tool's own gestures while any tool or Crop is open (`idle` = no tool); a fresh tool starts with nothing to undo | ui/EditorScreen.kt:639 | UI: UndoTest.undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
 | Compare: hold shows the original (no layers), release restores; works inside every tool | ui/EditorScreen.kt:644-650, 173 | none | UI |
 | Compare drops layers only; the crop still applies | ui/EditorScreen.kt:172-173, 340-342 | none | UI |
 | Compare disabled (outline tint, no gesture) without a photo | ui/EditorScreen.kt:646-650 | none | UI |
@@ -101,13 +101,13 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Immutable document snapshots; undo/redo round-trips 50 random edits | model/Document.kt:280-295 | unit: HistoryTest.fiftyEditsUndoAndRedoRoundTrip | unit |
 | History capped at 100 steps | model/Document.kt:293, 288 | unit: HistoryTest.pushClearsRedoAndCapsHistory | unit |
 | A new edit clears redo | model/Document.kt:288 | unit: HistoryTest.pushClearsRedoAndCapsHistory | unit |
-| Pushing an identical document is a no-op (no empty undo step) | model/Document.kt:288 | none | unit |
-| Applying a tool (✓) is one undo step | ui/EditorScreen.kt:243-248 | none | UI |
-| Applying Crop is one undo step | ui/EditorScreen.kt:256-260 | none | UI |
+| Pushing an identical document is a no-op (no empty undo step) | model/Document.kt:288 | unit: HistoryTest.pushingTheSameDocumentAddsNoStep | unit |
+| Applying a tool (✓) is one undo step | ui/EditorScreen.kt:243-248 | UI: UndoTest.applyingAToolIsOneUndoStep | UI |
+| Applying Crop is one undo step | ui/EditorScreen.kt:256-260 | UI: UndoTest.applyingCropIsOneUndoStep | UI |
 | Hide/show, opacity release, blend change, delete, reorder, deband toggle, rename, group/ungroup, group hide/opacity/collapse/move: one undo step each (hide-all is not undoable) | ui/EditorScreen.kt:500, 608-615, 564, 598 | none | UI |
 | Opacity drag previews live and commits one step on release | ui/EditorScreen.kt:603-611, ui/LayerRail.kt:342 | none | UI |
-| Undo of brush strokes / Liquify strokes inside an open tool: one gesture = one step (fixed 2026-11-23, `EditorState.steps`) | ui/EditorScreen.kt, model/Document.kt (History<T>) | unit: HistoryTest.toolStepsOneGestureEach | UI |
-| Opening a new photo clears history | ui/EditorScreen.kt:281 | none | UI |
+| Undo of brush strokes / Liquify strokes inside an open tool: one gesture = one step (fixed 2026-11-23, `EditorState.steps`) | ui/EditorScreen.kt, model/Document.kt (History<T>) | unit: HistoryTest.toolStepsOneGestureEach, UI: UndoTest.undoInsideAToolStepsBackOneBrushStrokeAtATime, sliderDragInsideAToolIsOneStep | UI |
+| Opening a new photo clears history | ui/EditorScreen.kt:281 | UI: UndoTest.openingAnotherPhotoClearsHistory | UI |
 
 ## 6. Layer rail
 

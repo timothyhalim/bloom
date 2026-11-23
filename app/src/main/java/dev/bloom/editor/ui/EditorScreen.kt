@@ -68,6 +68,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -354,8 +355,7 @@ class EditorState {
 }
 
 @Composable
-fun EditorScreen(photoView: PhotoView) {
-    val state = remember { EditorState() }
+fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorState() }) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -677,7 +677,7 @@ fun EditorScreen(photoView: PhotoView) {
             onExport = { f -> savers.getValue(f).launch("bloom_${System.currentTimeMillis()}.${f.ext}") },
         )
         Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { canvasTop = it.positionInRoot().y; canvasBottom = canvasTop + it.size.height }) {
-            AndroidView({ photoView }, Modifier.fillMaxSize())
+            AndroidView({ photoView }, Modifier.fillMaxSize().testTag("photo"))
             when (val s = sel) {
                 is GradientStep -> if (s.visible) GradientHandles(s, photoView, transformTick)
                 is SubjectStep -> Pins(s, photoView, transformTick)
