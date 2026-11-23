@@ -52,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -96,6 +97,8 @@ class EditorState {
     var draft by mutableStateOf<Layer?>(null)
     var editingId by mutableStateOf<Long?>(null)
     var param by mutableStateOf(ColorParam.Exposure)
+    var curvesOpen by mutableStateOf(false) // the Curves chip is selected instead of [param]
+    var curveChannel by mutableIntStateOf(0) // 0 RGB, 1 R, 2 G, 3 B
     var comparing by mutableStateOf(false)
     var opacityPreview by mutableStateOf<Pair<Long, Float>?>(null)
     var bubble by mutableStateOf<Pair<Long, Float>?>(null) // layer id, thumbnail centre y (root px)
@@ -127,6 +130,8 @@ class EditorState {
         draft = edit ?: Layer(nextId++)
         editingId = edit?.id
         param = ColorParam.Exposure
+        curvesOpen = false
+        curveChannel = 0
         bubble = null
         maskMode = mask
         maskTool = MaskTool.Brush
@@ -181,12 +186,12 @@ class EditorState {
     fun addGradient() = addStep(GradientStep(false, 0.5f, 0.2f, 0.5f, 0.6f, add = maskAdd))
 
     val dirty: Boolean
-        get() = draft?.let { d -> if (editingId != null) d != doc.layers.firstOrNull { it.id == d.id } else d.values.any { it != 0f } } ?: false
+        get() = draft?.let { d -> if (editingId != null) d != doc.layers.firstOrNull { it.id == d.id } else d.edited } ?: false
 
     fun apply() {
         val d = draft ?: return
         // A new layer with nothing changed would only clutter the stack.
-        if (editingId != null) edit { it.replace(d) } else if (d.values.any { it != 0f }) edit { it.copy(layers = it.layers + d) }
+        if (editingId != null) edit { it.replace(d) } else if (d.edited) edit { it.copy(layers = it.layers + d) }
         close()
     }
 
@@ -416,7 +421,8 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
         val box = Modifier.fillMaxWidth().background(Bloom.Surface, float).border(1.dp, Bloom.Outline, float)
         val rowModifier = box.height(48.dp)
         if (d != null && state.maskMode) MaskRows(state, box)
-        if (d != null && !state.maskMode) {
+        if (d != null && !state.maskMode && state.curvesOpen) CurvesRow(state, box)
+        if (d != null && !state.maskMode && !state.curvesOpen) {
             val p = state.param
             Row(rowModifier, verticalAlignment = Alignment.CenterVertically) {
                 Text(p.name, Modifier.width(92.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
@@ -450,7 +456,14 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
                     }
                 }
                 Row(Modifier.weight(1f).scrollFade(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    ColorParam.entries.forEach { p -> ParamChip(p, d[p], p == state.param) { state.param = p } }
+                    ColorParam.entries.forEach { p ->
+                        // Curves sits with the tone controls, before color
+                        if (p == ColorParam.Temp) ParamChip(Icons.Curves, "Curves" + if (d.curves.active) ", edited" else "", d.curves.active, state.curvesOpen) { state.curvesOpen = true }
+                        ParamChip(p.icon, "${p.name} ${signed(d[p])}", d[p] != 0f, !state.curvesOpen && p == state.param) {
+                            state.param = p
+                            state.curvesOpen = false
+                        }
+                    }
                 }
                 MaskButton(d.mask) { state.maskMode = true }
                 IconButton(state::apply) { Icon(Icons.Check, if (state.editingId != null) "Apply changes" else "Apply as Color layer", tint = Bloom.Pollen) }
@@ -480,19 +493,19 @@ private val ColorParam.icon get() = when (this) {
 
 /** Parameter in the bar: icon only. The slider row above names the selected one; a dot marks changed values. */
 @Composable
-private fun ParamChip(p: ColorParam, value: Float, selected: Boolean, onClick: () -> Unit) {
+private fun ParamChip(icon: ImageVector, desc: String, changed: Boolean, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.size(42.dp, 44.dp).clip(RoundedCornerShape(10.dp))
             .then(if (selected) Modifier.background(Bloom.SurfaceHigh).drawBehind {
                 drawLine(Bloom.Pollen, Offset(8.dp.toPx(), size.height - 1.dp.toPx()), Offset(size.width - 8.dp.toPx(), size.height - 1.dp.toPx()), 2.dp.toPx())
             } else Modifier)
             .clickable(role = Role.Tab, onClick = onClick)
-            .semantics { this.selected = selected; contentDescription = "${p.name} ${signed(value)}" },
+            .semantics { this.selected = selected; contentDescription = desc },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(p.icon, null, Modifier.size(22.dp), tint = if (selected) Bloom.Pollen else Bloom.On)
+        Icon(icon, null, Modifier.size(22.dp), tint = if (selected) Bloom.Pollen else Bloom.On)
         // changed values get a dot, so state isn't carried by color alone
-        if (value != 0f) Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 6.dp).size(5.dp).background(Bloom.Pollen, CircleShape))
+        if (changed) Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 6.dp).size(5.dp).background(Bloom.Pollen, CircleShape))
     }
 }
 

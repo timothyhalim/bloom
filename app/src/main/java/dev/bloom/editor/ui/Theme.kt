@@ -101,6 +101,7 @@ object Icons {
     val Tint = icon("M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11zM9 17l6-6")
     val Saturation = icon("M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11zM6 14h12")
     val Vibrance = icon("M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z")
+    val Curves = icon("M4 4v16h16M4 20C10 20 9 7 20 4")
     val Mask = icon("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18M8 4.5v15M4.5 8v8")
     val Gradient = icon("M4 4h16v16H4zM4 9h16M4 13.5h16M4 17.5h16")
     val Radial = icon("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z")

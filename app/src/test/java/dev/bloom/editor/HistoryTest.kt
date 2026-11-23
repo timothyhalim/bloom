@@ -3,6 +3,7 @@ package dev.bloom.editor
 import dev.bloom.editor.model.Blend
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
+import dev.bloom.editor.model.Curves
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Stroke
 import dev.bloom.editor.model.Document
@@ -22,6 +23,9 @@ class HistoryTest {
             val step = if (rnd.nextBoolean()) BrushStep(listOf(Stroke(listOf(rnd.nextFloat(), rnd.nextFloat()), 0.1f, 0.5f, 1f)))
             else GradientStep(rnd.nextBoolean(), 0f, 0f, rnd.nextFloat(), 1f, add = rnd.nextBoolean())
             l.copy(mask = l.mask.copy(steps = l.mask.steps + step, invert = rnd.nextBoolean()), blend = Blend.entries.random(rnd))
+        })
+        rnd.nextBoolean() -> doc.replace(doc.layers.random(rnd).let { l ->
+            l.copy(curves = l.curves.with(rnd.nextInt(4), listOf(0f, 0f, 0.5f, rnd.nextFloat(), 1f, 1f)))
         })
         else -> doc.replace(doc.layers.random(rnd).let { it.copy(visible = !it.visible) })
     }

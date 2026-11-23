@@ -6,3 +6,7 @@ local.properties
 .cxx/
 captures/
 .DS_Store
+
+# Large test photos; only test-images/SOURCES.md is tracked
+test-images/*
+!test-images/SOURCES.md

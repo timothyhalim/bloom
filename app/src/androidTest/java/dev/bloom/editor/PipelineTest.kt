@@ -9,6 +9,7 @@ import android.graphics.Matrix
 import dev.bloom.editor.model.Blend
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
+import dev.bloom.editor.model.Curves
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.GradientStep
@@ -18,6 +19,7 @@ import dev.bloom.editor.model.Stroke
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.roundToInt
 import org.junit.runner.RunWith
 import kotlin.math.pow
 
@@ -73,6 +75,29 @@ class PipelineTest {
 
     @Test
     fun hiddenLayerIsSkipped() = assertEquals(128, run(listOf(Layer(1).with(ColorParam.Exposure, 100f).copy(visible = false))))
+
+    @Test
+    fun curvesMatchTheReferenceTableWithinOneLevel() = Offscreen().use {
+        // M1.5 exit test: an S-curve on RGB plus a red curve, over every 8-bit input level
+        val c = Curves(rgb = listOf(0f, 0f, 0.25f, 0.15f, 0.75f, 0.85f, 1f, 1f), r = listOf(0f, 0.1f, 0.5f, 0.6f, 1f, 0.95f))
+        val src = Bitmap.createBitmap(256, 1, Bitmap.Config.ARGB_8888).apply { for (i in 0..255) setPixel(i, 0, Color.rgb(i, i, i)) }
+        val p = Pipeline()
+        try {
+            p.setSource(src)
+            // a plain layer on top checks the table is per layer
+            val out = p.renderToBitmap(listOf(Layer(1).copy(curves = c), Layer(2)))
+            val lut = c.lut(4096)
+            val bad = (0..255).flatMap { i ->
+                val px = out.getPixel(i, 0)
+                val ref = (i / 255f * 4095).roundToInt() * 4
+                listOf(Color.red(px) to lut[ref], Color.green(px) to lut[ref + 1]).filter { (o, e) -> kotlin.math.abs(o - (255 * e).roundToInt()) > 1 } // dither moves output by up to one level
+                    .map { (o, e) -> "$i:$o/${"%.2f".format(255 * e)}" }
+            }
+            assertTrue(bad.joinToString(), bad.isEmpty())
+        } finally {
+            p.release()
+        }
+    }
 
     // --- masks and blend modes (M2) ---
 

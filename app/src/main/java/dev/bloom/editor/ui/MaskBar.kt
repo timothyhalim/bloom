@@ -335,7 +335,7 @@ private fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRan
 }
 
 @Composable
-private fun Chip(label: String, selected: Boolean, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, desc: String? = null, onClick: () -> Unit) {
+internal fun Chip(label: String, selected: Boolean, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, desc: String? = null, onClick: () -> Unit) {
     val shape = RoundedCornerShape(10.dp)
     Row(
         Modifier.height(40.dp).clip(shape).then(if (selected) Modifier.background(Bloom.SurfaceHigh) else Modifier)

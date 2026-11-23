@@ -10,6 +10,7 @@ Free, open-source (GPL-3.0) Android photo editor. Everything that can run on the
 | M1 Edit engine + Color | Done |
 | M2a Masks: brush, gradient, invert, overlay, blend modes | Done |
 | M2b Masks: color range, luminance range, feather, loupe, reorder, copy/clear | Done (not yet tested on a phone) |
+| M1.5 Curves | Done (not yet tested on a phone) |
 | Everything below | Not started |
 
 ## Features
@@ -45,7 +46,7 @@ Each ends with a measurable exit test on a real phone. Times are for one develop
 |---|---|---|
 | **M0** Skeleton (done) | Open from gallery, GL preview with pan/zoom, tiled export with EXIF | 48 MP opens and exports, EXIF kept |
 | **M1** Edit engine + Color (done) | Layer stack, undo/redo, compare, Color layer on a 16-bit float GPU pipeline, layer rail | 8 stacked layers ≥ 30 fps; 50 undo/redo steps stable |
-| **M1.5** Curves | RGB/R/G/B curves in the Color tool | Curves match a reference LUT within 1 level |
+| **M1.5** Curves (done) | RGB/R/G/B curves in the Color tool | Curves match a reference LUT within 1 level |
 | **M2** Masks (done) | Steps: brush, gradient, color range, luminance range; feather, invert, overlay, loupe, reorder, copy/clear; blend modes | Brushing < 16 ms/frame; no seams between export tiles |
 | **M2.5** Recover (range) | Ultra HDR gain-map decode, DNG import, 16-bit source textures; AI bit-depth expansion on load (dequantize 8-bit → float) to stop banding; inverse tone mapping only inside clipped highlights; denoise + deband for lifted shadows; 16-bit PNG export | Pushed gradients show no banding on the test set; licenses and phone speed of candidate models checked first |
 | **M3** AI selection (~3 wk) | Subject/Background steps (MediaPipe Interactive Segmenter, then MobileSAM/EfficientSAM if needed), guided-filter edges, on-demand model download | Timing budgets met; IoU ≥ 0.85 on 50 test photos |

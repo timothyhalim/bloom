@@ -53,6 +53,11 @@ class Pipeline {
     private val dabProgram = link(DAB_VERTEX, DAB_FRAGMENT)
     private val blurProgram = link(PASS_VERTEX, BLUR_FRAGMENT)
     private val params = FloatArray(ColorParam.entries.size)
+    private val curveTex = genTexture().also {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, CURVE_SIZE, 1) // half floats: an 8-bit table would add banding
+    }
+    private val curveData = ByteBuffer.allocateDirect(CURVE_SIZE * 16).order(ByteOrder.nativeOrder()).asFloatBuffer()
 
     // Half-float intermediates keep values above 1 between passes; plain RGBA8 is the fallback.
     private val half = glGetString(GL_EXTENSIONS).orEmpty()
@@ -61,6 +66,7 @@ class Pipeline {
     init {
         glUseProgram(colorProgram)
         glUniform1i(glGetUniformLocation(colorProgram, "uMask"), 1)
+        glUniform1i(glGetUniformLocation(colorProgram, "uCurve"), 3)
         glUseProgram(maskProgram)
         glUniform1i(glGetUniformLocation(maskProgram, "uBrush"), 1)
         glUniform1i(glGetUniformLocation(maskProgram, "uBelow"), 2)
@@ -109,6 +115,15 @@ class Pipeline {
             glUniform1i(glGetUniformLocation(colorProgram, "uBlend"), l.blend.ordinal)
             glUniform1i(glGetUniformLocation(colorProgram, "uMasked"), if (m != 0) 1 else 0)
             glUniform1i(glGetUniformLocation(colorProgram, "uInvert"), if (l.mask.invert) 1 else 0)
+            glUniform1i(glGetUniformLocation(colorProgram, "uCurves"), if (l.curves.active) 1 else 0)
+            if (l.curves.active) {
+                // one shared table, refilled per layer; 16 KB, and only when the layers change
+                glActiveTexture(GL_TEXTURE3)
+                glBindTexture(GL_TEXTURE_2D, curveTex)
+                curveData.position(0)
+                curveData.put(l.curves.lut(CURVE_SIZE)).position(0)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CURVE_SIZE, 1, GL_RGBA, GL_FLOAT, curveData)
+            }
             glActiveTexture(GL_TEXTURE1)
             glBindTexture(GL_TEXTURE_2D, m)
             drawQuad(input)
@@ -168,7 +183,7 @@ class Pipeline {
     }
 
     fun release() {
-        glDeleteTextures(1, intArrayOf(source), 0)
+        glDeleteTextures(2, intArrayOf(source, curveTex), 0)
         glDeleteTextures(2, tex, 0)
         glDeleteFramebuffers(2, fbo, 0)
         glDeleteTextures(1, read, 0)
@@ -341,6 +356,8 @@ class Pipeline {
     }
 
     private companion object {
+        const val CURVE_SIZE = 1024
+
         /** android.graphics.Matrix is row-major; GLES wants column-major without transpose. */
         fun columnMajor(m: Matrix, out: FloatArray) {
             val v = FloatArray(9).also(m::getValues)
@@ -371,6 +388,8 @@ uniform float uOpacity;
 uniform int uBlend;
 uniform bool uMasked;
 uniform bool uInvert;
+uniform bool uCurves;
+uniform sampler2D uCurve; // CURVE_SIZE x 1 tone table, rgb = output per channel
 out vec4 outColor;
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 vec3 toLinear(vec3 c) { c = max(c, 0.0); return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
@@ -396,6 +415,11 @@ void main() {
     l = dot(p, LUMA);
     float sat = clamp(max(p.r, max(p.g, p.b)) - min(p.r, min(p.g, p.b)), 0.0, 1.0);
     p = mix(vec3(l), p, 1.0 + uP[6] + uP[7] * (1.0 - sat));
+    if (uCurves) {
+        // ponytail: values above 1 are clipped here; M2.5's HDR range needs the table extended past 1.
+        vec3 q = clamp(p, 0.0, 1.0) * (1023.0 / 1024.0) + 0.5 / 1024.0; // texel centres
+        p = vec3(texture(uCurve, vec2(q.r, 0.5)).r, texture(uCurve, vec2(q.g, 0.5)).g, texture(uCurve, vec2(q.b, 0.5)).b);
+    }
     if (uBlend != 0) p = blend(src.rgb, p);
     float m = 1.0;
     if (uMasked) {
