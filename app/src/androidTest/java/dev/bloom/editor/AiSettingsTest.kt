@@ -73,7 +73,7 @@ class AiSettingsTest {
         rule.onNodeWithText("Save").assertIsNotEnabled()
         rule.onNodeWithText("Test connection").performScrollTo().performClick()
         rule.waitUntil(5_000) { rule.onAllNodes(hasText("Found: Erase (lama)")).fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithText("Save").assertIsEnabled().performClick()
+        rule.onNodeWithText("Save").performScrollTo().assertIsEnabled().performClick() // below the fold: the phone lists more modes now
         rule.onNodeWithText("My PC · lama").performScrollTo().performClick()
         rule.runOnIdle {
             val p = state.ai.providers.single()

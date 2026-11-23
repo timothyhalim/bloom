@@ -529,7 +529,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
             r.exceptionOrNull()?.let { if (it is CancellationException) throw it; android.util.Log.e("Bloom", "subject failed", it) }
             if (state.preview !== photo) return@LaunchedEffect
             r.onSuccess { state.subjects = state.subjects + (pins to it) }
-            state.subjectStatus = r.exceptionOrNull()?.let { "Couldn't find the subject: ${reason(it)}" }
+            state.subjectStatus = r.exceptionOrNull()?.let { "Couldn't find ${if (person) "people" else "the subject"}: ${reason(it)}" }
             if (r.isFailure) return@LaunchedEffect
         }
     }
