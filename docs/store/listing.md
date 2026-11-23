@@ -33,7 +33,7 @@ Every edit is its own layer: change it, mask it, hide it, reorder it or delete i
 - Exports JPEG, WebP, HEIC, AVIF (where the phone supports them) and 16-bit PNG, at full resolution, with your photo's metadata
 
 **Private by design**
-Bloom runs everything on your phone. The AI models download once, the first time you use a feature that needs them; after that they work offline. Your photos never leave the phone unless you choose to share or export them yourself. No account, no ads, no tracking.
+Bloom runs everything on your phone. The AI models download once, the first time you use a feature that needs them; after that they work offline. Your photos never leave the phone unless you choose to share or export them yourself, or to run an AI action on your own server or AI service (added in Settings; Bloom asks before the first send). No account, no ads, no tracking.
 
 Bloom is free and open source (GPL-3.0).
 
@@ -48,13 +48,14 @@ Bloom is free and open source (GPL-3.0).
 
 ## Privacy summary
 
-Photos never leave the phone unless you choose to share them. Editing and AI run on the device. The app downloads its AI models on first use and sends nothing about you or your photos. If Bloom crashes, it asks whether to share a crash report; the report (error, app and Android version, phone model, memory) goes only where you send it from the share sheet.
+Photos never leave the phone unless you choose to share them, or to run an AI action on a server or AI service you added yourself (then only the area around the selection and its mask go there, after a consent sheet). Editing and AI run on the device by default. The app downloads its AI models on first use and sends nothing about you or your photos. If Bloom crashes, it asks whether to share a crash report; the report (error, app and Android version, phone model, memory) goes only where you send it from the share sheet.
 
 ## Privacy policy (host this text at a public URL; Play requires one)
 
 Bloom does not collect, store or send any personal data.
 
 - Photos and edits stay on your device. They are only shared or saved elsewhere when you export or share them yourself.
+- Optional: in Settings you can add your own AI server (IOPaint, ComfyUI, an OpenAI-compatible endpoint) or your own key for an AI service (fal.ai). Bloom sends a crop of the photo around the area you selected, and its mask, to that provider only when you run an AI action there, and asks before the first send to each provider. Keys are encrypted on the device with the Android Keystore and sent only to that provider. What the provider does with the data is governed by its own terms.
 - The app downloads its AI model files from GitHub the first time a feature needs them. These downloads carry no information about you or your photos (GitHub sees the request's IP address, as for any download).
 - After a crash, Bloom asks whether you want to share a crash report. If you agree, the Android share sheet opens with the report text; you choose the app and recipient, and nothing is sent otherwise. The report contains the error's stack trace, the app version, the Android version, the phone's brand and model, and its memory. It contains no photos.
 - There are no ads, analytics or accounts.

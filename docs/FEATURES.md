@@ -24,7 +24,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | "Open photo" petal button opens the system photo picker, images only | ui/EditorScreen.kt:687-693, 497 | UI: ProjectsTest.openPhotoAsksThePickerForImagesAndOpensACopyAsANewProject | UI |
 | "Open file (RAW: CR3, NEF, ARW, DNG…)" opens the document picker with `image/*` and `application/octet-stream` (CR3 shows as octet-stream) | ui/EditorScreen.kt:694-698, 439, 554 | UI: ProjectsTest.openFileAsksForImagesAndRawsAndCancelDoesNothing | UI |
 | With no photo: Back, Undo, Redo, Compare and Export are disabled; layer rail, navigator and tool bar hidden | ui/EditorScreen.kt:638-665, 552-555 | UI: ProjectsTest.firstRunHomeHasTheTaglineAndOpenButtonsAndNoEditing | UI |
-| Spec: Home has a Settings icon and privacy line; not built (the recent-projects grid is built, see §30) | design/UI.md:38-39 | none | n/a |
+| Home has a Settings icon (top right, opens Settings, §31). Spec: privacy line; not built (the recent-projects grid is built, see §30) | ui/EditorScreen.kt:731 | UI: AiSettingsTest.addAProviderTestItSaveItAndPickIt | UI |
 
 ## 2. Open and load
 
@@ -472,21 +472,20 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 |---|---|---|---|
 | AI opens a new Retouch draft; one finger paints the layer's mask directly with red tint and loupe | ui/EditorScreen.kt:734, 394-398, 412, 418 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
 | Main row "Erase / Size" (4..150, shared with mask brush size); More: Softness, Flow (shared with the mask brush) | ui/EraseBar.kt:18-24 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
-| Bar: back, Mask button, Erase button (no ✓: running is applying) | ui/EraseBar.kt:28-37 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
+| Bar: back, AI settings (gear), Mask button, Erase button (no ✓: running is applying) | ui/EraseBar.kt:31-44 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask, AiSettingsTest.theAiBarOpensAiSettings | UI |
 | Erase disabled until the mask is active; spinner while running | ui/EraseBar.kt:32-36 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
-| Status "Downloading AI model… N%" then "Erasing…" in the main row | ui/EditorScreen.kt:445-452, ui/EraseBar.kt:20-21 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask ("Erasing…" only) | UI (fake ModelStore) |
-| Hole = rendered mask ≥ 50%; widened by max(3, h/300) px | ui/EditorScreen.kt:446-454, Segment.kt:74-81 | none | unit (Eraser) |
+| Status "Downloading AI model… N%" then "Erasing…" in the main row (on the phone; remote runs: see §31) | ai/OnDevice.kt, ui/EraseBar.kt:20-26 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask ("Erasing…" only) | UI (fake ModelStore) |
+| Hole = rendered mask ≥ 50%; widened by max(3, h/300) px | ui/EditorScreen.kt:616-634, Segment.kt:44-58 (EraseArea.of) | none | unit (Eraser) |
 | Mask bounds; context square 2× the hole's long side, min 512, kept on the photo | model/Eraser.kt:6-35 | unit: EraserTest.boundsOfTheMarkedPixels, EraserTest.contextIsCentredSquareAtLeastMinAndStaysOnThePhoto | unit |
 | Erode grows the hole | model/Eraser.kt:38-53 | unit: EraserTest.erodeGrowsTheHole | unit |
-| LaMa at 512×512; only hole pixels come from the model, the rest stays the photo | Segment.kt:83-103, cpp/segment.cpp:239-280 | GPU (model): eraserContinuesStripesAcrossTheHole | GPU |
+| LaMa at 512×512 on the crop (EraseArea); only hole pixels come from the model (or a remote provider, scaled to the crop), the rest stays the photo | Segment.kt:14-58 (EraseArea.paste), 118-130, cpp/segment.cpp:239-280 | GPU (model): eraserContinuesStripesAcrossTheHole | GPU |
 | LaMa weights freed after each run | cpp/segment.cpp:274 | none | manual (memory) |
-| Result: new Retouch layer at the bottom of the stack (every other layer still applies); editing an existing Retouch layer replaces it | ui/EditorScreen.kt:467-470 | none | UI |
-| Result dropped if the draft changed while erasing | ui/EditorScreen.kt:464 | none | UI |
-| Errors: "Couldn't erase: paint over what to remove first" / "nothing to erase, or the model couldn't run" / download errors as snackbar | ui/EditorScreen.kt:450, 456, 462 | none | UI |
+| Result: new Retouch layer at the bottom of the stack (every other layer still applies); editing an existing Retouch layer replaces it | ui/EditorScreen.kt:589-614 | UI: AiSettingsTest.theFirstSendAsksAndSendOnlyWhenAgreed (remote, new layer) | UI |
+| Result dropped if the draft changed while erasing | ui/EditorScreen.kt:606 | none | UI |
+| Errors: "Couldn't erase: paint over what to remove first" / "nothing to erase" / "the model couldn't run on this phone" / download errors / the provider's message as snackbar | ui/EditorScreen.kt:600-603, 625-630, 1251 | UI: AiSettingsTest.aProviderErrorIsShown (provider message) | UI |
 | Retouch shows its patch only inside its rect and mask | gl/Pipeline.kt:930 | GPU: retouchShowsItsPatchOnlyInsideItsRectAndMask | GPU |
 | Retouched export tile matches the full render | ImageIo.kt:153-185 | GPU: retouchedExportTileMatchesTheFullRender | GPU |
-| Stale code comment says MI-GAN; the model is LaMa | ui/EditorScreen.kt:440 | none | n/a |
-| Spec: AI mode menu (Fill, Upscale, Replace background, Ask), run button with provider caret, job pill with Cancel; not built | design/UI.md:59-71, 246 | none | n/a |
+| Spec: AI mode menu (Fill, Upscale, Replace background, Ask), run button with provider caret; not built (M8 part 2). Cancel for remote jobs is built (§31) | design/UI.md:59-71, 246 | none | n/a |
 
 ## 24. AI models (download, verify, run)
 
@@ -601,6 +600,27 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Saved project reopens with its document, Retouch patch pixels (lossless) and a thumbnail of the crop; an unused patch file is removed | Project.kt (save, open) | GPU: ProjectSaveTest.savedProjectReopensWithPatchPixelsAndThumbnail | GPU |
 | doc.json round trip | Project.kt | unit: ProjectTest.documentSurvivesJson | unit |
 
+## 31. AI providers, Settings, consent (M8 part 1)
+
+Remote adapters are tested only against fake servers (no real IOPaint, ComfyUI, fal or LLM server was available).
+
+| Feature / behaviour | Where (file:line) | Test today | Testable how |
+|---|---|---|---|
+| `AiProvider` interface: `models(cap)`, `test()`, `run(cap, model, request, status)`; cancel = coroutine cancel | ai/AiProvider.kt | (through the adapters below) | unit / UI |
+| On-device provider "Phone": SEGMENT (IS-Net + MobileSAM, picked by pins), ERASE (LaMa); subject masks and AI Erase go through the chosen provider (default Phone, no behaviour change); depth still calls Segment directly | ai/OnDevice.kt, ui/EditorScreen.kt:418, 465-467, 589-614 | UI: MaskBarTest.subjectStatusAndHintShowInTheMainRow, ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask; GPU (model): eraserContinuesStripesAcrossTheHole | UI / GPU |
+| Config: providers (id, type, name, URL, models found, ComfyUI workflows), choice per capability, consented providers, Hide cloud features; JSON in prefs "ai"; a removed provider takes its choices and consent with it; a choice no longer offered falls back to the first option (Phone first) | ai/Providers.kt:15-76 | unit: AiTest.choiceDefaultsToThePhoneAndFollowsTheUsersPick, hidingCloudFeaturesLeavesOnlyThePhone, consentIsPerProviderAndGoesWithIt, configSurvivesJsonWithoutKeys | unit |
+| Keys: AES-GCM with a key in the Android Keystore, ciphertext in prefs "ai_keys" (never in the config, a project or logs); Replace / Forget only, never shown again | ai/Providers.kt:85-123 | UI: AiProvidersTest.keysAreEncryptedAtRestAndComeBack, AiSettingsTest.addAProviderTestItSaveItAndPickIt | UI (instrumented) |
+| HTTP: HttpURLConnection, 15 s connect / per-call read timeout, 64 MB reply cap, no redirects (they could carry a key elsewhere), http(s) only, one retry on a network error (not on 4xx, not for fal's paid submit), cancel closes the connection; errors carry the server's message ("HTTP 400: …", FastAPI detail, OpenAI error.message), printable, ≤ 200 chars; "Uploading N %" for bodies over 256 KB | ai/Http.kt | unit: AiTest.httpReadsRepliesAndSendsBodies, httpErrorsCarryTheServersMessageAndAreNotRetried, httpRetriesANetworkErrorOnceUnlessTold, httpTimesOutRefusesHugeRepliesAndRedirects, cancellingClosesTheConnectionAtOnce, serverErrorMessagesAreShortAndReadable | unit |
+| Result images refused over 64 MP or when not an image | ai/Http.kt (decodeImage) | none | UI |
+| IOPaint: Test = GET /api/v1/server-config (inpaint models → Erase, need_prompt models → Fill, RealESRGAN plugin → Upscale); run switches the server's model (POST /api/v1/model) if needed, then POST /api/v1/inpaint (crop + white-on-black mask, base64) or /api/v1/run_plugin_gen_image; status counts seconds (no progress API) | ai/IoPaint.kt | unit: AiTest.ioPaintModelsFromServerConfig, ioPaintInpaintRequest; UI: AiProvidersTest.ioPaintSwitchesModelAndErases, ioPaintTestListsModelsAndErrorsShowTheServersMessage, cancellingClosesTheConnectionQuickly | unit / UI (fake server) |
+| ComfyUI: user's API-format workflows per capability, nodes found by title bloom_image / bloom_mask / bloom_prompt / bloom_output; checked when loaded; Test = GET /system_stats; run uploads crop and mask (/upload/image, multipart), queues /prompt, polls /history and /queue ("Queued, N ahead", "Running, N s"), downloads /view; Cancel deletes the job from the queue and interrupts it. Samples: docs/comfyui/inpaint.json (Erase / Fill, SD 1.5 inpainting), upscale.json (RealESRGAN x4 → 2×) | ai/ComfyUi.kt, docs/comfyui/ | unit: AiTest.comfyUiSampleWorkflowsAreValidAndGetFilledIn, comfyUiHistoryAndQueue; UI: AiProvidersTest.comfyUiUploadsQueuesReportsProgressAndDownloads, comfyUiCancelTakesTheJobOffTheServer | unit / UI (fake server) |
+| fal (own key): model table (Erase: fal-ai/object-removal/mask, fal-ai/bria/eraser; Fill: fal-ai/flux-pro/v1/fill, fal-ai/flux-lora/inpainting; Upscale: fal-ai/esrgan, fal-ai/clarity-upscaler); Test = GET api.fal.ai/v1/models/pricing (free, needs a valid key); queue submit with data-URI image and mask, poll status_url ("Queued, N ahead", "Running on fal, N s"), fetch response_url; status/result/cancel URLs must be on queue.fal.run; result image downloaded without the key, https or data URI only; Cancel = PUT cancel_url | ai/Fal.kt | unit: AiTest.falReplies; UI: AiProvidersTest.falQueuesPollsAndFetchesTheResult, falErrorsAndCancel | unit / UI (fake server) |
+| OpenAI-compatible: Test = GET /v1/models (URL with or without /v1) → Ask models; running Ask is part 2 | ai/OpenAiCompatible.kt | unit: AiTest.openAiModels; UI: AiProvidersTest.openAiCompatibleListsModels | unit / UI |
+| Settings screen (from Home's gear and the AI bar's gear; Back closes): AI providers (per capability a radio list of provider · model; provider rows with Replace/Add key, Forget key, Delete; + Add provider form: type, name, address, key, ComfyUI workflow files; http warning; Test connection lists what it found and Save is enabled only after it passed for exactly what is entered), On-device models (name, size or "Not downloaded", delete file), Privacy (Reset consent choices, Hide cloud features), About (version, licenses of models and libraries). Appearance left out (dark only) | ui/SettingsScreen.kt | UI: AiSettingsTest.addAProviderTestItSaveItAndPickIt, theAiBarOpensAiSettings | UI |
+| Consent sheet before the first erase on a provider off the phone: what is sent (crop size and its mask), where (host; "fal.ai"), not stored by Bloom; Send / Not now / Use a different provider (lists the other options; picking one sets the Erase choice) / Don't ask again for <provider> | ui/SettingsScreen.kt (ConsentSheet), ui/EditorScreen.kt:616-634, 863-883 | UI: AiSettingsTest.theFirstSendAsksAndSendOnlyWhenAgreed | UI |
+| Remote erase: the tool stays locked, the status row shows the provider's live status with Cancel; Cancel stops the job and keeps the tool and mask | ui/EraseBar.kt:20-26, ui/EditorScreen.kt:589-614 | UI: AiSettingsTest.aRemoteEraseShowsItsStatusAndCancels | UI |
+| Cleartext http allowed (users' own servers on a home network) | AndroidManifest.xml | UI: AiSettingsTest (fake server on http://127.0.0.1) | UI |
+
 ## Differences from the spec
 
 `design/UI.md` is the frozen v3.3 proposal; `docs/PLAN.md` § "Design changes after the v3.3 freeze" lists the accepted changes (icon-only bars, sign toggle in the settings row, one box + More, overlay only in mask mode, Exposure in stops). Differences not covered by that list:
@@ -625,10 +645,10 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Detail | Gaussian/Lens toggle; Sharpen chips Amount/Radius/Clarity | One box: Amount main, More holds Type (Gaussian/Lens/Motion/Zoom) and the rest |
 | Liquify | Size/Strength chips + More (Softness) | Size main, More: Strength, Softness, Direction |
 | Crop | Five modes, Auto, Flip V, Scale/Fill edges, size info, thirds only while dragging, edge handles, 65% dim; Crop before the layer stack (§2 rules) | Presets + More sliders, Turn/Flip H/Reset in the bar; thirds always; L corners only; 55% dim; crop applies after all layers (PLAN.md M4.5) |
-| AI | Mode menu, run button with provider caret, job pill with Cancel | Erase only; plain Erase icon; status text in the settings row; no Cancel |
+| AI | Mode menu, run button with provider caret, job pill with Cancel | Erase only; plain Erase icon; gear to AI settings; status text in the settings row, Cancel only for remote jobs |
 | Export | Bottom sheet with quality, remove location, estimate, Share | Dropdown: Size cycle, JPEG (q95), 16-bit PNG |
 | Discard | Bubble "Discard changes?"; Back with work: Keep project / Discard / Cancel | AlertDialog Discard / Keep editing; "Close photo? Your edits will be lost." |
-| Home, Settings, Light theme, motion, providers, consent, credits | Specified | Not built |
+| Home, Settings, Light theme, motion, providers, consent, credits | Specified | Settings (AI providers, on-device models, privacy, about), providers and consent built (§31); Appearance / Light theme, motion, credits not built |
 
 ## Not covered by any test
 
@@ -636,7 +656,7 @@ Built rows whose "Test today" is `none`, per area (spec-only rows that are not b
 
 | Area | Built rows | Not covered | Spec-only rows (not built, n/a) |
 |---|---|---|---|
-| 1. App start, first run, empty state | 9 | 4 | 1 |
+| 1. App start, first run, empty state | 10 | 4 | 0 |
 | 2. Open and load | 20 | 11 | 0 |
 | 3. Canvas: pan, zoom, touches | 19 | 17 | 0 |
 | 4. Top bar | 13 | 1 | 1 |
@@ -659,7 +679,7 @@ Built rows whose "Test today" is `none`, per area (spec-only rows that are not b
 | 20. Detail tool (Blur, Sharpen) | 21 | 4 | 0 |
 | 21. Liquify | 20 | 4 | 0 |
 | 22. Crop | 31 | 7 | 1 |
-| 23. AI eraser | 15 | 5 | 2 |
+| 23. AI eraser | 14 | 3 | 2 |
 | 24. AI models (download, verify, run) | 15 | 8 | 1 |
 | 25. Export | 21 | 7 | 1 |
 | 26. System back and discard dialogs | 7 | 0 | 1 |
@@ -667,6 +687,7 @@ Built rows whose "Test today" is `none`, per area (spec-only rows that are not b
 | 28. Theme, scroll indicators, accessibility basics | 8 | 5 | 2 |
 | 29. Rendering pipeline core | 9 | 5 | 0 |
 | 30. Projects and Home | 9 | 0 | 0 |
-| **Total** | **418** | **129** | **17** |
+| 31. AI providers, Settings, consent | 15 | 1 | 0 |
+| **Total** | **433** | **128** | **16** |
 
 Remaining gaps: canvas gestures (pinch, pan limits, double-tap, navigator), drawing (overlay, loupe, rings, badges: screenshot or manual), AI model runs and their status rows (need a fake ModelStore or pushed models), RAW decode, and GPU colour maths for Contrast, Highlights/Shadows, Temp/Tint and Saturation/Vibrance. Compose UI tests (app/src/androidTest, `showEditor` in Editor.kt) cover the rail, bubbles, tool bars, mask bar, dialogs, back handling, projects, export menu and settings; unit tests cover the model maths, EditorState and ModelStore; PipelineTest covers the GPU pipeline and export. Three GPU tests skip without pushed models (aPinSelectsOnlyThatObject, subjectMaskFindsTheObject, eraserContinuesStripesAcrossTheHole).
