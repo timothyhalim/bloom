@@ -1,6 +1,10 @@
 package dev.bloom.editor.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,10 +41,14 @@ import dev.bloom.editor.ai.Choice
 import dev.bloom.editor.model.Layer
 
 /** The AI tool's modes in bar order; each shows only when some provider can run it. Background joins with M8.5. */
-val AI_MODES = listOf(Capability.ERASE)
+val AI_MODES = listOf(Capability.ERASE, Capability.GEN_FILL)
+
+/** Modes that run on the area painted into the layer's mask. */
+val PAINTED = setOf(Capability.ERASE, Capability.GEN_FILL)
 
 private val Capability.icon: ImageVector get() = when (this) {
     Capability.ERASE -> Icons.Eraser
+    Capability.GEN_FILL -> Icons.Fill
     else -> Icons.Sparkle
 }
 
@@ -53,6 +61,13 @@ fun AiRows(state: EditorState, mode: Capability, box: Modifier) {
         state.runCancel?.let { TextButton(it) { Text("Cancel", color = Bloom.Pollen) } }
     }
     else when (mode) {
+        Capability.GEN_FILL -> ToolBox(state.maskMore, { state.maskMore = !state.maskMore }, box, moreRows = {
+            SliderRow("Size", state.brushSize, 4f..150f) { state.brushSize = it; state.showRing(it, state.softness) }
+            BrushRows(state)
+        }) {
+            TwoLineLabel("Fill", "Prompt")
+            PromptField(state.fillPrompt, "What to paint there", Modifier.weight(1f)) { state.fillPrompt = it }
+        }
         else -> ToolBox(state.maskMore, { state.maskMore = !state.maskMore }, box, moreRows = { BrushRows(state) }) {
             MainSlider("Erase", "Size", state.brushSize, 4f..150f) { state.brushSize = it; state.showRing(it, state.softness) }
         }
@@ -73,9 +88,15 @@ fun RowScope.AiBar(
     Row(Modifier.weight(1f).scrollFade(), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
         for (m in modes) ParamChip(m.icon, m.label, false, m == mode) { if (idle) state.aiMode = m }
     }
-    MaskButton(d.mask) { if (idle) state.maskMode = true }
-    val ready = idle && choice != null && d.mask.active
-    val run = "Erase the painted area"
+    if (mode in PAINTED) MaskButton(d.mask) { if (idle) state.maskMode = true }
+    val ready = idle && choice != null && when (mode) {
+        Capability.GEN_FILL -> d.mask.active && state.fillPrompt.isNotBlank()
+        else -> d.mask.active
+    }
+    val run = when (mode) {
+        Capability.GEN_FILL -> "Fill the painted area"
+        else -> "Erase the painted area"
+    }
     Column(
         Modifier.width(48.dp).fillMaxHeight().clip(RoundedCornerShape(10.dp)).then(
             if (idle) Modifier.clickable(enabled = ready, role = Role.Button, onClick = onRun).semantics { contentDescription = run } else Modifier,
@@ -103,4 +124,14 @@ fun RowScope.AiBar(
             DropdownMenuItem(text = { Text("AI settings…", color = Bloom.On) }, onClick = { menu = false; onSettings() })
         }
     }
+}
+
+/** A one-line text field in a settings box, with [hint] while empty. */
+@Composable
+private fun PromptField(text: String, hint: String, modifier: Modifier, onChange: (String) -> Unit) {
+    BasicTextField(
+        text, onChange, modifier.padding(horizontal = 8.dp).semantics { contentDescription = hint },
+        singleLine = true, textStyle = TextStyle(color = Bloom.On, fontSize = 14.sp), cursorBrush = SolidColor(Bloom.Pollen),
+        decorationBox = { field -> Box { if (text.isEmpty()) Text(hint, color = Bloom.Outline, fontSize = 14.sp); field() } },
+    )
 }

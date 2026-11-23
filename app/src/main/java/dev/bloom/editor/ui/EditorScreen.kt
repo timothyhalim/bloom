@@ -188,6 +188,7 @@ class EditorState {
     var warpMore by mutableStateOf(false) // Strength and Softness rows shown
     var warpReverse by mutableStateOf(false) // Twirl counterclockwise
     var aiMode by mutableStateOf(Capability.ERASE) // the AI tool's mode, if a provider still offers it
+    var fillPrompt by mutableStateOf("") // what Fill paints
     var running by mutableStateOf<String?>(null) // an AI job running: what it is doing ("Downloading…", "Erasing…", "Queued, 3 ahead")
     var runCancel by mutableStateOf<(() -> Unit)?>(null) // a remote job running: stops it
     var ai by mutableStateOf(AiConfig()) // AI providers and choices (Settings)
@@ -484,7 +485,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     val lensOpen by remember { derivedStateOf { state.draft?.effect.let { it is DetailEffect && !it.sharpen && it.detail.hasPoint } } }
     val liquifyOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Liquify && !state.maskMode } }
     // AI Erase: one finger paints the layer's mask directly, with the mask's red tint showing
-    val eraseOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Retouch && !state.maskMode && aiMode == Capability.ERASE } }
+    val eraseOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Retouch && !state.maskMode && aiMode in PAINTED } }
     // Loupe while painting or picking a color; brush ring for the mask brush and Liquify.
     LaunchedEffect(state.maskMode, state.maskTool, state.brushSize, liquifyOpen, eraseOpen, state.warpSize, state.softness, state.warpSoftness) {
         photoView.loupe = (state.maskMode || eraseOpen) && (state.maskTool == MaskTool.Brush || state.maskTool == MaskTool.Color)
@@ -611,12 +612,12 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         if (remote && job.isActive) state.runCancel = { job.cancel() }
     }
 
-    // AI Erase: fill the layer's mask from the photo (LaMa on the phone, or the chosen provider), then keep it as a
-    // Retouch layer above the photo.
-    fun runErase(c: Choice, area: EraseArea, id: Long, photo: Bitmap) = runJob(c, "Erasing…", "erase") {
+    // AI Erase and Fill: fill the layer's mask from the photo (LaMa on the phone, or the chosen provider; Fill with the
+    // prompt), then keep it as a Retouch layer above the photo.
+    fun runFill(cap: Capability, c: Choice, area: EraseArea, prompt: String, id: Long, photo: Bitmap) = runJob(c, "Erasing…", cap.label.lowercase()) {
         val t = System.nanoTime()
-        val filled = provider(c).run(Capability.ERASE, c.model, AiRequest(area.crop, area.fill)) { state.running = it } as AiResult.Image
-        android.util.Log.d("Bloom", "erase (${c.provider}): ${(System.nanoTime() - t) / 1_000_000} ms")
+        val filled = provider(c).run(cap, c.model, AiRequest(area.crop, area.fill, prompt = prompt)) { state.running = it } as AiResult.Image
+        android.util.Log.d("Bloom", "${cap.label} (${c.provider}): ${(System.nanoTime() - t) / 1_000_000} ms")
         val (box, px) = withContext(Dispatchers.Default) { area.paste(filled.bitmap) }
         if (state.draft?.id != id) return@runJob
         val w = photo.width.toFloat()
@@ -626,24 +627,25 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         if (state.editingId != null) state.edit { it.replace(done) } else state.edit { it.copy(layers = listOf(done) + it.layers) }
         state.close()
     }
-    fun erase() {
+    fun fill(cap: Capability) {
         val d = state.draft ?: return
         val photo = state.preview ?: return
         val below = state.rendered()
-        state.running = "Erasing…"
+        val prompt = state.fillPrompt.trim()
+        val verb = cap.label.lowercase()
+        state.running = "Preparing…"
         photoView.maskOf(below, d.id) { hole ->
             scope.launch {
                 val r = runCatching {
-                    hole ?: error("paint over what to remove first")
+                    hole ?: error("paint over the area first")
                     // the mask is soft at its edge; the model needs a clear hole: anything at least half painted
                     val bits = ByteArray(hole.size) { if ((hole[it].toInt() and 0xFF) >= 128) 1 else 0 }
-                    withContext(Dispatchers.Default) { EraseArea.of(photo, bits) } ?: error("nothing to erase")
+                    withContext(Dispatchers.Default) { EraseArea.of(photo, bits) } ?: error("nothing to $verb")
                 }
                 state.running = null
-                val area = r.getOrElse { snackbar.showSnackbar("Couldn't erase: ${reason(it)}"); return@launch }
-                send(Capability.ERASE, "a ${area.crop.width} × ${area.crop.height} px crop of the photo around the painted area, and its mask") { c ->
-                    runErase(c, area, d.id, photo)
-                }
+                val area = r.getOrElse { snackbar.showSnackbar("Couldn't $verb: ${reason(it)}"); return@launch }
+                val what = "a ${area.crop.width} × ${area.crop.height} px crop of the photo around the painted area, and its mask" + if (prompt.isEmpty()) "" else ", with your prompt"
+                send(cap, what) { c -> runFill(cap, c, area, prompt, d.id, photo) }
             }
         }
     }
@@ -760,7 +762,12 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                     // so rows appearing above it never move the photo.
                     onBarTop = { top -> photoView.setBottomInset((canvasBottom - top).roundToInt()) },
                     onDiscard = leaveTool,
-                    onRun = { if (aiMode == Capability.ERASE) erase() },
+                    onRun = {
+                        when (aiMode) {
+                            Capability.ERASE, Capability.GEN_FILL -> fill(aiMode)
+                            else -> Unit
+                        }
+                    },
                     onSettings = { settings = true },
                     modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged {
                         chromePx = it.height
@@ -1200,13 +1207,19 @@ private fun DetailRows(state: EditorState, d: Layer, e: DetailEffect, box: Modif
 /** A tool's main slider: on the left what is selected and under it what the slider sets, then the slider and its value. */
 @Composable
 internal fun RowScope.MainSlider(title: String, sub: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+    TwoLineLabel(title, sub)
+    Slider(value, { onChange(it.roundToInt().toFloat()) }, Modifier.weight(1f).sliderLabel("$title $sub", "${value.roundToInt()}"), valueRange = range, colors = sliderColors())
+    Text("${value.roundToInt()}", Modifier.widthIn(min = 36.dp), fontSize = 14.sp, color = Bloom.On)
+}
+
+/** A main row's label: what is selected ("Erase"), and under it what the row sets ("Size"). */
+@Composable
+internal fun TwoLineLabel(title: String, sub: String) {
     Column(Modifier.widthIn(min = 84.dp).padding(start = 16.dp)) {
         // the same style as every slider label (Color, mask); the second line a step quieter
         Text(title, fontSize = 12.sp, lineHeight = 14.sp, color = Bloom.OnVariant)
         Text(sub, fontSize = 11.sp, lineHeight = 13.sp, color = Bloom.OnVariant.copy(alpha = 0.7f))
     }
-    Slider(value, { onChange(it.roundToInt().toFloat()) }, Modifier.weight(1f).sliderLabel("$title $sub", "${value.roundToInt()}"), valueRange = range, colors = sliderColors())
-    Text("${value.roundToInt()}", Modifier.widthIn(min = 36.dp), fontSize = 14.sp, color = Bloom.On)
 }
 
 /** Lens blur's focus point or Zoom blur's centre on the photo, at ([u], [v]): tap or drag the photo to move it. */
