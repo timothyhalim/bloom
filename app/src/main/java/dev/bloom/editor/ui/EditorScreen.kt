@@ -187,8 +187,9 @@ class EditorState {
     var warpSoftness by mutableFloatStateOf(50f)
     var warpMore by mutableStateOf(false) // Strength and Softness rows shown
     var warpReverse by mutableStateOf(false) // Twirl counterclockwise
-    var erasing by mutableStateOf<String?>(null) // AI Erase running: what it is doing ("Downloading…", "Erasing…", "Queued, 3 ahead")
-    var eraseCancel by mutableStateOf<(() -> Unit)?>(null) // a remote erase running: stops it
+    var aiMode by mutableStateOf(Capability.ERASE) // the AI tool's mode, if a provider still offers it
+    var running by mutableStateOf<String?>(null) // an AI job running: what it is doing ("Downloading…", "Erasing…", "Queued, 3 ahead")
+    var runCancel by mutableStateOf<(() -> Unit)?>(null) // a remote job running: stops it
     var ai by mutableStateOf(AiConfig()) // AI providers and choices (Settings)
 
     // A brush's size and softness shown mid-photo while their sliders move: radius dp, softness 0..100, and a tick to time it out
@@ -401,11 +402,13 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         for ((k, get, set) in floats) set(prefs.getFloat(k, get()))
         for ((k, get, set) in flags) set(prefs.getBoolean(k, get()))
         prefs.getString("warpTool", null)?.let { n -> WarpTool.entries.firstOrNull { it.name == n }?.let { state.warpTool = it } }
-        snapshotFlow { floats.map { it.second() } + flags.map { it.second() } + state.warpTool.name }.collect {
+        prefs.getString("aiMode", null)?.let { n -> Capability.entries.firstOrNull { it.name == n }?.let { state.aiMode = it } }
+        snapshotFlow { floats.map { it.second() } + flags.map { it.second() } + state.warpTool.name + state.aiMode.name }.collect {
             prefs.edit().apply {
                 for ((k, get) in floats) putFloat(k, get())
                 for ((k, get) in flags) putBoolean(k, get())
                 putString("warpTool", state.warpTool.name)
+                putString("aiMode", state.aiMode.name)
             }.apply()
         }
     }
@@ -417,6 +420,8 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     val phone = remember { OnDevice(context) }
     fun provider(c: Choice) = if (c.provider == OnDevice.ID) phone else open(state.ai.providers.first { it.id == c.provider }, Keys.get(context, c.provider))
     var settings by remember { mutableStateOf(false) }
+    val aiModes by remember { derivedStateOf { AI_MODES.filter { state.ai.options(it, phone).isNotEmpty() } } }
+    val aiMode by remember { derivedStateOf { state.aiMode.takeIf { it in aiModes } ?: Capability.ERASE } }
 
     var transformTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
@@ -479,7 +484,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     val lensOpen by remember { derivedStateOf { state.draft?.effect.let { it is DetailEffect && !it.sharpen && it.detail.hasPoint } } }
     val liquifyOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Liquify && !state.maskMode } }
     // AI Erase: one finger paints the layer's mask directly, with the mask's red tint showing
-    val eraseOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Retouch && !state.maskMode } }
+    val eraseOpen by remember { derivedStateOf { state.draft?.kind == LayerKind.Retouch && !state.maskMode && aiMode == Capability.ERASE } }
     // Loupe while painting or picking a color; brush ring for the mask brush and Liquify.
     LaunchedEffect(state.maskMode, state.maskTool, state.brushSize, liquifyOpen, eraseOpen, state.warpSize, state.softness, state.warpSoftness) {
         photoView.loupe = (state.maskMode || eraseOpen) && (state.maskTool == MaskTool.Brush || state.maskTool == MaskTool.Color)
@@ -583,41 +588,49 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), ::open)
     // Files the photo picker doesn't list, e.g. CR3 raws (Android has no MIME type for them, so they show as octet-stream)
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::open)
-    // AI Erase: fill the layer's mask from the photo (LaMa on the phone, or the chosen provider), then keep it as a
-    // Retouch layer above the photo. A provider off the phone is asked about first (ConsentSheet).
-    var consent by remember { mutableStateOf<Triple<Choice, EraseArea, Long>?>(null) }
-    fun runErase(c: Choice, area: EraseArea, id: Long, photo: Bitmap) {
+    // A photo crop goes to a provider off the phone only after the consent sheet
+    var consent by remember { mutableStateOf<Send?>(null) }
+    fun send(cap: Capability, what: String, go: (Choice) -> Unit) {
+        val c = state.ai.choice(cap, phone) ?: return
+        if (state.ai.needsConsent(c.provider)) consent = Send(cap, c, what, go) else go(c)
+    }
+
+    // Runs an AI job with [c], the AI tool locked with its status showing; [failed] names it in an error ("erase").
+    fun runJob(c: Choice, status: String, failed: String, work: suspend () -> Unit) {
         val remote = c.provider != OnDevice.ID
-        state.erasing = if (remote) "Sending to ${state.ai.name(c.provider)}…" else "Erasing…"
+        state.running = if (remote) "Sending to ${state.ai.name(c.provider)}…" else status
         val job = scope.launch {
-            val r = runCatching {
-                val t = System.nanoTime()
-                val filled = provider(c).run(Capability.ERASE, c.model, AiRequest(area.crop, area.fill)) { state.erasing = it } as AiResult.Image
-                android.util.Log.d("Bloom", "erase (${if (remote) "remote" else "phone"}): ${(System.nanoTime() - t) / 1_000_000} ms")
-                withContext(Dispatchers.Default) { area.paste(filled.bitmap) }
-            }
-            state.erasing = null
-            state.eraseCancel = null
-            val e = r.exceptionOrNull()
-            if (e is CancellationException) return@launch
-            e?.let { android.util.Log.e("Bloom", "erase failed", it); snackbar.showSnackbar("Couldn't erase: ${reason(it)}") }
-            val (box, px) = r.getOrNull() ?: return@launch
-            if (state.draft?.id != id) return@launch
-            val w = photo.width.toFloat()
-            val h = photo.height.toFloat()
-            val done = state.draft!!.copy(effect = RetouchEffect(Patch(box[0] / w, box[1] / h, box[2] / w, box[3] / h, px)))
-            // a new Retouch layer goes right above the photo, so every other layer still applies to the filled area
-            if (state.editingId != null) state.edit { it.replace(done) } else state.edit { it.copy(layers = listOf(done) + it.layers) }
-            state.close()
+            val e = runCatching { work() }.exceptionOrNull()
+            state.running = null
+            state.runCancel = null
+            if (e == null || e is CancellationException) return@launch
+            android.util.Log.e("Bloom", "$failed failed", e)
+            snackbar.showSnackbar("Couldn't $failed: ${reason(e)}")
         }
-        // the phone's model can't stop mid-run
-        if (remote && job.isActive) state.eraseCancel = { job.cancel() }
+        // the phone's models can't stop mid-run
+        if (remote && job.isActive) state.runCancel = { job.cancel() }
+    }
+
+    // AI Erase: fill the layer's mask from the photo (LaMa on the phone, or the chosen provider), then keep it as a
+    // Retouch layer above the photo.
+    fun runErase(c: Choice, area: EraseArea, id: Long, photo: Bitmap) = runJob(c, "Erasing…", "erase") {
+        val t = System.nanoTime()
+        val filled = provider(c).run(Capability.ERASE, c.model, AiRequest(area.crop, area.fill)) { state.running = it } as AiResult.Image
+        android.util.Log.d("Bloom", "erase (${c.provider}): ${(System.nanoTime() - t) / 1_000_000} ms")
+        val (box, px) = withContext(Dispatchers.Default) { area.paste(filled.bitmap) }
+        if (state.draft?.id != id) return@runJob
+        val w = photo.width.toFloat()
+        val h = photo.height.toFloat()
+        val done = state.draft!!.copy(effect = RetouchEffect(Patch(box[0] / w, box[1] / h, box[2] / w, box[3] / h, px)))
+        // a new Retouch layer goes right above the photo, so every other layer still applies to the filled area
+        if (state.editingId != null) state.edit { it.replace(done) } else state.edit { it.copy(layers = listOf(done) + it.layers) }
+        state.close()
     }
     fun erase() {
         val d = state.draft ?: return
         val photo = state.preview ?: return
         val below = state.rendered()
-        state.erasing = "Erasing…"
+        state.running = "Erasing…"
         photoView.maskOf(below, d.id) { hole ->
             scope.launch {
                 val r = runCatching {
@@ -626,10 +639,11 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                     val bits = ByteArray(hole.size) { if ((hole[it].toInt() and 0xFF) >= 128) 1 else 0 }
                     withContext(Dispatchers.Default) { EraseArea.of(photo, bits) } ?: error("nothing to erase")
                 }
-                state.erasing = null
+                state.running = null
                 val area = r.getOrElse { snackbar.showSnackbar("Couldn't erase: ${reason(it)}"); return@launch }
-                val c = state.ai.choice(Capability.ERASE, phone) ?: return@launch
-                if (state.ai.needsConsent(c.provider)) consent = Triple(c, area, d.id) else runErase(c, area, d.id, photo)
+                send(Capability.ERASE, "a ${area.crop.width} × ${area.crop.height} px crop of the photo around the painted area, and its mask") { c ->
+                    runErase(c, area, d.id, photo)
+                }
             }
         }
     }
@@ -741,12 +755,12 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                     )
                 }
                 Chrome(
-                    state,
+                    state, aiModes, aiMode, phone,
                     // The chrome floats over the photo. Only the bottom bar, which never changes height, reserves space,
                     // so rows appearing above it never move the photo.
                     onBarTop = { top -> photoView.setBottomInset((canvasBottom - top).roundToInt()) },
                     onDiscard = leaveTool,
-                    onErase = ::erase,
+                    onRun = { if (aiMode == Capability.ERASE) erase() },
                     onSettings = { settings = true },
                     modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged {
                         chromePx = it.height
@@ -860,23 +874,20 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         },
         containerColor = Bloom.SurfaceHigh,
     )
-    consent?.let { (c, area, id) ->
-        val p = state.ai.providers.firstOrNull { it.id == c.provider }
+    consent?.let { r ->
+        val p = state.ai.providers.firstOrNull { it.id == r.choice.provider }
         val host = p?.let { if (it.type == ProviderType.Fal) "fal.ai" else runCatching { java.net.URI(it.url).host }.getOrNull() ?: it.url }.orEmpty()
-        val photo = state.preview
         ConsentSheet(
-            state.ai, c, host,
-            "a ${area.crop.width} × ${area.crop.height} px crop of the photo around the painted area, and its mask",
-            state.ai.options(Capability.ERASE, phone) - c,
+            state.ai, r.choice, host, r.what, state.ai.options(r.cap, phone) - r.choice,
             onSend = { keep ->
                 consent = null
-                if (keep) state.ai = state.ai.copy(consented = state.ai.consented + c.provider)
-                if (photo != null) runErase(c, area, id, photo)
+                if (keep) state.ai = state.ai.copy(consented = state.ai.consented + r.choice.provider)
+                r.go(r.choice)
             },
             onOther = { o ->
                 consent = null
-                state.ai = state.ai.copy(choices = state.ai.choices + (Capability.ERASE to o))
-                if (state.ai.needsConsent(o.provider)) consent = Triple(o, area, id) else if (photo != null) runErase(o, area, id, photo)
+                state.ai = state.ai.copy(choices = state.ai.choices + (r.cap to o))
+                if (state.ai.needsConsent(o.provider)) consent = Send(r.cap, o, r.what, r.go) else r.go(o)
             },
             onDismiss = { consent = null },
         )
@@ -1009,9 +1020,15 @@ private fun OpenButtons(onOpen: () -> Unit, onOpenFile: () -> Unit) {
     }
 }
 
+/** A job waiting on the consent sheet: [what] goes to [choice] for [cap]; [go] runs it with the choice made. */
+private class Send(val cap: Capability, val choice: Choice, val what: String, val go: (Choice) -> Unit)
+
 /** Floating bottom chrome. The bar holds what you edit; the box above holds its settings. */
 @Composable
-private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () -> Unit, onErase: () -> Unit, onSettings: () -> Unit, modifier: Modifier) {
+private fun Chrome(
+    state: EditorState, aiModes: List<Capability>, aiMode: Capability, phone: OnDevice,
+    onBarTop: (Float) -> Unit, onDiscard: () -> Unit, onRun: () -> Unit, onSettings: () -> Unit, modifier: Modifier,
+) {
     val float = RoundedCornerShape(16.dp)
     Column(modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         val d = state.draft
@@ -1025,7 +1042,7 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
                 is ColorEffect -> ColorRows(state, d, e, box)
                 is DetailEffect -> DetailRows(state, d, e, box)
                 is WarpEffect -> LiquifyRows(state, box)
-                is RetouchEffect -> EraseRows(state, box)
+                is RetouchEffect -> AiRows(state, aiMode, box)
             }
         }
         Row(
@@ -1048,7 +1065,10 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
                     is ColorEffect -> ColorBar(state, d, e, onDiscard)
                     is DetailEffect -> DetailBar(state, d, onDiscard)
                     is WarpEffect -> LiquifyBar(state, d, onDiscard)
-                    is RetouchEffect -> EraseBar(state, d, onDiscard, onErase, onSettings)
+                    is RetouchEffect -> AiBar(
+                        state, d, aiModes, aiMode, state.ai.choice(aiMode, phone), state.ai.options(aiMode, phone), onDiscard, onRun,
+                        onPick = { state.ai = state.ai.copy(choices = state.ai.choices + (aiMode to it)) }, onSettings = onSettings,
+                    )
                 }
             }
         }

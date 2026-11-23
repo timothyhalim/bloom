@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -92,9 +93,29 @@ class AiSettingsTest {
     fun theAiBarOpensAiSettings() {
         rule.showEditor()
         rule.onNodeWithContentDescription("AI").performClick()
-        rule.onNodeWithContentDescription("AI settings").performClick()
+        rule.onNodeWithContentDescription("Choose where Erase runs").performClick()
+        rule.onNodeWithText("AI settings…").performClick()
         rule.onNodeWithText("Settings").assertIsDisplayed()
         rule.onNodeWithText("On-device models").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun theRunMenuListsEveryProviderAndModelAndSwitches() {
+        val state = rule.showEditor()
+        rule.runOnIdle {
+            val p = ProviderConfig("pc", ProviderType.IOPaint, "My PC", "http://127.0.0.1:1", mapOf(Capability.ERASE to listOf("lama", "mat")))
+            state.ai = AiConfig(listOf(p))
+        }
+        rule.onNodeWithContentDescription("AI").performClick()
+        rule.onNodeWithText("Phone").assertIsDisplayed() // where it runs, under the run icon
+        rule.onNodeWithContentDescription("Choose where Erase runs").performClick()
+        rule.onNodeWithText("Phone · LaMa").assertIsDisplayed()
+        rule.onNodeWithText("My PC · lama").assertIsDisplayed()
+        rule.onNodeWithText("My PC · mat").performClick()
+        rule.runOnIdle { assertEquals(Choice("pc", "mat"), state.ai.choices[Capability.ERASE]) }
+        rule.onNodeWithText("My PC").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Choose where Erase runs").performClick()
+        rule.onNode(hasText("My PC · mat") and hasContentDescription("Current")).assertIsDisplayed()
     }
 
     /** The editor with a remote IOPaint chosen for Erase and a painted mask in the AI tool. */
@@ -142,7 +163,7 @@ class AiSettingsTest {
         rule.waitUntil(10_000) { rule.onAllNodes(hasText("Running on the server", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithContentDescription("Erase the painted area").assertDoesNotExist() // locked while it runs
         rule.onNodeWithText("Cancel").performClick()
-        rule.waitUntil(5_000) { state.erasing == null }
+        rule.waitUntil(5_000) { state.running == null }
         rule.runOnIdle {
             assertTrue(state.doc.layers.none { it.kind == LayerKind.Retouch })
             assertEquals(LayerKind.Retouch, state.draft?.kind) // still in the tool, mask kept

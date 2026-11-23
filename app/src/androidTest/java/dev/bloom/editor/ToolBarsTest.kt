@@ -181,7 +181,7 @@ class ToolBarsTest {
         rule.runOnIdle { s.setMask(Mask(listOf(BrushStep(listOf(Stroke(listOf(0.5f, 0.5f), 0.1f, 0f, 1f)))))) }
         rule.onNodeWithContentDescription("Erase the painted area").assertIsEnabled()
         rule.onNodeWithContentDescription("Mask: 1 steps. Edit").assertIsDisplayed()
-        rule.runOnIdle { s.erasing = "Erasing…" }
+        rule.runOnIdle { s.running = "Erasing…" }
         rule.onNodeWithText("Erasing…").assertIsDisplayed()
         rule.onNodeWithContentDescription("Erase the painted area").assertDoesNotExist()
     }
