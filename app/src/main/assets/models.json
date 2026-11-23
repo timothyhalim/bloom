@@ -40,5 +40,12 @@
     "sha256": "e71c6fc46514b688b76f77717e0820179ebdb9efc481b136150dc58652360e71",
     "size": 2470880,
     "about": "Real-ESRGAN realesr-general-x4v3 (BSD-3-Clause), 4x upscale, exported to ONNX from the official weights and converted to MNN with half-precision weights. Source: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth"
+  },
+  "matting": {
+    "file": "rvm_mobilenetv3_f16.mnn",
+    "url": "https://raw.githubusercontent.com/timothyhalim/bloom/main/models/rvm_mobilenetv3_f16.mnn",
+    "sha256": "4e1e2a8b45cf573b361a5c5eb6854c146398afceb2d8ac4b713db1f1de909104",
+    "size": 7556104,
+    "about": "Robust Video Matting, MobileNetV3 (GPL-3.0), used on single photos, converted to MNN with half-precision weights. Source: https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx"
   }
 }

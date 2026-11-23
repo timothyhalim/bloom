@@ -19,6 +19,7 @@ import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.RetouchEffect
 import dev.bloom.editor.model.Stroke
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.PersonStep
 import dev.bloom.editor.model.WarpEffect
 import dev.bloom.editor.model.WarpStroke
 import dev.bloom.editor.model.WarpTool
@@ -40,6 +41,7 @@ class ProjectTest {
                         LuminanceStep.Highlights,
                         LuminanceStep.Near,
                         SubjectStep(background = true, pins = listOf(0.2f, 0.3f, 1f), visible = false),
+                        PersonStep(add = false, feather = 0.2f),
                     ),
                     invert = true,
                 ),

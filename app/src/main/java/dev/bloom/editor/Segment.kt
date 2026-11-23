@@ -4,6 +4,7 @@ import dev.bloom.editor.model.Eraser
 import dev.bloom.editor.model.Upscale
 import android.graphics.Bitmap
 import java.io.File
+import kotlin.math.roundToInt
 
 /** A subject mask over the whole upright photo: [w]×[h] bytes, row 0 at the top. */
 class SubjectMask(val w: Int, val h: Int, val alpha: ByteArray)
@@ -51,8 +52,8 @@ class EraseArea(private val photo: Bitmap, val crop: Bitmap, val fill: ByteArray
 }
 
 /**
- * On-device subject masks through MNN (native, app/src/main/cpp/segment.cpp): IS-Net finds the main subject by itself,
- * MobileSAM selects whatever the pins point at.
+ * On-device models through MNN (native, app/src/main/cpp/segment.cpp): IS-Net finds the main subject by itself,
+ * MobileSAM selects whatever the pins point at, RVM mattes people; plus depth, the eraser and upscaling.
  */
 object Segment {
     const val SIZE = 1024
@@ -113,6 +114,16 @@ object Segment {
         val h = maxOf(14, Math.round(photo.height * s / 14) * 14)
         val small = argb(photo, w, h)
         return depth(model.path, cache(model), small, gpu).also { small.recycle() }?.let { SubjectMask(w, h, it) }
+    }
+
+    /** RVM: the person matte of [photo] at 1024 px on the long side, 255 = person. */
+    fun person(model: File, photo: Bitmap): SubjectMask? {
+        if (!loaded) return null
+        val s = SIZE.toFloat() / maxOf(photo.width, photo.height)
+        val w = maxOf(1, (photo.width * s).roundToInt())
+        val h = maxOf(1, (photo.height * s).roundToInt())
+        val small = argb(photo, w, h)
+        return matte(model.path, cache(model), small, gpu).also { small.recycle() }?.let { SubjectMask(w, h, it) }
     }
 
     /** LaMa eraser: [crop] with [fill] (crop-sized, non-zero = fill) filled in, at the crop's size. */
@@ -193,6 +204,9 @@ object Segment {
 
     @JvmStatic
     private external fun upscaleEnd()
+
+    @JvmStatic
+    private external fun matte(model: String, cache: String, photo: Bitmap, gpu: Boolean): ByteArray?
 
     @JvmStatic
     private external fun erase(model: String, cache: String, crop: Bitmap, mask: ByteArray, gpu: Boolean): Boolean

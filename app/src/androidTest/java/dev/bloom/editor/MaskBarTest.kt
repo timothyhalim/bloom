@@ -27,6 +27,7 @@ import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.PersonStep
 import dev.bloom.editor.ui.EditorState
 import dev.bloom.editor.ui.MaskTool
 import org.junit.Assert.assertEquals
@@ -60,7 +61,7 @@ class MaskBarTest {
     fun maskModeHasTheStepTypesInvertAndDone() {
         val s = maskMode()
         rule.onNodeWithContentDescription("Color mask. Back to the tool").assertIsDisplayed()
-        for (t in listOf("brush", "gradient", "color range", "luminance range", "depth range", "subject", "background")) {
+        for (t in listOf("brush", "gradient", "color range", "luminance range", "depth range", "subject", "background", "person")) {
             rule.onNodeWithContentDescription("Add $t").assertExists() // the bar scrolls
         }
         rule.onNodeWithContentDescription("Add brush").assertIsSelected()
@@ -86,7 +87,8 @@ class MaskBarTest {
     fun typeButtonsAddAStepWithTheSignSelectItAndSwitchTool() {
         val s = rule.showEditor()
         rule.runOnIdle {
-            s.subjects = mapOf(emptyList<Float>() to SubjectMask(1, 1, byteArrayOf(0))) // found already: no model download
+            // found already: no model download
+            s.subjects = mapOf(emptyList<Float>() to SubjectMask(1, 1, byteArrayOf(0)), PersonStep.KEY to SubjectMask(1, 1, byteArrayOf(0)))
             s.depth = SubjectMask(1, 1, byteArrayOf(0))
         }
         rule.onNodeWithContentDescription("Color").performClick()
@@ -104,18 +106,25 @@ class MaskBarTest {
         rule.onNodeWithContentDescription("Add gradient").performClick()
         rule.onNodeWithContentDescription("Add subject").performScrollTo().performClick()
         rule.onNodeWithContentDescription("Add background").performScrollTo().performClick()
-        rule.runOnIdle {
-            assertEquals(
-                listOf(LuminanceStep.Shadows.copy(add = false), LuminanceStep.Near, ColorStep(), GradientStep(false, 0.5f, 0.2f, 0.5f, 0.6f), SubjectStep(), SubjectStep(background = true)),
-                s.draft!!.mask.steps,
-            )
-            assertEquals(5, s.stepIndex)
-            assertEquals(MaskTool.Subject, s.maskTool)
-        }
         rule.onAllNodesWithContentDescription("Add background")[1].assertIsSelected()
         rule.onAllNodesWithContentDescription("Add subject")[1].assertIsNotSelected()
+        rule.onNodeWithContentDescription("Add person").performScrollTo().performClick()
+        rule.runOnIdle {
+            assertEquals(
+                listOf(
+                    LuminanceStep.Shadows.copy(add = false), LuminanceStep.Near, ColorStep(), GradientStep(false, 0.5f, 0.2f, 0.5f, 0.6f), SubjectStep(), SubjectStep(background = true),
+                    PersonStep(),
+                ),
+                s.draft!!.mask.steps,
+            )
+            assertEquals(6, s.stepIndex)
+            assertEquals(MaskTool.Person, s.maskTool)
+        }
+        rule.onAllNodesWithContentDescription("Add person")[1].assertIsSelected()
+        rule.onAllNodesWithContentDescription("Add background")[1].assertIsNotSelected()
+        rule.onNodeWithText("The people in the photo, hair included").assertExists()
         rule.onNodeWithContentDescription("Color mask. Back to the tool").performClick()
-        rule.onNodeWithContentDescription("Mask: 6 steps. Edit").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Mask: 7 steps. Edit").assertIsDisplayed()
     }
 
     @Test

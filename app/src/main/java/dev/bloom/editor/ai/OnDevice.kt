@@ -8,8 +8,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
- * The phone itself: IS-Net / MobileSAM subject masks, the LaMa eraser and Real-ESRGAN upscaling through [Segment],
- * models from [ModelStore].
+ * The phone itself: IS-Net / MobileSAM subject masks, the LaMa eraser, Real-ESRGAN upscaling and the RVM person matte
+ * through [Segment], models from [ModelStore].
  */
 class OnDevice(private val context: Context) : AiProvider {
     override fun models(cap: Capability) = when (cap) {
@@ -17,6 +17,8 @@ class OnDevice(private val context: Context) : AiProvider {
         Capability.SEGMENT -> listOf("IS-Net + MobileSAM")
         Capability.ERASE -> listOf("LaMa")
         Capability.UPSCALE -> listOf("Real-ESRGAN")
+        // the person matte the Background layer cuts along
+        Capability.BG_REPLACE -> listOf(MATTING)
         else -> emptyList()
     }
 
@@ -47,11 +49,13 @@ class OnDevice(private val context: Context) : AiProvider {
                 android.util.Log.d("Bloom", "upscale ${img.width}x${img.height} ×${req.scale}: ${(System.nanoTime() - t) / 1_000_000} ms")
                 AiResult.Image(out ?: error("the model couldn't run on this phone"))
             }
+            Capability.BG_REPLACE -> AiResult.Mask(Segment.person(get("matting"), req.image!!) ?: error("the model couldn't run on this phone"))
             else -> error("${cap.label} doesn't run on the phone")
         }
     }
 
     companion object {
         const val ID = "phone"
+        const val MATTING = "RVM"
     }
 }

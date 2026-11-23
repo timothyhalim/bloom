@@ -95,7 +95,7 @@ class ModelStoreTest {
     @Test
     fun everyListedModelHasAFileUrlHashAndSize() {
         val models = Json.parseToJsonElement(File("src/main/assets/models.json").readText()).jsonObject
-        assertEquals(setOf("subject", "sam_encoder", "sam_decoder", "depth", "eraser", "upscale"), models.keys)
+        assertEquals(setOf("subject", "sam_encoder", "sam_decoder", "depth", "eraser", "upscale", "matting"), models.keys)
         for ((name, m) in models) {
             val o = m.jsonObject
             assertTrue(name, o.getValue("file").jsonPrimitive.content.isNotEmpty())

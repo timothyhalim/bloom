@@ -108,4 +108,31 @@ class OnDeviceTest {
         rule.waitUntil(5_000) { state.preview?.width == 300 }
         rule.runOnIdle { assertEquals(original, state.source) }
     }
+
+    @Test
+    fun personMatteCoversAPersonShapeAtTheModelsSize() {
+        val m = model("rvm_mobilenetv3_f16.mnn")
+        // a head and shoulders in front of a plain wall, 1600 × 1200
+        val photo = Bitmap.createBitmap(1600, 1200, Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(photo).apply {
+            drawColor(Color.rgb(170, 190, 200))
+            val p = android.graphics.Paint().apply { isAntiAlias = true }
+            p.color = Color.rgb(60, 70, 110)
+            drawOval(500f, 750f, 1100f, 1500f, p) // shoulders
+            p.color = Color.rgb(225, 180, 150)
+            drawRect(730f, 600f, 870f, 800f, p) // neck
+            drawOval(650f, 280f, 950f, 680f, p) // face
+            p.color = Color.rgb(60, 40, 30)
+            drawArc(640f, 250f, 960f, 600f, 180f, 180f, true, p) // hair
+        }
+        val t = System.nanoTime()
+        val matte = Segment.person(m, photo)!!
+        android.util.Log.d("Bloom", "test matte: ${(System.nanoTime() - t) / 1_000_000} ms")
+        assertEquals(1024, matte.w)
+        assertEquals(768, matte.h)
+        val at = { x: Float, y: Float -> matte.alpha[(y * 768).toInt() * 1024 + (x * 1024).toInt()].toInt() and 0xFF }
+        android.util.Log.d("Bloom", "test matte: face ${at(0.5f, 0.4f)} body ${at(0.5f, 0.9f)} corner ${at(0.05f, 0.05f)}")
+        assertTrue("wall corner ${at(0.05f, 0.05f)}", at(0.05f, 0.05f) < 50)
+        assertTrue("body ${at(0.5f, 0.9f)} face ${at(0.5f, 0.4f)}", maxOf(at(0.5f, 0.9f), at(0.5f, 0.4f)) > 128)
+    }
 }

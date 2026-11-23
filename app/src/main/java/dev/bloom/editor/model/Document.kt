@@ -112,12 +112,27 @@ data class SubjectStep(
     override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
 ) : MaskStep
 
+/**
+ * The people in the photo, as the on-device matting model sees them (soft, with hair). Like [SubjectStep] the matte isn't
+ * stored here: it is computed once per photo and cached by the editor with the subject masks, under [KEY].
+ */
+@Serializable @SerialName("person")
+data class PersonStep(
+    override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
+) : MaskStep {
+    companion object {
+        /** The person matte's key among the subject masks; pins come in triples, so no pin set equals it. */
+        val KEY = listOf(-1f)
+    }
+}
+
 fun MaskStep.with(add: Boolean = this.add, visible: Boolean = this.visible, feather: Float = this.feather): MaskStep = when (this) {
     is BrushStep -> copy(add = add, visible = visible, feather = feather)
     is GradientStep -> copy(add = add, visible = visible, feather = feather)
     is ColorStep -> copy(add = add, visible = visible, feather = feather)
     is LuminanceStep -> copy(add = add, visible = visible, feather = feather)
     is SubjectStep -> copy(add = add, visible = visible, feather = feather)
+    is PersonStep -> copy(add = add, visible = visible, feather = feather)
 }
 
 /** Ordered steps, evaluated first to last from empty, then [invert]. */
@@ -126,8 +141,8 @@ data class Mask(val steps: List<MaskStep> = emptyList(), val invert: Boolean = f
     /** A mask with no visible steps leaves the whole layer on. */
     val active: Boolean get() = steps.any { it.visible }
 
-    /** Color, Luminance and Subject steps sample the layers below, so the mask changes when they do. */
-    val readsBelow: Boolean get() = steps.any { it.visible && (it is ColorStep || it is LuminanceStep || it is SubjectStep) }
+    /** Color, Luminance, Subject and Person steps sample the layers below, so the mask changes when they do. */
+    val readsBelow: Boolean get() = steps.any { it.visible && (it is ColorStep || it is LuminanceStep || it is SubjectStep || it is PersonStep) }
 
     /** Largest feather of a visible step (0..1); export tiles need that much overlap. */
     val maxFeather: Float get() = steps.filter { it.visible }.maxOfOrNull { it.feather } ?: 0f

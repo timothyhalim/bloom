@@ -29,6 +29,7 @@ import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.Stroke
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.PersonStep
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -699,6 +700,16 @@ class PipelineTest {
             assertTrue("background=$background: selected side brightened ($left)", left > 140)
             assertEquals("background=$background: other side untouched", 100.0, right.toDouble(), 1.0) // ±1: deband dither
         }
+    }
+
+    @Test
+    fun personStepFollowsThePersonMatte() {
+        // matte = left half at 1024 × 512 (a landscape photo); the step brightens it, a Subject step with no mask nothing
+        val matte = SubjectMask(1024, 512, ByteArray(1024 * 512) { if (it % 1024 < 512) -1 else 0 })
+        val layer = Layer(1, effect = ColorEffect().with(ColorParam.Exposure, 50f), mask = Mask(listOf(PersonStep())))
+        val out = redsOf(gray(64, 32) { _, _ -> 100 }, listOf(layer)) { setSource(it); setSubjects(mapOf(PersonStep.KEY to matte)) }
+        assertTrue("person brightened (${out[16 * 64 + 8]})", out[16 * 64 + 8] > 140)
+        assertEquals(100.0, out[16 * 64 + 56].toDouble(), 1.0)
     }
 
     @Test

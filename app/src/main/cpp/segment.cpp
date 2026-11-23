@@ -339,6 +339,52 @@ Java_dev_bloom_editor_Segment_upscaleEnd(JNIEnv *, jclass) {
     ExecutorScope::Current()->gc(Executor::FULL);
 }
 
+// --- RVM (Robust Video Matting, MobileNetV3) on a single photo: the person matte. ---
+namespace {
+Net matteNet;
+}  // namespace
+
+// [bmp]: the photo with its long side 1024, RGBA. Returns w*h alpha bytes (255 = person) or null.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_dev_bloom_editor_Segment_matte(JNIEnv *env, jclass, jstring modelPath, jstring cachePath, jobject bmp, jboolean gpu) {
+    std::lock_guard<std::mutex> guard(lock);
+    auto rt = getRuntime(gpu, str(env, cachePath));
+    if (!rt || !load(matteNet, str(env, modelPath), {"src", "r1i", "r2i", "r3i", "r4i", "downsample_ratio"}, {"pha"}, rt)) return nullptr;
+    AndroidBitmapInfo info;
+    const uint8_t *rgba = lockRgba(env, bmp, info);
+    if (!rgba) return nullptr;
+    auto t0 = std::chrono::steady_clock::now();
+    int w = int(info.width), h = int(info.height);
+    VARP src = _Input({1, 3, h, w}, NCHW, halide_type_of<float>());  // RGB 0..1
+    float *x = src->writeMap<float>();
+    for (int y = 0; y < h; y++)
+        for (int c = 0; c < w; c++)
+            for (int k = 0; k < 3; k++) x[(k * h + y) * w + c] = rgba[y * info.stride + c * 4 + k] / 255.f;
+    AndroidBitmap_unlockPixels(env, bmp);
+    // one still photo: no recurrent state
+    std::vector<VARP> in = {src};
+    for (int i = 0; i < 4; i++) {
+        VARP r = _Input({1, 1, 1, 1}, NCHW, halide_type_of<float>());
+        r->writeMap<float>()[0] = 0;
+        in.push_back(r);
+    }
+    // the internal pass at ~384 px for a 1024 px photo. MNN keeps the first ratio a Module sees: never change it
+    VARP ratio = _Input({1}, NCHW, halide_type_of<float>());
+    ratio->writeMap<float>()[0] = 0.375f;
+    in.push_back(ratio);
+    auto out = forward(matteNet, in);
+    const float *a = out.empty() ? nullptr : out[0]->readMap<float>();
+    auto i = out.empty() ? nullptr : out[0]->getInfo();
+    if (!a || !i || i->size != w * h) return nullptr;
+    jbyteArray res = env->NewByteArray(w * h);
+    jbyte *r = env->GetByteArrayElements(res, nullptr);
+    for (int p = 0; p < w * h; p++) r[p] = jbyte(int(std::min(1.f, std::max(0.f, a[p])) * 255.f + 0.5f));
+    env->ReleaseByteArrayElements(res, r, 0);
+    __android_log_print(ANDROID_LOG_DEBUG, "Bloom", "matte %dx%d: %lld ms", w, h,
+                        (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+    return res;
+}
+
 // Frees every model, the SAM embedding and the shared runtime (low memory). The next run loads them again.
 extern "C" JNIEXPORT void JNICALL
 Java_dev_bloom_editor_Segment_release0(JNIEnv *, jclass) {
@@ -348,6 +394,7 @@ Java_dev_bloom_editor_Segment_release0(JNIEnv *, jclass) {
     depthNet = {};
     eraseNet = {};
     upscaleNet = {};
+    matteNet = {};
     ExecutorScope::Current()->gc(Executor::FULL);
     runtime.reset();
 }

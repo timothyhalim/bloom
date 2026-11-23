@@ -91,6 +91,7 @@ import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.PersonStep
 import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.Patch
@@ -214,9 +215,11 @@ class EditorState {
             l.effect.let { it is DetailEffect && !it.sharpen && it.detail.lens } || l.mask.steps.any { it is LuminanceStep && it.depth }
         }
 
-    /** Pin sets of every Subject or Background step (applied layers and the draft): the masks needed. */
+    /** Pin sets of every Subject or Background step, and [PersonStep.KEY] for Person steps (applied layers and the draft): the masks needed. */
     val neededSubjects: Set<List<Float>>
-        get() = ((askResult() ?: doc).layers + listOfNotNull(draft)).flatMap { l -> l.mask.steps.filterIsInstance<SubjectStep>().map { it.pins } }.toSet()
+        get() = ((askResult() ?: doc).layers + listOfNotNull(draft)).flatMap { l ->
+            l.mask.steps.mapNotNull { if (it is SubjectStep) it.pins else if (it is PersonStep) PersonStep.KEY else null }
+        }.toSet()
     private var nextId = 1L
 
     val doc: Document get() = history.current
@@ -311,6 +314,7 @@ class EditorState {
         is ColorStep -> MaskTool.Color
         is LuminanceStep -> MaskTool.Luminance
         is SubjectStep -> MaskTool.Subject
+        is PersonStep -> MaskTool.Person
     }
 
     /** Adds [step] at the end of the mask, selects it and switches to its tool. */
@@ -488,13 +492,14 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         val missing = neededSubjects - state.subjects.keys
         if (missing.isEmpty()) state.subjectStatus = null // a job cancelled mid-run leaves its "Finding…"
         for (pins in missing) {
-            state.subjectStatus = if (pins.isEmpty()) "Finding the subject…" else "Selecting…"
+            val person = pins == PersonStep.KEY
+            state.subjectStatus = if (person) "Finding people…" else if (pins.isEmpty()) "Finding the subject…" else "Selecting…"
             val r = runCatching {
                 val t = System.nanoTime()
                 // ponytail: only the phone offers SEGMENT; a remote one would need the consent sheet, as this runs without a tap
-                val c = state.ai.choice(Capability.SEGMENT, phone)!!
-                val m = provider(c).run(Capability.SEGMENT, c.model, AiRequest(photo, pins = pins)) { state.subjectStatus = it } as AiResult.Mask
-                android.util.Log.d("Bloom", "subject (${pins.size / 3} pins): ${(System.nanoTime() - t) / 1_000_000} ms")
+                val m = if (person) phone.run(Capability.BG_REPLACE, OnDevice.MATTING, AiRequest(photo)) { state.subjectStatus = it } as AiResult.Mask
+                else state.ai.choice(Capability.SEGMENT, phone)!!.let { c -> provider(c).run(Capability.SEGMENT, c.model, AiRequest(photo, pins = pins)) { state.subjectStatus = it } as AiResult.Mask }
+                android.util.Log.d("Bloom", "${if (person) "person" else "subject (${pins.size / 3} pins)"}: ${(System.nanoTime() - t) / 1_000_000} ms")
                 m.mask
             }
             r.exceptionOrNull()?.let { if (it is CancellationException) throw it; android.util.Log.e("Bloom", "subject failed", it) }

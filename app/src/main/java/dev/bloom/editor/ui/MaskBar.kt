@@ -66,6 +66,7 @@ import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.PersonStep
 import androidx.compose.material3.CircularProgressIndicator
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Layer
@@ -76,7 +77,7 @@ import dev.bloom.editor.model.with
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
-enum class MaskTool { Brush, Gradient, Color, Luminance, Subject }
+enum class MaskTool { Brush, Gradient, Color, Luminance, Subject, Person }
 
 private fun MaskStep.label() = (if (add) "Add " else "Remove ") + when (this) {
     is BrushStep -> "brush"
@@ -84,6 +85,7 @@ private fun MaskStep.label() = (if (add) "Add " else "Remove ") + when (this) {
     is ColorStep -> "color range"
     is LuminanceStep -> if (depth) "depth range" else "luminance range"
     is SubjectStep -> if (background) "background" else "subject"
+    is PersonStep -> "person"
 }
 private fun MaskStep.icon() = when (this) {
     is BrushStep -> Icons.Brush
@@ -91,6 +93,7 @@ private fun MaskStep.icon() = when (this) {
     is ColorStep -> Icons.Eyedropper
     is LuminanceStep -> if (depth) Icons.Depth else Icons.Luminance
     is SubjectStep -> if (background) Icons.Background else Icons.Subject
+    is PersonStep -> Icons.Person
 }
 
 /** Right slot of a tool's bar: opens mask mode; shows the step count once there is a mask. */
@@ -133,6 +136,7 @@ fun RowScope.MaskBar(state: EditorState) {
         val subj = (state.stepIndex?.let { mask.steps.getOrNull(it) } as? SubjectStep)?.takeIf { state.maskTool == MaskTool.Subject }
         TypeButton(Icons.Subject, state.maskAdd, subj?.background == false, "$sign subject") { state.addStep(SubjectStep(add = state.maskAdd)) }
         TypeButton(Icons.Background, state.maskAdd, subj?.background == true, "$sign background") { state.addStep(SubjectStep(background = true, add = state.maskAdd)) }
+        TypeButton(Icons.Person, state.maskAdd, state.stepIndex?.let { mask.steps.getOrNull(it) } is PersonStep, "$sign person") { state.addStep(PersonStep(add = state.maskAdd)) }
     }
     IconButton({ state.setMask(mask.copy(invert = !mask.invert)) }, Modifier.semantics { selected = mask.invert }) {
         Icon(Icons.Invert, if (mask.invert) "Invert on" else "Invert off", tint = if (mask.invert) Bloom.Pollen else Bloom.On)
@@ -218,6 +222,7 @@ fun MaskRows(state: EditorState, box: Modifier) {
                 if (status != null) StatusRow(status, { state.aiRetry++ })
                 else Hint(if (state.maskAdd) "Tap what to select. Remove mode: tap what to leave out" else "Tap what to leave out", Modifier.weight(1f))
             }
+            MaskTool.Person -> state.subjectStatus?.let { StatusRow(it, { state.aiRetry++ }) } ?: Hint("The people in the photo, hair included", Modifier.weight(1f))
         }
     }
 }
@@ -522,7 +527,7 @@ class MaskTouch(
                     MaskTool.Gradient -> grabGradient(mask, u, v)
                     MaskTool.Color -> pick(u, v, append = state.addingSample)
                     MaskTool.Subject -> pin(mask, u, v)
-                    MaskTool.Luminance -> Unit
+                    MaskTool.Luminance, MaskTool.Person -> Unit
                 }
             }
             ToolTouch.Move -> {

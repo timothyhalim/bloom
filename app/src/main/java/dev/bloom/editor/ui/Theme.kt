@@ -120,6 +120,7 @@ object Icons {
     val Luminance = icon("M3 19h18M3 19L21 5v14M9 19v-4.7M15 19V9.7")
     val Invert = icon("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18M12 7h5M12 12h8M12 17h5")
     val Subject = icon("M12 4a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM5 20c0-4 3-6.5 7-6.5s7 2.5 7 6.5")
+    val Person = icon("M12 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM6 20c0-3.5 2.7-6 6-6s6 2.5 6 6M9 5.5L7.5 3.5M15 5.5l1.5-2M12 5V2.5")
     val Background = icon("M2 19l6.5-9 4.5 6 3-4 6 7zM17 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4z")
     // Detail: a focus frame
     val Detail = icon("M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M12 9a3 3 0 1 0 0 6 3 3 0 1 0 0-6z")

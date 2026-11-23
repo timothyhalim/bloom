@@ -25,6 +25,7 @@ import dev.bloom.editor.model.MaskStep
 import dev.bloom.editor.model.Patch
 import dev.bloom.editor.model.RetouchEffect
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.PersonStep
 import dev.bloom.editor.SubjectMask
 import kotlin.math.ln
 import kotlin.math.sqrt
@@ -200,7 +201,7 @@ class Pipeline {
         rendered = null
     }
 
-    /** Masks for SubjectSteps, by their pins (empty = the automatic subject). Replaces the previous set. */
+    /** Masks for SubjectSteps, by their pins (empty = the automatic subject), and the person matte ([PersonStep.KEY]). Replaces the previous set. */
     fun setSubjects(all: Map<List<Float>, SubjectMask>) {
         glDeleteTextures(subjects.size, subjects.values.map { it.first }.toIntArray(), 0)
         subjects.clear()
@@ -641,8 +642,9 @@ class Pipeline {
             is GradientStep -> if (s.radial) 2 else 1
             is ColorStep -> 3
             is LuminanceStep -> if (s.depth) 6 else 4
-            is SubjectStep -> 5
+            is SubjectStep, is PersonStep -> 5
         }
+        val subject = (s as? SubjectStep)?.pins ?: PersonStep.KEY.takeIf { s is PersonStep }
         glUniform1i(glGetUniformLocation(p, "uKind"), kind)
         when (s) {
             is GradientStep -> glUniform4f(glGetUniformLocation(p, "uG"), s.x0, s.y0, s.x1, s.y1)
@@ -653,9 +655,9 @@ class Pipeline {
                     glUniformMatrix3fv(glGetUniformLocation(p, "uUnmap"), 1, false, fromUpright, 0)
                 }
             }
-            is SubjectStep -> {
-                val (_, w, h) = subjects[s.pins] ?: Triple(0, 1, 1)
-                glUniform4f(glGetUniformLocation(p, "uG"), if (s.background) 1f else 0f, 0f, 0f, 0f)
+            is SubjectStep, is PersonStep -> {
+                val (_, w, h) = subjects[subject] ?: Triple(0, 1, 1)
+                glUniform4f(glGetUniformLocation(p, "uG"), if ((s as? SubjectStep)?.background == true) 1f else 0f, 0f, 0f, 0f)
                 glUniform2f(glGetUniformLocation(p, "uSize"), w.toFloat(), h.toFloat())
                 glUniformMatrix3fv(glGetUniformLocation(p, "uUnmap"), 1, false, fromUpright, 0)
             }
@@ -673,7 +675,7 @@ class Pipeline {
         glBindTexture(GL_TEXTURE_2D, below)
         glActiveTexture(GL_TEXTURE3)
         // the low-res map that kinds 5 and 6 upsample: a subject mask, or the depth map
-        glBindTexture(GL_TEXTURE_2D, (s as? SubjectStep)?.let { subjects[it.pins]?.first } ?: if ((s as? LuminanceStep)?.depth == true) depthTex else 0)
+        glBindTexture(GL_TEXTURE_2D, subject?.let { subjects[it]?.first } ?: if ((s as? LuminanceStep)?.depth == true) depthTex else 0)
         drawQuad(prev)
     }
 

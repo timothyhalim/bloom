@@ -309,5 +309,6 @@ object EditOps {
         is LuminanceStep -> if (s.depth) "depth range" else "luminance range"
         is dev.bloom.editor.model.BrushStep -> "brush"
         is dev.bloom.editor.model.ColorStep -> "color range"
+        is dev.bloom.editor.model.PersonStep -> "person"
     }
 }

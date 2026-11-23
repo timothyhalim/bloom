@@ -164,6 +164,7 @@ private val LICENSES = listOf(
     "Depth Anything V2 Small (lens blur, depth masks)" to "Apache-2.0",
     "Big LaMa (AI eraser)" to "Apache-2.0",
     "Real-ESRGAN general x4v3 (upscale)" to "BSD-3-Clause",
+    "Robust Video Matting, MobileNetV3 (person matte)" to "GPL-3.0",
     "LibRaw 0.22.3 (camera raw)" to "LGPL-2.1",
     "MNN 3.6.2 (on-device AI)" to "Apache-2.0",
 )

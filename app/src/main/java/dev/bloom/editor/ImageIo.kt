@@ -26,6 +26,7 @@ import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.WarpEffect
 import dev.bloom.editor.model.WarpField
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.PersonStep
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -140,7 +141,7 @@ object ImageIo {
         // Feather and deband read neighbours across tile edges, so each tile is rendered with that much overlap and cropped back.
         val feather = layers.filter { it.visible }.maxOfOrNull { it.mask.maxFeather } ?: 0f
         // Subject edges look up to 3 mask texels away (joint bilateral upsampling).
-        val subjectReach = if (subjects.isNotEmpty() && layers.any { l -> l.visible && l.mask.steps.any { it.visible && it is SubjectStep } }) 3f / Segment.SIZE else 0f
+        val subjectReach = if (subjects.isNotEmpty() && layers.any { l -> l.visible && l.mask.steps.any { it.visible && (it is SubjectStep || it is PersonStep) } }) 3f / Segment.SIZE else 0f
         val blurReach = layers.maxOfOrNull { detailReach(it) } ?: 0f
         // Liquify reads up to its largest offset away
         val warpReach = layers.filter { it.visible }.mapNotNull { (it.effect as? WarpEffect)?.strokes }.maxOfOrNull { WarpField(aspect).apply { update(it) }.maxOffset() + 0.002f } ?: 0f
