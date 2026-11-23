@@ -66,6 +66,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bloom.editor.model.Layer
+import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.Blend
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -81,7 +82,7 @@ private enum class Gesture { Tap, Swipe, Scroll, Hold }
 @Composable
 fun LayerRail(
     layers: List<Layer>, // top first
-    pendingNew: Boolean,
+    pending: LayerKind?, // kind of the draft layer when it is new
     activeId: Long?,
     preview: Bitmap?,
     onTap: (Layer, Float) -> Unit,
@@ -120,7 +121,7 @@ fun LayerRail(
         }
         Box(Modifier.weight(1f, fill = false)) {
             Column(Modifier.verticalScroll(scroll)) {
-                if (pendingNew) Thumb(pending = true, desc = "New layer, not applied yet") { Icon(Icons.Adjust, null, Modifier.size(18.dp), tint = Bloom.On) }
+                if (pending != null) Thumb(pending = true, desc = "New ${pending.label} layer, not applied yet") { Icon(pending.icon, null, Modifier.size(18.dp), tint = Bloom.On) }
                 layers.forEachIndexed { i, l -> RailItem(l, i, layers.size, l.id == activeId, rowPx, onTap, onToggle, onMove) }
                 Thumb(
                     Modifier.onGloballyPositioned { photoY = it.positionInRoot().y + it.size.height / 2f }
@@ -153,7 +154,7 @@ private fun RailItem(
     val layer by rememberUpdatedState(l)
     val idx by rememberUpdatedState(index)
     val n by rememberUpdatedState(count)
-    val name = "Color layer"
+    val name = "${l.kind.label} layer"
     Thumb(
         active = active, hidden = !l.visible, masked = l.mask.active,
         desc = name + (if (l.mask.active) ", has mask" else "") + if (l.visible) "" else ", hidden",
@@ -218,7 +219,7 @@ private fun RailItem(
                     }
                 }
             },
-    ) { Icon(Icons.Adjust, null, Modifier.size(18.dp), tint = Bloom.On) }
+    ) { Icon(l.kind.icon, null, Modifier.size(18.dp), tint = Bloom.On) }
 }
 
 @Composable
@@ -266,6 +267,18 @@ private fun Arrow(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: S
             contentAlignment = Alignment.Center,
         ) { Icon(icon, null, Modifier.size(14.dp), tint = Bloom.On) }
     }
+}
+
+/** How each kind of layer is named and drawn on the rail and in its bubble. */
+val LayerKind.label get() = when (this) {
+    LayerKind.Color -> "Color"
+    LayerKind.Blur -> "Blur"
+    LayerKind.Sharpen -> "Sharpen"
+}
+val LayerKind.icon get() = when (this) {
+    LayerKind.Color -> Icons.Adjust
+    LayerKind.Blur -> Icons.Blur
+    LayerKind.Sharpen -> Icons.Sharpen
 }
 
 /** Bubble id of the Photo layer; Color layer ids start at 1. */
@@ -320,7 +333,7 @@ fun LayerBubble(
     Box(modifier) {
         Column(Modifier.width(236.dp).background(Bloom.SurfaceHigh, shape).border(1.dp, Bloom.Outline, shape).padding(bottom = 8.dp)) {
             Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Color", Modifier.weight(1f), color = Bloom.On)
+                Text(layer.kind.label, Modifier.weight(1f), color = Bloom.On)
                 IconButton(onClick = onVisible) {
                     Icon(if (layer.visible) Icons.Eye else Icons.EyeOff, if (layer.visible) "Hide layer" else "Show layer", tint = Bloom.On)
                 }

@@ -11,11 +11,13 @@ import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Layer
+import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.MaskStep
 import dev.bloom.editor.model.SubjectStep
 import dev.bloom.editor.SubjectMask
+import kotlin.math.ln
 import kotlin.math.sqrt
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -81,6 +83,12 @@ class Pipeline {
     private val blurProgram = link(PASS_VERTEX, BLUR_FRAGMENT)
     private val prepareProgram = link(PASS_VERTEX, PREPARE_FRAGMENT)
     private val combineProgram = link(PASS_VERTEX, COMBINE_FRAGMENT)
+    private val gaussProgram = link(PASS_VERTEX, GAUSS_FRAGMENT)
+    private val lensProgram = link(PASS_VERTEX, LENS_FRAGMENT)
+    private var depth: SubjectMask? = null // the whole photo's depth map (255 = near), for lens blur
+    private var depthTex = 0
+    // Blur and Sharpen scratch: [0] half-blurred (with mipmaps), [1] small blur, [2] large blur. Texture + framebuffer.
+    private var detail: List<Pair<Int, Int>>? = null
     private val params = FloatArray(ColorParam.entries.size)
     private val curveTex = genTexture().also {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -104,6 +112,13 @@ class Pipeline {
         glUseProgram(colorProgram)
         glUniform1i(glGetUniformLocation(colorProgram, "uMask"), 1)
         glUniform1i(glGetUniformLocation(colorProgram, "uCurve"), 3)
+        glUniform1i(glGetUniformLocation(colorProgram, "uF1"), 4)
+        glUniform1i(glGetUniformLocation(colorProgram, "uF2"), 5)
+        glUseProgram(gaussProgram)
+        glUniform1i(glGetUniformLocation(gaussProgram, "uMask"), 1)
+        glUseProgram(lensProgram)
+        glUniform1i(glGetUniformLocation(lensProgram, "uMask"), 1)
+        glUniform1i(glGetUniformLocation(lensProgram, "uDepth"), 2)
         glUseProgram(prepareProgram)
         glUniform1i(glGetUniformLocation(prepareProgram, "uGain"), 1)
         glUseProgram(combineProgram)
@@ -182,6 +197,22 @@ class Pipeline {
         rendered = null
     }
 
+    /** The photo's depth map for lens blur (upright, 255 = nearest), or null to blur without depth. */
+    fun setDepth(d: SubjectMask?) {
+        glDeleteTextures(1, intArrayOf(depthTex), 0)
+        depthTex = 0
+        depth = d
+        masks.values.forEach { it.mask = null } // depth range steps read it
+        if (d != null) {
+            depthTex = genTexture()
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, d.w, d.h, 0, GL_RED, GL_UNSIGNED_BYTE, ByteBuffer.wrap(d.alpha))
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4)
+        }
+        rendered = null
+    }
+
     /** Renders [layers] (bottom to top) and returns the texture holding the result. Cached until layers change. */
     fun render(layers: List<Layer>): Int {
         if (!prepared) prepare()
@@ -220,6 +251,7 @@ class Pipeline {
         var input = src
         active.forEachIndexed { i, l ->
             val m = if (l.mask.active) maskFor(l, input, active.subList(0, i)) else 0
+            if (l.kind != LayerKind.Color) detailPasses(l, input, m)
             val out = i % 2
             val toLast = last != null && i == active.lastIndex
             glBindFramebuffer(GL_FRAMEBUFFER, if (toLast) last!!.first else fbo[out])
@@ -231,8 +263,17 @@ class Pipeline {
             glUniform1i(glGetUniformLocation(colorProgram, "uBlend"), l.blend.ordinal)
             glUniform1i(glGetUniformLocation(colorProgram, "uMasked"), if (m != 0) 1 else 0)
             glUniform1i(glGetUniformLocation(colorProgram, "uInvert"), if (l.mask.invert) 1 else 0)
-            glUniform1i(glGetUniformLocation(colorProgram, "uCurves"), if (l.curves.active) 1 else 0)
-            if (l.curves.active) {
+            glUniform1i(glGetUniformLocation(colorProgram, "uCurves"), if (l.kind == LayerKind.Color && l.curves.active) 1 else 0)
+            glUniform1i(glGetUniformLocation(colorProgram, "uKind"), l.kind.ordinal)
+            glUniform2f(glGetUniformLocation(colorProgram, "uDetail"), l.detail.amount / 50f, l.detail.clarity / 100f * 1.5f)
+            if (l.kind != LayerKind.Color) {
+                val d = detail!!
+                glActiveTexture(GL_TEXTURE4)
+                glBindTexture(GL_TEXTURE_2D, d[1].first)
+                glActiveTexture(GL_TEXTURE5)
+                glBindTexture(GL_TEXTURE_2D, d[2].first)
+            }
+            if (l.kind == LayerKind.Color && l.curves.active) {
                 // one shared table, refilled per layer; 16 KB, and only when the layers change
                 glActiveTexture(GL_TEXTURE3)
                 glBindTexture(GL_TEXTURE_2D, curveTex)
@@ -246,6 +287,85 @@ class Pipeline {
             input = if (toLast) last!!.second else tex[out]
         }
         return input
+    }
+
+    /**
+     * Blur: [src] blurred into detail[1]. Sharpen: a small blur into detail[1] and, for clarity, a large one into detail[2].
+     * A masked Blur only averages pixels inside its mask, so a blurred background doesn't pick up the subject's colors.
+     */
+    private fun detailPasses(l: Layer, src: Int, mask: Int) {
+        val d = detail ?: List(3) { i ->
+            val t = genTexture()
+            glTexStorage2D(GL_TEXTURE_2D, if (i == 0) 32 - Integer.numberOfLeadingZeros(maxOf(width, height)) else 1, if (half) GL_RGBA16F else GL_RGBA8, width, height)
+            val f = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
+            glBindFramebuffer(GL_FRAMEBUFFER, f)
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t, 0)
+            checkFramebuffer()
+            t to f
+        }.also { detail = it }
+        if (l.kind == LayerKind.Blur && l.detail.lens) {
+            lens(src, l, if (l.mask.active) mask else 0, d[1].second)
+        } else if (l.kind == LayerKind.Blur) {
+            gauss(src, l.detail.amount / 100f * BLUR_MAX * uprightHeight, if (l.mask.active) mask else 0, l.mask.invert, d[1].second)
+        } else {
+            gauss(src, (0.5f + 2.5f * l.detail.radius / 100f) / SHARPEN_SCALE * uprightHeight, 0, false, d[1].second)
+            if (l.detail.clarity != 0f) gauss(src, CLARITY_RADIUS * uprightHeight, 0, false, d[2].second)
+        }
+    }
+
+    /** Depth-aware lens blur of [src] into framebuffer [out] (see LENS_FRAGMENT). */
+    private fun lens(src: Int, l: Layer, mask: Int, out: Int) {
+        val det = l.detail
+        val radius = det.amount / 100f * LENS_MAX * uprightHeight
+        val dm = depth
+        val focus = dm?.let { (it.alpha[(det.focusY * (it.h - 1)).toInt() * it.w + (det.focusX * (it.w - 1)).toInt()].toInt() and 0xFF) / 255f } ?: 0f
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, src)
+        glGenerateMipmap(GL_TEXTURE_2D)
+        glBindFramebuffer(GL_FRAMEBUFFER, out)
+        glViewport(0, 0, width, height)
+        val p = lensProgram
+        glUseProgram(p)
+        setGeometry(p, toUpright)
+        glUniform1i(glGetUniformLocation(p, "uHasDepth"), if (dm != null) 1 else 0)
+        glUniform1i(glGetUniformLocation(p, "uWeighted"), if (mask != 0) 1 else 0)
+        glUniform1i(glGetUniformLocation(p, "uInvert"), if (l.mask.invert) 1 else 0)
+        glUniform1f(glGetUniformLocation(p, "uRadius"), radius)
+        glUniform1f(glGetUniformLocation(p, "uFocus"), focus)
+        glUniform1f(glGetUniformLocation(p, "uRange"), det.range / 100f * 0.5f)
+        glUniform1f(glGetUniformLocation(p, "uBloom"), det.bloom / 100f)
+        // the samples are this far apart, so read a mip level that averages that much
+        glUniform1f(glGetUniformLocation(p, "uLod"), maxOf(0f, ln(radius * 0.22f) / ln(2f) - 0.5f))
+        glActiveTexture(GL_TEXTURE1)
+        glBindTexture(GL_TEXTURE_2D, mask)
+        glActiveTexture(GL_TEXTURE2)
+        glBindTexture(GL_TEXTURE_2D, depthTex)
+        drawQuad(src)
+    }
+
+    /** Separable Gaussian of [src] (sigma in pixels) into framebuffer [out]; wide ones read [src]'s mipmaps. */
+    private fun gauss(src: Int, sigma: Float, mask: Int, invert: Boolean, out: Int) {
+        val d = detail!!
+        val stride = maxOf(sigma, 0.01f) * 3f / GAUSS_TAPS // ±GAUSS_TAPS taps span ±3 sigma
+        val lod = maxOf(0f, ln(stride) / ln(2f))
+        glUseProgram(gaussProgram)
+        glUniform1i(glGetUniformLocation(gaussProgram, "uWeighted"), if (mask != 0) 1 else 0)
+        glUniform1i(glGetUniformLocation(gaussProgram, "uInvert"), if (invert) 1 else 0)
+        glUniform1f(glGetUniformLocation(gaussProgram, "uLod"), lod)
+        for ((from, to, first) in listOf(Triple(src, d[0].second, true), Triple(d[0].first, out, false))) {
+            if (lod > 0f) {
+                glActiveTexture(GL_TEXTURE0)
+                glBindTexture(GL_TEXTURE_2D, from)
+                glGenerateMipmap(GL_TEXTURE_2D)
+            }
+            glActiveTexture(GL_TEXTURE1)
+            glBindTexture(GL_TEXTURE_2D, mask)
+            glBindFramebuffer(GL_FRAMEBUFFER, to)
+            glViewport(0, 0, width, height)
+            glUniform1i(glGetUniformLocation(gaussProgram, "uFirst"), if (first) 1 else 0)
+            glUniform2f(glGetUniformLocation(gaussProgram, "uDir"), if (first) stride / width else 0f, if (first) 0f else stride / height)
+            drawQuad(from)
+        }
     }
 
     /** The mask texture of layer [id] from the last [render], or 0. Same pixel grid as the result. */
@@ -311,7 +431,7 @@ class Pipeline {
     }
 
     fun release() {
-        glDeleteTextures(4, intArrayOf(raw, source, curveTex, gainTex), 0)
+        glDeleteTextures(5, intArrayOf(raw, source, curveTex, gainTex, depthTex), 0)
         setSubjects(emptyMap())
         freeHdrTargets()
         glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
@@ -444,16 +564,23 @@ class Pipeline {
             null, is BrushStep -> 0
             is GradientStep -> if (s.radial) 2 else 1
             is ColorStep -> 3
-            is LuminanceStep -> 4
+            is LuminanceStep -> if (s.depth) 6 else 4
             is SubjectStep -> 5
         }
         glUniform1i(glGetUniformLocation(p, "uKind"), kind)
         when (s) {
             is GradientStep -> glUniform4f(glGetUniformLocation(p, "uG"), s.x0, s.y0, s.x1, s.y1)
-            is LuminanceStep -> glUniform4f(glGetUniformLocation(p, "uG"), s.a, s.b, s.c, s.d)
+            is LuminanceStep -> {
+                glUniform4f(glGetUniformLocation(p, "uG"), s.a, s.b, s.c, s.d)
+                if (s.depth) {
+                    glUniform2f(glGetUniformLocation(p, "uSize"), (depth?.w ?: 1).toFloat(), (depth?.h ?: 1).toFloat())
+                    glUniformMatrix3fv(glGetUniformLocation(p, "uUnmap"), 1, false, fromUpright, 0)
+                }
+            }
             is SubjectStep -> {
                 val (_, w, h) = subjects[s.pins] ?: Triple(0, 1, 1)
-                glUniform4f(glGetUniformLocation(p, "uG"), if (s.background) 1f else 0f, w.toFloat(), h.toFloat(), 0f)
+                glUniform4f(glGetUniformLocation(p, "uG"), if (s.background) 1f else 0f, 0f, 0f, 0f)
+                glUniform2f(glGetUniformLocation(p, "uSize"), w.toFloat(), h.toFloat())
                 glUniformMatrix3fv(glGetUniformLocation(p, "uUnmap"), 1, false, fromUpright, 0)
             }
             is ColorStep -> {
@@ -469,7 +596,8 @@ class Pipeline {
         glActiveTexture(GL_TEXTURE2)
         glBindTexture(GL_TEXTURE_2D, below)
         glActiveTexture(GL_TEXTURE3)
-        glBindTexture(GL_TEXTURE_2D, (s as? SubjectStep)?.let { subjects[it.pins]?.first } ?: 0)
+        // the low-res map that kinds 5 and 6 upsample: a subject mask, or the depth map
+        glBindTexture(GL_TEXTURE_2D, (s as? SubjectStep)?.let { subjects[it.pins]?.first } ?: if ((s as? LuminanceStep)?.depth == true) depthTex else 0)
         drawQuad(prev)
     }
 
@@ -549,6 +677,8 @@ class Pipeline {
     }
 
     private fun allocTargets() {
+        detail?.let { d -> glDeleteTextures(3, d.map { it.first }.toIntArray(), 0); glDeleteFramebuffers(3, d.map { it.second }.toIntArray(), 0) }
+        detail = null
         glDeleteTextures(2, tex, 0)
         glDeleteFramebuffers(2, fbo, 0)
         glGenFramebuffers(2, fbo, 0)
@@ -691,6 +821,10 @@ uniform int uBlend;
 uniform bool uMasked;
 uniform bool uInvert;
 uniform bool uCurves;
+uniform int uKind; // LayerKind: 0 Color, 1 Blur, 2 Sharpen
+uniform sampler2D uF1; // Blur: the blurred layer input. Sharpen: its small blur
+uniform sampler2D uF2; // Sharpen: the large blur, for clarity
+uniform vec2 uDetail; // Sharpen: amount, clarity
 """ + HALF_ROUND + """
 uniform sampler2D uCurve; // CURVE_SIZE x 1 tone table, rgb = output per channel
 out vec4 outColor;
@@ -708,9 +842,18 @@ vec3 blend(vec3 b, vec3 s) {
 void main() {
     ivec2 px = ivec2(gl_FragCoord.xy);
     vec4 src = texelFetch(uTex, px, 0);
+    vec3 p;
+    if (uKind == 1) p = texelFetch(uF1, px, 0).rgb;
+    else if (uKind == 2) {
+        // unsharp mask, then clarity: midtone-weighted local contrast on brightness only
+        p = src.rgb + uDetail.x * (src.rgb - texelFetch(uF1, px, 0).rgb);
+        float l = dot(clamp(src.rgb, 0.0, 1.0), LUMA);
+        float local = l - dot(clamp(texelFetch(uF2, px, 0).rgb, 0.0, 1.0), LUMA);
+        p += uDetail.y * local * 4.0 * l * (1.0 - l);
+    } else {
     vec3 lin = toLinear(src.rgb) * exp2(uP[0] * 3.0);
     lin *= vec3(1.0 + 0.2 * uP[4], 1.0 - 0.2 * uP[5], 1.0 - 0.2 * uP[4]);
-    vec3 p = toSrgb(lin);
+    p = toSrgb(lin);
     float l = dot(p, LUMA);
     float nl = l + uP[3] * 0.35 * (1.0 - smoothstep(0.0, 0.5, l)) + uP[2] * 0.35 * smoothstep(0.5, 1.0, l);
     p *= nl / max(l, 1e-4);
@@ -724,6 +867,7 @@ void main() {
         vec3 q = clamp(p, 0.0, 1.0) * (1023.0 / 1024.0) + 0.5 / 1024.0; // texel centres
         p = vec3(texture(uCurve, vec2(q.r, 0.5)).r, texture(uCurve, vec2(q.g, 0.5)).g, texture(uCurve, vec2(q.b, 0.5)).b) + over;
     }
+    }
     if (uBlend != 0) p = blend(src.rgb, p);
     float m = 1.0;
     if (uMasked) {
@@ -734,7 +878,8 @@ void main() {
 }"""
 
         // Combines one mask step into the mask so far (uTex), or with uValueOnly writes the step value alone.
-        // uKind: 0 from texture (uBrush), 1 linear, 2 radial gradient, 3 color range, 4 luminance range, 5 subject (uG.x = 1: background).
+        // uKind: 0 from texture (uBrush), 1 linear, 2 radial gradient, 3 color range, 4 luminance range, 5 subject (uG.x = 1:
+        // background), 6 depth range (uG as for luminance). 5 and 6 upsample a low-res map (uSubject, uSize texels).
         // Gradient math runs in upright image coordinates scaled by aspect, so circles stay round.
         // Color and luminance read the composite of the layers below (uBelow).
         const val MASK_FRAGMENT = """#version 300 es
@@ -744,7 +889,8 @@ uniform sampler2D uBrush;
 uniform sampler2D uBelow;
 uniform sampler2D uSubject;
 uniform mat3 uMap;
-uniform mat3 uUnmap; // upright -> full image 0..1 (subject only)
+uniform mat3 uUnmap; // upright -> full image 0..1 (subject and depth only)
+uniform vec2 uSize; // texels of the subject or depth map
 uniform vec2 uOrigin;
 uniform vec2 uFull;
 uniform float uAspect;
@@ -781,10 +927,10 @@ void main() {
         vec2 d = uG.zw * a - q0;
         if (uKind == 1) s = 1.0 - smoothstep(0.0, 1.0, dot(q - q0, d) / max(dot(d, d), 1e-8));
         else s = 1.0 - smoothstep(0.5, 1.0, length(q - q0) / max(length(d), 1e-6));
-    } else if (uKind == 5) {
+    } else if (uKind >= 5) {
         // Joint bilateral upsampling of the low-res model mask: of the 4x4 nearest mask texels, those whose spot in the
         // photo looks like this pixel count most, so the edge snaps to the photo's edge instead of a blurry halo.
-        vec2 n = uG.yz;
+        vec2 n = uSize;
         vec2 t = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy * n - 0.5;
         vec2 base = floor(t);
         vec3 g0 = texelFetch(uBelow, px, 0).rgb;
@@ -800,7 +946,8 @@ void main() {
             wsum += w;
         }
         s = sum / max(wsum, 1e-6);
-        if (uG.x > 0.5) s = 1.0 - s;
+        if (uKind == 5) { if (uG.x > 0.5) s = 1.0 - s; }
+        else s = rise(uG.x, uG.y, s) * (uG.w <= uG.z ? step(s, uG.z) : 1.0 - smoothstep(uG.z, uG.w, s));
     } else {
         vec3 c = texelFetch(uBelow, px, 0).rgb;
         if (uKind == 3) {
@@ -839,6 +986,83 @@ void main() {
     outColor = vec4(sum / wsum, 0.0, 0.0, 1.0);
 }"""
 
+        // One pass of a separable Gaussian: ±16 taps, [uDir] apart (uv), from mip level [uLod] so wide blurs stay smooth.
+        // First pass: weights each tap by the layer mask and keeps the weight in alpha (premultiplied).
+        // Second pass: sums those and divides by the weight, so only pixels inside the mask are averaged.
+        const val GAUSS_FRAGMENT = """#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform sampler2D uMask;
+uniform vec2 uDir;
+uniform float uLod;
+uniform bool uFirst;
+uniform bool uWeighted;
+uniform bool uInvert;
+out vec4 outColor;
+void main() {
+    vec2 uv = gl_FragCoord.xy / vec2(textureSize(uTex, 0));
+    vec4 acc = vec4(0.0);
+    for (int i = -16; i <= 16; i++) {
+        float x = float(i) * (3.0 / 16.0);
+        float w = exp(-0.5 * x * x);
+        vec2 q = uv + uDir * float(i);
+        vec4 c = textureLod(uTex, q, uLod);
+        if (uFirst) {
+            float m = 1.0;
+            if (uWeighted) { m = texture(uMask, q).r; if (uInvert) m = 1.0 - m; }
+            c = vec4(c.rgb * m, m);
+        }
+        acc += w * c;
+    }
+    outColor = uFirst ? acc : vec4(acc.rgb / max(acc.a, 1e-5), 1.0);
+}"""
+
+        // Lens blur as a gather: 64 taps on a golden-angle spiral fill a disc of uRadius. A tap counts if its own blur
+        // disc reaches this pixel, so sharp areas stay sharp and blur grows with depth. A tap
+        // farther away than this pixel can blur no more than this pixel does, so the background never smears over a
+        // sharp foreground. Bright taps weigh more (uBloom): highlights turn into discs like a real lens.
+        const val LENS_FRAGMENT = """#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform sampler2D uMask;
+uniform sampler2D uDepth;
+uniform mat3 uMap;
+uniform vec2 uOrigin;
+uniform vec2 uFull;
+uniform bool uHasDepth;
+uniform bool uWeighted;
+uniform bool uInvert;
+uniform float uRadius;
+uniform float uFocus;
+uniform float uRange;
+uniform float uBloom;
+uniform float uLod;
+out vec4 outColor;
+float depthAt(vec2 frag) { return texture(uDepth, (uMap * vec3((frag + uOrigin) / uFull, 1.0)).xy).r; }
+// blur radius in pixels for a depth: none within uRange of the focus depth, full uRadius half the depth scale beyond
+float coc(float d) { return uHasDepth ? uRadius * clamp((abs(d - uFocus) - uRange) * 2.0, 0.0, 1.0) : uRadius; }
+void main() {
+    vec2 frag = gl_FragCoord.xy;
+    vec2 size = vec2(textureSize(uTex, 0));
+    float d0 = uHasDepth ? depthAt(frag) : 0.0;
+    float c0 = coc(d0);
+    vec4 acc = vec4(texelFetch(uTex, ivec2(frag), 0).rgb, 1.0); // the pixel itself: in focus it is all there is
+    for (int k = 0; k < 64; k++) {
+        float r = sqrt((float(k) + 0.5) / 64.0);
+        float a = float(k) * 2.39996323;
+        vec2 q = frag + vec2(cos(a), sin(a)) * r * uRadius;
+        vec3 c = textureLod(uTex, q / size, uLod).rgb;
+        float ds = uHasDepth ? depthAt(q) : d0;
+        float cs = coc(ds);
+        if (ds < d0) cs = min(cs, c0);
+        float w = clamp(cs - r * uRadius + 1.0, 0.0, 1.0);
+        w *= 1.0 + uBloom * 8.0 * smoothstep(0.7, 1.0, dot(clamp(c, 0.0, 1.0), vec3(0.2126, 0.7152, 0.0722)));
+        if (uWeighted) { float m = texture(uMask, q / size).r; w *= uInvert ? 1.0 - m : m; }
+        acc += vec4(c * w, w);
+    }
+    outColor = vec4(acc.rgb / acc.a, 1.0);
+}"""
+
         // One instanced quad per dab: centre in upright coordinates -> source pixel -> this tile's clip space.
         const val DAB_VERTEX = """#version 300 es
 layout(location = 0) in vec2 aCorner;
@@ -871,6 +1095,22 @@ void main() {
 }
 
 /** GLSL: adds +-0.5 of an 8-bit step of fixed noise before the 8-bit write, so smooth gradients don't band. Exact 8-bit values pass through unchanged. */
+private const val GAUSS_TAPS = 16
+private const val BLUR_MAX = 0.02f // Blur at 100: sigma = 2% of the upright image height
+private const val LENS_MAX = 0.04f // Lens blur at 100: a disc with a radius of 4% of the upright image height
+private const val SHARPEN_SCALE = 3000f // Sharpen radius 0..100 = sigma 0.5..3 px on a 3000 px tall photo
+private const val CLARITY_RADIUS = 0.015f // of the image height
+
+/** How far (fraction of the upright height) a layer reads around a pixel; export tiles overlap by this. */
+fun detailReach(l: Layer): Float = when {
+    !l.visible -> 0f
+    // taps reach the radius, and each reads a mip texel about a quarter of it wide
+    l.kind == LayerKind.Blur && l.detail.lens -> 1.3f * LENS_MAX * l.detail.amount / 100f
+    l.kind == LayerKind.Blur -> 3f * BLUR_MAX * l.detail.amount / 100f
+    l.kind == LayerKind.Sharpen -> 3f * if (l.detail.clarity != 0f) CLARITY_RADIUS else 3f / SHARPEN_SCALE
+    else -> 0f
+}
+
 /** For passes that write RGBA16F: with uTrunc, add half a half-float step so the GPU's truncation rounds to nearest. */
 internal const val HALF_ROUND = """
 uniform bool uTrunc;

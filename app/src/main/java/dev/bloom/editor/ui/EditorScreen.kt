@@ -82,6 +82,11 @@ import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.model.LayerKind
+import dev.bloom.editor.ToolTouch
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.Color
+import dev.bloom.editor.model.Detail
 import dev.bloom.editor.ModelStore
 import dev.bloom.editor.Segment
 import dev.bloom.editor.SubjectMask
@@ -105,6 +110,7 @@ class EditorState {
     var param by mutableStateOf(ColorParam.Exposure)
     var curvesOpen by mutableStateOf(false) // the Curves chip is selected instead of [param]
     var curveChannel by mutableIntStateOf(0) // 0 RGB, 1 R, 2 G, 3 B
+    var detailParam by mutableIntStateOf(0) // Sharpen's row: 0 Amount, 1 Radius, 2 Clarity
     var comparing by mutableStateOf(false)
     var opacityPreview by mutableStateOf<Pair<Long, Float>?>(null)
     var bubble by mutableStateOf<Pair<Long, Float>?>(null) // layer id, thumbnail centre y (root px)
@@ -122,6 +128,13 @@ class EditorState {
     var subjects by mutableStateOf(emptyMap<List<Float>, SubjectMask>()) // this photo's subject masks, by pins (empty = automatic)
     var subjectStatus by mutableStateOf<String?>(null) // "Downloading…", "Finding…", or an error while there is no mask
     var subjectRetry by mutableIntStateOf(0)
+    var depth by mutableStateOf<SubjectMask?>(null) // this photo's depth map, once a lens blur needs it
+
+    /** A Lens blur or a depth range step exists (applied or in the draft), so the depth map is needed. */
+    val needsDepth: Boolean
+        get() = (doc.layers + listOfNotNull(draft)).any { l ->
+            l.kind == LayerKind.Blur && l.detail.lens || l.mask.steps.any { it is LuminanceStep && it.depth }
+        }
 
     /** Pin sets of every Subject or Background step (applied layers and the draft): the masks needed. */
     val neededSubjects: Set<List<Float>>
@@ -139,8 +152,10 @@ class EditorState {
         return ls
     }
 
-    fun openColor(edit: Layer? = null, mask: Boolean = false) {
-        draft = edit ?: Layer(nextId++)
+    /** Opens the tool for a new layer of [kind], or for [edit]. */
+    fun openTool(kind: LayerKind = LayerKind.Color, edit: Layer? = null, mask: Boolean = false) {
+        draft = edit ?: Layer(nextId++, kind = kind)
+        detailParam = 0
         editingId = edit?.id
         param = ColorParam.Exposure
         curvesOpen = false
@@ -224,6 +239,7 @@ class EditorState {
         preview = bmp
         subjects = emptyMap()
         subjectStatus = null
+        depth = null
         history = History()
         close()
         bubble = null
@@ -251,7 +267,27 @@ fun EditorScreen(photoView: PhotoView) {
         photoView.onTransform = { transformTick++ }
         launch { snapshotFlow { state.doc.deband }.collect(photoView::setDeband) }
         launch { snapshotFlow { state.subjects }.collect(photoView::setSubjects) }
+        launch { snapshotFlow { state.depth }.collect(photoView::setDepth) }
         snapshotFlow { state.rendered() }.collect(photoView::setLayers)
+    }
+    // The depth map is measured once per photo, the first time a lens blur needs it.
+    LaunchedEffect(state.preview, state.needsDepth, state.subjectRetry) {
+        val photo = state.preview ?: return@LaunchedEffect
+        if (!state.needsDepth || state.depth != null) return@LaunchedEffect
+        state.subjectStatus = "Measuring depth…"
+        val r = runCatching {
+            withContext(Dispatchers.IO) {
+                val model = ModelStore.get(context, "depth") { state.subjectStatus = "Downloading AI model… ${(it * 100).toInt()}%" }
+                val t = System.nanoTime()
+                (Segment.depth(model, photo) ?: error("the model couldn't run on this phone")).also {
+                    android.util.Log.d("Bloom", "depth: ${(System.nanoTime() - t) / 1_000_000} ms")
+                }
+            }
+        }
+        r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "depth failed", it) }
+        if (state.preview !== photo) return@LaunchedEffect
+        state.depth = r.getOrNull()
+        state.subjectStatus = r.exceptionOrNull()?.let { "Couldn't measure depth: ${it.message}" }
     }
     // Subject masks are found once per photo and pin set, when a Subject or Background step needs one.
     LaunchedEffect(state.preview, state.neededSubjects, state.subjectRetry) {
@@ -282,12 +318,17 @@ fun EditorScreen(photoView: PhotoView) {
         photoView.loupe = state.maskMode && (state.maskTool == MaskTool.Brush || state.maskTool == MaskTool.Color)
         photoView.brushRadiusPx = if (state.maskMode && state.maskTool == MaskTool.Brush) state.brushSize * density.density else 0f
     }
-    LaunchedEffect(state.draft?.id, state.maskMode, shownPreview) {
+    val lensOpen = state.draft?.let { it.kind == LayerKind.Blur && it.detail.lens } == true
+    LaunchedEffect(state.draft?.id, state.maskMode, shownPreview, lensOpen) {
         photoView.setOverlay(state.draft?.id?.takeIf { state.maskMode })
         photoView.onTool = if (state.maskMode && shownPreview != null) {
             MaskTouch(state, photoView, shownPreview.width.toFloat() / shownPreview.height, density.density) { u, v, done ->
                 photoView.sample(state.below(), u, v, done)
             }::on
+        } else if (lensOpen) { t, u, v ->
+            // lens blur: tap or drag on the photo to choose what is in focus
+            val d = state.draft
+            if (d != null && (t == ToolTouch.Down || t == ToolTouch.Move)) state.draft = d.copy(detail = d.detail.copy(focusX = u.coerceIn(0f, 1f), focusY = v.coerceIn(0f, 1f)))
         } else null
     }
 
@@ -309,8 +350,9 @@ fun EditorScreen(photoView: PhotoView) {
         scope.launch {
             exporting = 0f
             val subjects = state.subjects
+            val depth = state.depth
             val r = runCatching {
-                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png, subjects) { exporting = it } }
+                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png, subjects, depth) { exporting = it } }
             }
             exporting = null
             r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "export failed", it) }
@@ -324,7 +366,7 @@ fun EditorScreen(photoView: PhotoView) {
     fun toggle(l: Layer) {
         state.edit { it.replace(l.copy(visible = !l.visible)) }
         if (toggleToasts++ < 3) scope.launch {
-            if (snackbar.showSnackbar("Color layer ${if (l.visible) "hidden" else "shown"}", "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
+            if (snackbar.showSnackbar("${l.kind.label} layer ${if (l.visible) "hidden" else "shown"}", "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
                 state.history = state.history.undo()
             }
         }
@@ -348,6 +390,7 @@ fun EditorScreen(photoView: PhotoView) {
             if (state.maskMode && selGradient != null && selGradient.visible) GradientHandles(selGradient, photoView, transformTick)
             val selSubject = state.stepIndex?.let { state.draft?.mask?.steps?.getOrNull(it) } as? SubjectStep
             if (state.maskMode && selSubject != null) Pins(selSubject, photoView, transformTick)
+            state.draft?.takeIf { !state.maskMode && it.kind == LayerKind.Blur && it.detail.lens }?.let { FocusMark(it.detail, photoView, transformTick) }
             val preview = state.preview
             if (state.source == null || preview == null) {
                 // opaque, so a closed photo doesn't show through
@@ -356,7 +399,7 @@ fun EditorScreen(photoView: PhotoView) {
                 val top = state.doc.layers.reversed()
                 LayerRail(
                     layers = top,
-                    pendingNew = state.draft != null && state.editingId == null,
+                    pending = state.draft?.takeIf { state.editingId == null }?.kind,
                     activeId = state.bubble?.first ?: state.editingId,
                     preview = preview,
                     onTap = { l, y -> state.bubble = if (state.bubble?.first == l.id) null else l.id to y },
@@ -403,8 +446,8 @@ fun EditorScreen(photoView: PhotoView) {
                             state.opacityPreview?.let { (_, o) -> state.edit { d -> d.replace(l.copy(opacity = o)) } }
                             state.opacityPreview = null
                         },
-                        onEdit = { state.openColor(l) },
-                        onEditMask = { state.openColor(l, mask = true) },
+                        onEdit = { state.openTool(l.kind, l) },
+                        onEditMask = { state.openTool(l.kind, l, mask = true) },
                         onBlend = { b -> state.edit { d -> d.replace(l.copy(blend = b)) } },
                         onDelete = { state.edit { it.remove(id) }; state.bubble = null },
                         modifier = Modifier.align(Alignment.TopEnd).padding(end = 52.dp)
@@ -501,8 +544,9 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
         val box = Modifier.fillMaxWidth().background(Bloom.Surface, float).border(1.dp, Bloom.Outline, float)
         val rowModifier = box.height(48.dp)
         if (d != null && state.maskMode) MaskRows(state, box)
-        if (d != null && !state.maskMode && state.curvesOpen) CurvesRow(state, box)
-        if (d != null && !state.maskMode && !state.curvesOpen) {
+        if (d != null && !state.maskMode && d.kind != LayerKind.Color) DetailRows(state, d, box)
+        if (d != null && !state.maskMode && d.kind == LayerKind.Color && state.curvesOpen) CurvesRow(state, box)
+        if (d != null && !state.maskMode && d.kind == LayerKind.Color && !state.curvesOpen) {
             val p = state.param
             Row(rowModifier, verticalAlignment = Alignment.CenterVertically) {
                 Text(p.name, Modifier.width(92.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
@@ -521,10 +565,21 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (d == null) {
-                // M1 ships Color only; each later tool joins the bar when it works.
-                ToolButton("Color", Modifier.weight(1f)) { state.openColor() }
+                // each tool joins the bar when it works
+                ToolButton("Color", Icons.Adjust, Modifier.weight(1f)) { state.openTool() }
+                ToolButton("Detail", Icons.Detail, Modifier.weight(1f)) { state.openTool(LayerKind.Blur) }
             } else if (state.maskMode) {
                 MaskBar(state)
+            } else if (d.kind != LayerKind.Color) {
+                ToolIcon(Icons.Detail, "Detail. Back to tools", onDiscard)
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Blur and Sharpen are separate layer kinds; an applied layer keeps its kind
+                    for (k in listOf(LayerKind.Blur, LayerKind.Sharpen)) {
+                        Chip(k.label, d.kind == k, k.icon) { if (state.editingId == null && d.kind != k) state.draft = d.copy(kind = k, detail = Detail()) }
+                    }
+                }
+                MaskButton(d.mask) { state.maskMode = true }
+                IconButton(state::apply) { Icon(Icons.Check, if (state.editingId != null) "Apply changes" else "Apply as ${d.kind.label} layer", tint = Bloom.Pollen) }
             } else {
                 Box(
                     Modifier.size(54.dp, 48.dp).clickable(role = Role.Button, onClick = onDiscard)
@@ -553,10 +608,99 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
 }
 
 @Composable
-private fun ToolButton(label: String, modifier: Modifier, onClick: () -> Unit) {
+private fun ToolButton(label: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
     Column(modifier.height(58.dp).clickable(role = Role.Button, onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Box(Modifier.size(44.dp, 30.dp), contentAlignment = Alignment.Center) { Icon(Icons.Adjust, null, tint = Bloom.OnVariant) }
+        Box(Modifier.size(44.dp, 30.dp), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Bloom.OnVariant) }
         Text(label, fontSize = 11.sp, color = Bloom.OnVariant, fontWeight = FontWeight.Medium)
+    }
+}
+
+/** Left slot of an open tool's bar: the tool's icon; tapping goes back to the tool list. */
+@Composable
+private fun ToolIcon(icon: ImageVector, desc: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(54.dp, 48.dp).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = desc },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(36.dp, 30.dp).background(Bloom.PollenContainer, Bloom.Petal), contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = Bloom.OnPollenContainer)
+        }
+    }
+}
+
+/** One Detail slider: its name, how to read and write it on [Detail], its range and default. */
+private class DetailParam(val name: String, val range: ClosedFloatingPointRange<Float>, val get: (Detail) -> Float, val set: (Detail, Float) -> Detail) {
+    val default get() = get(Detail())
+}
+
+private val sharpenParams = listOf(
+    DetailParam("Amount", 0f..100f, { it.amount }, { d, v -> d.copy(amount = v) }),
+    DetailParam("Radius", 0f..100f, { it.radius }, { d, v -> d.copy(radius = v) }),
+    DetailParam("Clarity", -100f..100f, { it.clarity }, { d, v -> d.copy(clarity = v) }),
+)
+private val gaussParams = listOf(DetailParam("Amount", 0f..100f, { it.amount }, { d, v -> d.copy(amount = v) }))
+private val lensParams = listOf(
+    DetailParam("Amount", 0f..100f, { it.amount }, { d, v -> d.copy(amount = v) }),
+    DetailParam("Range", 0f..100f, { it.range }, { d, v -> d.copy(range = v) }),
+    DetailParam("Highlights", 0f..100f, { it.bloom }, { d, v -> d.copy(bloom = v) }),
+)
+
+/**
+ * Rows above the Detail bar: a chip row (Blur: Gaussian / Lens and Lens's sliders; Sharpen: its sliders), then the
+ * selected slider with its value and Reset.
+ */
+@Composable
+private fun DetailRows(state: EditorState, d: Layer, box: Modifier) {
+    val det = d.detail
+    val params = when {
+        d.kind == LayerKind.Sharpen -> sharpenParams
+        det.lens -> lensParams
+        else -> gaussParams
+    }
+    val which = state.detailParam.coerceIn(0, params.lastIndex)
+    Row(
+        box.height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (d.kind == LayerKind.Blur) {
+            Chip("Gaussian", !det.lens) { state.draft = d.copy(detail = det.copy(lens = false)); state.detailParam = 0 }
+            Chip("Lens", det.lens) { state.draft = d.copy(detail = det.copy(lens = true)); state.detailParam = 0 }
+        }
+        if (params.size > 1) params.forEachIndexed { i, p ->
+            val v = p.get(det)
+            Chip(if (i == which) "${p.name} ${if (p.range.start < 0f) signed(v) else v.roundToInt()}" else p.name, i == which) { state.detailParam = i }
+        }
+    }
+    Row(box.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        val p = params[which]
+        val v = p.get(det)
+        val status = state.subjectStatus?.takeIf { det.lens && d.kind == LayerKind.Blur && state.depth == null }
+        if (status != null) {
+            if (status.startsWith("Couldn't")) TextButton({ state.subjectRetry++ }, Modifier.weight(1f)) { Text("$status. Tap to retry", fontSize = 12.sp, color = Bloom.On, maxLines = 2) }
+            else Row(Modifier.weight(1f).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+                Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+            }
+        } else {
+            Text(p.name, Modifier.width(88.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+            Slider(v, { state.draft = d.copy(detail = p.set(det, it.roundToInt().toFloat())) }, Modifier.weight(1f), valueRange = p.range, colors = sliderColors())
+            Text(if (p.range.start < 0f) signed(v) else "${v.roundToInt()}", Modifier.width(44.dp), fontSize = 14.sp, color = Bloom.On)
+            IconButton({ state.draft = d.copy(detail = p.set(det, p.default)) }) { Icon(Icons.Reset, "Reset ${p.name}", tint = Bloom.On) }
+        }
+    }
+}
+
+/** Lens blur's focus point on the photo: tap or drag the photo to move it. */
+@Composable
+private fun FocusMark(det: Detail, photoView: PhotoView, transformTick: Int) {
+    Canvas(Modifier.fillMaxSize().semantics { contentDescription = "Focus point. Tap the photo to focus elsewhere" }) {
+        transformTick // redraw on zoom or pan
+        val (x, y) = photoView.toView(det.focusX, det.focusY)
+        val c = Offset(x, y)
+        val r = 18.dp.toPx()
+        drawCircle(Color.Black, r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(4.dp.toPx()))
+        drawCircle(Color.White, r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        drawCircle(Bloom.Pollen, 3.dp.toPx(), c)
     }
 }
 

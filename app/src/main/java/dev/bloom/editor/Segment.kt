@@ -53,6 +53,16 @@ object Segment {
         return SubjectMask(w, h, merged)
     }
 
+    /** Depth Anything V2 Small: relative depth of [photo], 255 = nearest, at about 518 px on the long side. */
+    fun depth(model: File, photo: Bitmap): SubjectMask? {
+        if (!loaded) return null
+        val s = 518f / maxOf(photo.width, photo.height)
+        val w = maxOf(14, Math.round(photo.width * s / 14) * 14) // the model works in 14 px patches
+        val h = maxOf(14, Math.round(photo.height * s / 14) * 14)
+        val small = Bitmap.createScaledBitmap(photo.copy(Bitmap.Config.ARGB_8888, false), w, h, true)
+        return depth(model.path, cache(model), small, gpu).also { small.recycle() }?.let { SubjectMask(w, h, it) }
+    }
+
     private fun cache(model: File) = File(model.parentFile, model.name + ".cache").path
 
     @JvmStatic
@@ -63,4 +73,7 @@ object Segment {
 
     @JvmStatic
     private external fun samDecode(decoder: String, pins: FloatArray): ByteArray?
+
+    @JvmStatic
+    private external fun depth(model: String, cache: String, photo: Bitmap, gpu: Boolean): ByteArray?
 }

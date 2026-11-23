@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.exifinterface.media.ExifInterface
 import dev.bloom.editor.gl.DEBAND_RADIUS
+import dev.bloom.editor.gl.detailReach
 import dev.bloom.editor.gl.HdrGain
 import dev.bloom.editor.gl.Offscreen
 import dev.bloom.editor.gl.Pipeline
@@ -72,7 +73,7 @@ object ImageIo {
      */
     fun export(
         cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>, deband: Boolean, png: Boolean = false,
-        subjects: Map<List<Float>, SubjectMask> = emptyMap(), progress: (Float) -> Unit = {},
+        subjects: Map<List<Float>, SubjectMask> = emptyMap(), depth: SubjectMask? = null, progress: (Float) -> Unit = {},
     ) {
         // Raw files decode whole (already upright); everything else is read tile by tile in sensor orientation.
         // ponytail: whole raw in memory (~14 B/px peak in LibRaw, then 8 B/px), fine to ~50 MP on 8 GB phones
@@ -99,8 +100,10 @@ object ImageIo {
         val feather = layers.filter { it.visible }.maxOfOrNull { it.mask.maxFeather } ?: 0f
         // Subject edges look up to 3 mask texels away (joint bilateral upsampling).
         val subjectReach = if (subjects.isNotEmpty() && layers.any { l -> l.visible && l.mask.steps.any { it.visible && it is SubjectStep } }) 3f / Segment.SIZE else 0f
-        val reach = maxOf(feather * 0.03f, if (deband) 2 * DEBAND_RADIUS else 0f, subjectReach)
-        val pad = if (reach > 0f) (reach * uprightH).toInt() + 2 else 0
+        val blurReach = layers.maxOfOrNull { detailReach(it) } ?: 0f
+        val reach = maxOf(feather * 0.03f, if (deband) 2 * DEBAND_RADIUS else 0f, subjectReach, blurReach)
+        // Wide blurs read mipmaps; tiles starting on a multiple of 64 share the whole photo's mip grid, so they match.
+        val pad = if (reach > 0f) ((reach * uprightH).toInt() + 2).let { if (blurReach > 0f) (it + 63) / 64 * 64 else it } else 0
         val region = BitmapFactory.Options().apply { inPreferredColorSpace = SRGB }
         // ponytail: whole image in memory (8 bytes/px for PNG, ~400 MB at 50 MP); stream rows to the encoder if phones run out
         val upright = Matrix()
@@ -116,6 +119,7 @@ object ImageIo {
         val gpu = if (layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
         val pipeline = gpu?.let { Pipeline() }
         pipeline?.setSubjects(subjects)
+        pipeline?.setDepth(depth)
         if (pipeline != null && raw == null && Build.VERSION.SDK_INT >= 34) {
             // The whole photo's gain map, at the preview's size so export matches it; sensor orientation like the tiles.
             cr.openInputStream(src)!!.use {

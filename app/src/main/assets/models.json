@@ -19,5 +19,12 @@
     "sha256": "88103977791f703fb491f340d8f9508d825d98b40489e56043c5e7693323c2c0",
     "size": 8725924,
     "about": "SAM mask decoder for MobileSAM (Apache-2.0), converted to MNN with 8-bit weights. Source: https://huggingface.co/Acly/MobileSAM (sam_mask_decoder_single.onnx)"
+  },
+  "depth": {
+    "file": "depth_anything_v2_small_w8.mnn",
+    "url": "https://raw.githubusercontent.com/OWNER/bloom/main/models/depth_anything_v2_small_w8.mnn",
+    "sha256": "464785bfe0232b0e6a9ac51efabc0b602c4153d3a01da2ef9abd4d8976472924",
+    "size": 27166436,
+    "about": "Depth Anything V2 Small (Apache-2.0; only the Small model is), converted to MNN with 8-bit weights. Source: https://huggingface.co/onnx-community/depth-anything-v2-small (onnx/model.onnx)"
   }
 }

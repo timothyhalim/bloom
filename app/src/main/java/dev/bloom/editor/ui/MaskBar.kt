@@ -79,14 +79,14 @@ private fun MaskStep.label() = (if (add) "Add " else "Remove ") + when (this) {
     is BrushStep -> "brush"
     is GradientStep -> if (radial) "radial gradient" else "gradient"
     is ColorStep -> "color range"
-    is LuminanceStep -> "luminance range"
+    is LuminanceStep -> if (depth) "depth range" else "luminance range"
     is SubjectStep -> if (background) "background" else "subject"
 }
 private fun MaskStep.icon() = when (this) {
     is BrushStep -> Icons.Brush
     is GradientStep -> if (radial) Icons.Radial else Icons.Gradient
     is ColorStep -> Icons.Eyedropper
-    is LuminanceStep -> Icons.Luminance
+    is LuminanceStep -> if (depth) Icons.Depth else Icons.Luminance
     is SubjectStep -> if (background) Icons.Background else Icons.Subject
 }
 
@@ -112,7 +112,7 @@ fun RowScope.MaskBar(state: EditorState) {
     val mask = state.draft?.mask ?: return
     Box(
         Modifier.size(54.dp, 48.dp).clickable(role = Role.Button) { state.maskMode = false }
-            .semantics { contentDescription = "Color mask. Back to Color" },
+            .semantics { contentDescription = "${state.draft?.kind?.label ?: "Color"} mask. Back to the tool" },
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.size(36.dp, 30.dp).background(Bloom.PollenContainer, Bloom.Petal), contentAlignment = Alignment.Center) {
@@ -124,7 +124,9 @@ fun RowScope.MaskBar(state: EditorState) {
         TypeButton(Icons.Brush, state.maskAdd, state.maskTool == MaskTool.Brush, "$sign brush") { state.maskTool = MaskTool.Brush }
         TypeButton(Icons.Gradient, state.maskAdd, state.maskTool == MaskTool.Gradient, "$sign gradient") { state.addGradient() }
         TypeButton(Icons.Eyedropper, state.maskAdd, state.maskTool == MaskTool.Color, "$sign color range") { state.addStep(ColorStep(add = state.maskAdd)) }
-        TypeButton(Icons.Luminance, state.maskAdd, state.maskTool == MaskTool.Luminance, "$sign luminance range") { state.addStep(LuminanceStep.Shadows.copy(add = state.maskAdd)) }
+        val selLum = (state.stepIndex?.let { mask.steps.getOrNull(it) } as? LuminanceStep)?.takeIf { state.maskTool == MaskTool.Luminance }
+        TypeButton(Icons.Luminance, state.maskAdd, selLum?.depth == false, "$sign luminance range") { state.addStep(LuminanceStep.Shadows.copy(add = state.maskAdd)) }
+        TypeButton(Icons.Depth, state.maskAdd, selLum?.depth == true, "$sign depth range") { state.addStep(LuminanceStep.Near.copy(add = state.maskAdd)) }
         val subj = (state.stepIndex?.let { mask.steps.getOrNull(it) } as? SubjectStep)?.takeIf { state.maskTool == MaskTool.Subject }
         TypeButton(Icons.Subject, state.maskAdd, subj?.background == false, "$sign subject") { state.addStep(SubjectStep(add = state.maskAdd)) }
         TypeButton(Icons.Background, state.maskAdd, subj?.background == true, "$sign background") { state.addStep(SubjectStep(background = true, add = state.maskAdd)) }
@@ -200,11 +202,19 @@ fun MaskRows(state: EditorState, box: Modifier) {
                 MaskTool.Color -> ColorControls(state, sel as? ColorStep)
                 MaskTool.Luminance -> {
                     val l = sel as? LuminanceStep
-                    if (l == null) Hint("Tap the luminance icon to add one", Modifier.weight(1f))
-                    else {
-                        val preset = presets.entries.firstOrNull { (_, p) -> p.a == l.a && p.b == l.b && p.c == l.c && p.d == l.d }?.key
+                    val status = state.subjectStatus?.takeIf { l?.depth == true && state.depth == null }
+                    if (l == null) Hint("Tap the luminance or depth icon to add one", Modifier.weight(1f))
+                    else if (status != null) {
+                        if (status.startsWith("Couldn't")) TextButton({ state.subjectRetry++ }, Modifier.weight(1f)) { Text("$status. Tap to retry", fontSize = 12.sp, color = Bloom.On, maxLines = 2) }
+                        else Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.size(16.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+                            Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+                        }
+                    } else {
+                        val names = if (l.depth) depthPresets else presets
+                        val preset = names.entries.firstOrNull { (_, p) -> p.a == l.a && p.b == l.b && p.c == l.c && p.d == l.d }?.key
                         TextButton({
-                            val next = presets.values.toList()[(presets.keys.indexOf(preset) + 1) % presets.size]
+                            val next = names.values.toList()[(names.keys.indexOf(preset) + 1) % names.size]
                             state.replaceStep(i!!, l.copy(a = next.a, b = next.b, c = next.c, d = next.d))
                         }, Modifier.width(96.dp)) { Text(preset ?: "Custom", fontSize = 12.sp, color = Bloom.On) }
                         LuminanceStrip(l, Modifier.weight(1f)) { state.replaceStep(i!!, it) }
@@ -257,6 +267,7 @@ private fun MaskActions(state: EditorState) {
 }
 
 private val presets = linkedMapOf("Shadows" to LuminanceStep.Shadows, "Midtones" to LuminanceStep.Midtones, "Highlights" to LuminanceStep.Highlights)
+private val depthPresets = linkedMapOf("Near" to LuminanceStep.Near, "Middle" to LuminanceStep.Middle, "Far" to LuminanceStep.Far)
 
 @Composable
 private fun RowScope.Hint(text: String, modifier: Modifier = Modifier.weight(1f)) =
@@ -293,7 +304,7 @@ private fun LuminanceStrip(l: LuminanceStep, modifier: Modifier, onChange: (Lumi
     val change by rememberUpdatedState(onChange)
     Canvas(
         modifier.height(40.dp).padding(horizontal = 10.dp)
-            .semantics { contentDescription = "Luminance range ${(l.a * 100).roundToInt()} to ${(l.d * 100).roundToInt()} percent" }
+            .semantics { contentDescription = "${if (l.depth) "Depth range, far to near," else "Luminance range"} ${(l.a * 100).roundToInt()} to ${(l.d * 100).roundToInt()} percent" }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()

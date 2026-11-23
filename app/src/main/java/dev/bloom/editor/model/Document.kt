@@ -67,15 +67,21 @@ data class ColorStep(
     }
 }
 
-/** Selects by brightness of the layers below: rises from [a] to [b], full to [c], falls to none at [d] (0..1, a ≤ b ≤ c ≤ d). */
+/**
+ * Selects by brightness of the layers below, or with [depth] by distance (the photo's depth map, 0 = far, 1 = near):
+ * rises from [a] to [b], full to [c], falls to none at [d] (0..1, a ≤ b ≤ c ≤ d).
+ */
 data class LuminanceStep(
-    val a: Float, val b: Float, val c: Float, val d: Float,
+    val a: Float, val b: Float, val c: Float, val d: Float, val depth: Boolean = false,
     override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
 ) : MaskStep {
     companion object {
         val Shadows = LuminanceStep(0f, 0f, 0.25f, 0.4f)
         val Midtones = LuminanceStep(0.25f, 0.4f, 0.6f, 0.75f)
         val Highlights = LuminanceStep(0.6f, 0.75f, 1f, 1f)
+        val Far = LuminanceStep(0f, 0f, 0.25f, 0.4f, depth = true)
+        val Middle = LuminanceStep(0.25f, 0.4f, 0.6f, 0.75f, depth = true)
+        val Near = LuminanceStep(0.6f, 0.75f, 1f, 1f, depth = true)
     }
 }
 
@@ -196,6 +202,20 @@ private fun tangents(p: List<Float>): FloatArray {
 }
 
 /** One Color layer. Values are slider units (-100..100), indexed by [ColorParam.ordinal]. */
+/** What a layer does. Color uses [Layer.values] and [Layer.curves]; Blur and Sharpen use [Layer.detail]. */
+enum class LayerKind { Color, Blur, Sharpen }
+
+/**
+ * Blur and Sharpen settings, 0..100 unless noted. Blur: [amount] is the radius (Gaussian: 100 = sigma 2% of the image
+ * height; [lens]: 100 = a 4% disc). Lens blur follows the photo's depth: it keeps the depth at ([focusX], [focusY])
+ * (upright 0..1) sharp, plus [range] around it; [bloom] makes highlights into bright discs. Sharpen: [amount] is the strength, [radius] 0 = fine to 100 = coarse, [clarity]
+ * -100..100 is midtone local contrast.
+ */
+data class Detail(
+    val lens: Boolean = false, val amount: Float = 0f, val radius: Float = 30f, val clarity: Float = 0f,
+    val focusX: Float = 0.5f, val focusY: Float = 0.5f, val range: Float = 10f, val bloom: Float = 30f,
+)
+
 data class Layer(
     val id: Long,
     val values: List<Float> = List(ColorParam.entries.size) { 0f },
@@ -204,9 +224,15 @@ data class Layer(
     val mask: Mask = Mask(),
     val blend: Blend = Blend.Normal,
     val curves: Curves = Curves(),
+    val kind: LayerKind = LayerKind.Color,
+    val detail: Detail = Detail(),
 ) {
     /** Whether the layer changes the photo at all (mask and blend aside). */
-    val edited: Boolean get() = values.any { it != 0f } || curves.active
+    val edited: Boolean get() = when (kind) {
+        LayerKind.Color -> values.any { it != 0f } || curves.active
+        LayerKind.Blur -> detail.amount > 0f
+        LayerKind.Sharpen -> detail.amount > 0f || detail.clarity != 0f
+    }
     operator fun get(p: ColorParam) = values[p.ordinal]
     fun with(p: ColorParam, v: Float) = copy(values = values.toMutableList().also { it[p.ordinal] = v })
 }

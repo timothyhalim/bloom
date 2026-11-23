@@ -232,3 +232,48 @@ Java_dev_bloom_editor_Segment_samDecode(JNIEnv *env, jclass, jstring decPath, jf
     env->ReleaseByteArrayElements(mask, dst, 0);
     return mask;
 }
+
+// --- Depth Anything V2 Small: relative depth for lens blur. ---
+namespace {
+std::shared_ptr<Module> depthNet;
+std::string depthPath;
+}  // namespace
+
+// [bmp]: the photo with both sides multiples of 14 (long side ~518), RGBA. Returns w*h bytes, 255 = nearest.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_dev_bloom_editor_Segment_depth(JNIEnv *env, jclass, jstring modelPath, jstring cachePath, jobject bmp, jboolean gpu) {
+    std::lock_guard<std::mutex> guard(lock);
+    std::string path = str(env, modelPath);
+    auto rt = samRuntime(gpu, str(env, cachePath));  // one runtime for the Module-API models
+    if (!rt) return nullptr;
+    if (!depthNet || depthPath != path) {
+        depthNet.reset(Module::load({"pixel_values"}, {"predicted_depth"}, path.c_str(), rt));
+        depthPath = path;
+        if (!depthNet) return nullptr;
+    }
+    AndroidBitmapInfo info;
+    void *px;
+    if (AndroidBitmap_getInfo(env, bmp, &info) != 0 || info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+        AndroidBitmap_lockPixels(env, bmp, &px) != 0) return nullptr;
+    int w = int(info.width), h = int(info.height);
+    VARP x = _Input({1, 3, h, w}, NCHW, halide_type_of<float>());
+    float *dst = x->writeMap<float>();
+    const float mean[3] = {0.485f, 0.456f, 0.406f}, sd[3] = {0.229f, 0.224f, 0.225f};
+    auto *rgba = static_cast<const uint8_t *>(px);
+    for (int y = 0; y < h; y++)
+        for (int c = 0; c < w; c++)
+            for (int k = 0; k < 3; k++) dst[(k * h + y) * w + c] = (rgba[y * info.stride + c * 4 + k] / 255.f - mean[k]) / sd[k];
+    AndroidBitmap_unlockPixels(env, bmp);
+    auto out = depthNet->onForward({x});
+    if (out.empty()) return nullptr;
+    const float *d = out[0]->readMap<float>();
+    auto i = out[0]->getInfo();
+    if (!d || !i || i->size != w * h) return nullptr;
+    auto [lo, hi] = std::minmax_element(d, d + w * h);
+    float range = std::max(*hi - *lo, 1e-6f);
+    jbyteArray res = env->NewByteArray(w * h);
+    jbyte *r = env->GetByteArrayElements(res, nullptr);
+    for (int k = 0; k < w * h; k++) r[k] = jbyte(int((d[k] - *lo) / range * 255.f + 0.5f));
+    env->ReleaseByteArrayElements(res, r, 0);
+    return res;
+}

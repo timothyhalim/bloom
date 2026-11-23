@@ -85,6 +85,11 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
         requestRender()
     }
 
+    fun setDepth(d: SubjectMask?) {
+        queueEvent { renderer.setDepth(d) }
+        requestRender()
+    }
+
     fun setDeband(on: Boolean) {
         renderer.deband = on
         requestRender()
@@ -258,6 +263,13 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         pipeline?.setSubjects(all)
     }
 
+    private var depth: SubjectMask? = null
+
+    fun setDepth(d: SubjectMask?) {
+        depth = d
+        pipeline?.setDepth(d)
+    }
+
     fun upload(bmp: Bitmap) {
         bitmap = bmp
         pipeline?.let { it.setSource(bmp); it.setGainmap(ImageIo.gainOf(bmp)) }
@@ -273,6 +285,7 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         pipeline = Pipeline().also { p ->
             bitmap?.let { p.setSource(it); p.setGainmap(ImageIo.gainOf(it)) }
             p.setSubjects(subjects)
+            p.setDepth(depth)
         }
     }
 

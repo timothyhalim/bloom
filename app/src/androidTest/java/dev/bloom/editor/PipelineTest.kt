@@ -11,6 +11,8 @@ import dev.bloom.editor.model.Blend
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.Curves
+import dev.bloom.editor.model.Detail
+import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.GradientStep
@@ -24,6 +26,7 @@ import org.junit.Test
 import kotlin.math.roundToInt
 import org.junit.runner.RunWith
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.pow
 
 @RunWith(AndroidJUnit4::class)
@@ -233,6 +236,129 @@ class PipelineTest {
         // a Curves layer on top of the raw must not cut that range off
         val curved = Layer(1).copy(curves = Curves(rgb = listOf(0f, 0f, 0.5f, 0.6f, 1f, 1f)))
         assertEquals(255.0, redsOf(src, listOf(curved, Layer(2).with(ColorParam.Exposure, -100f / 3))).average(), 1.0)
+    }
+
+    // --- Detail: Blur and Sharpen (M4) ---
+
+    private fun blur(amount: Float) = Layer(1, kind = LayerKind.Blur, detail = Detail(amount = amount))
+
+    /** The step edge (lo | hi at x = edge) blurred by a Gaussian of [sigma] px, sampled at pixel centre x. */
+    private fun bell(x: Int, edge: Int, lo: Int, hi: Int, sigma: Double): Double {
+        var sum = 0.0
+        var wsum = 0.0
+        for (k in -200..200) {
+            val w = Math.exp(-0.5 * (k / sigma) * (k / sigma))
+            sum += w * (if (x + k < edge) lo else hi)
+            wsum += w
+        }
+        return sum / wsum
+    }
+
+    @Test
+    fun gaussianBlurFollowsTheBellCurve() {
+        // amount 100 = sigma 2% of the height: 4 px on a 200 px photo (full-res taps), 12 px on 600 (reads mipmaps)
+        for (h in listOf(200, 600)) {
+            val sigma = 0.02 * h
+            val w = h
+            val out = profile(redsOf(gray(w, h) { x, _ -> if (x < w / 2) 40 else 220 }, listOf(blur(100f)), deband = false), w, h)
+            for (x in w / 2 - (3 * sigma).toInt() until w / 2 + (3 * sigma).toInt()) {
+                assertEquals("h=$h x=$x", bell(x, w / 2, 40, 220, sigma), out[x], 5.0)
+            }
+        }
+    }
+
+    @Test
+    fun maskedBlurDoesntSmearTheSubjectIntoTheBackground() {
+        // red subject on the left half, blue background on the right; blur only the background
+        val w = 300
+        val h = 400
+        val src = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+            setPixels(IntArray(w * h) { if (it % w < w / 2) Color.rgb(220, 30, 30) else Color.rgb(30, 30, 220) }, 0, w, 0, 0, w, h)
+        }
+        val subject = SubjectMask(Segment.SIZE, Segment.SIZE, ByteArray(Segment.SIZE * Segment.SIZE) { if (it % Segment.SIZE < Segment.SIZE / 2) -1 else 0 })
+        val bg = blur(100f).copy(mask = Mask(listOf(SubjectStep(background = true))))
+        val out = pixels(src, listOf(bg)) { p, b -> p.deband = false; p.setSource(b); p.setSubjects(mapOf(emptyList<Float>() to subject)) }
+        val reds = (w / 2 + 1 until w / 2 + 12).map { x -> Color.red(out[h / 2 * w + x]) }
+        assertTrue("background next to the subject stays blue: $reds", reds.all { it < 45 })
+        // the subject itself is untouched
+        assertEquals(220.0, Color.red(out[h / 2 * w + w / 2 - 3]).toDouble(), 2.0)
+    }
+
+    @Test
+    fun sharpenRaisesEdgeContrastAndLeavesFlatAreas() {
+        val w = 200
+        val sharpen = Layer(1, kind = LayerKind.Sharpen, detail = Detail(amount = 100f, radius = 100f))
+        val out = profile(redsOf(gray(w, 200) { x, _ -> if (x < w / 2) 100 else 150 }, listOf(sharpen), deband = false), w, 200)
+        assertTrue("dark side darker at the edge: ${out[w / 2 - 1]}", out[w / 2 - 1] < 95)
+        assertTrue("bright side brighter at the edge: ${out[w / 2]}", out[w / 2] > 155)
+        assertEquals(100.0, out[10], 1.0)
+        assertEquals(150.0, out[w - 10], 1.0)
+    }
+
+    @Test
+    fun lensBlurTurnsAHighlightIntoADisc() {
+        // a small bright spot on black, no depth map: every pixel blurs by the full radius (4% of 400 = 16 px)
+        val n = 400
+        val src = gray(n, n) { x, y -> if (hypot((x - n / 2).toDouble(), (y - n / 2).toDouble()) <= 3.0) 255 else 0 }
+        val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(lens = true, amount = 100f))
+        val out = pixels(src, listOf(lens)) { p, b -> p.deband = false; p.setSource(b) }
+        val lit = { x: Int, y: Int -> Color.red(out[(n / 2 + y) * n + n / 2 + x]) > 3 }
+        assertTrue("lit inside the disc", lit(0, 8) && lit(8, 0) && lit(-8, 0) && lit(0, -8))
+        assertTrue("dark outside it", !lit(0, 26) && !lit(26, 0))
+        val alongX = (0 until 40).last { lit(it, 0) }
+        val alongY = (0 until 40).last { lit(0, it) }
+        assertNear("round: same reach across ($alongX) and up ($alongY)", alongX, alongY, 1)
+    }
+
+    @Test
+    fun lensBlurKeepsTheFocusedNearHalfSharp() {
+        // left half near (depth 255) with fine stripes, right half far (depth 0); focus on the left
+        val w = 300
+        val h = 300
+        val src = gray(w, h) { x, y -> if (x < w / 2) (if (y % 4 < 2) 40 else 200) else (if (x % 6 < 3) 60 else 220) }
+        val depth = SubjectMask(64, 64, ByteArray(64 * 64) { if (it % 64 < 32) -1 else 0 })
+        val lens = Layer(1, kind = LayerKind.Blur, detail = Detail(lens = true, amount = 100f, bloom = 0f, focusX = 0.25f, focusY = 0.5f, range = 0f))
+        val out = pixels(src, listOf(lens)) { p, b -> p.deband = false; p.setSource(b); p.setDepth(depth) }
+        val inp = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
+        // the near half (up to a few px from the edge, where the depth map is smoothed) is untouched
+        for (y in 100 until 200) for (x in 20 until w / 2 - 8) assertNear("($x,$y)", Color.red(inp[y * w + x]), Color.red(out[y * w + x]), 1)
+        // the far half's stripes are blurred away
+        val far = (w / 2 + 30 until w - 30).map { Color.red(out[150 * w + it]) }
+        assertTrue("far half blurred: ${far.minOrNull()}..${far.maxOrNull()}", far.max() - far.min() < 40)
+    }
+
+    @Test
+    fun depthRangeStepSelectsTheNearHalf() {
+        // depth map: left half near (255), right half far (0); a Near step brightens only the left
+        val depth = SubjectMask(64, 64, ByteArray(64 * 64) { if (it % 64 < 32) -1 else 0 })
+        val layer = Layer(1, mask = Mask(listOf(LuminanceStep.Near))).with(ColorParam.Exposure, 50f)
+        val out = pixels(gray(64, 32) { _, _ -> 100 }, listOf(layer)) { p, b -> p.deband = false; p.setSource(b); p.setDepth(depth) }
+        assertTrue("near half brightened (${Color.red(out[16 * 64 + 8])})", Color.red(out[16 * 64 + 8]) > 140)
+        assertEquals("far half untouched", 100.0, Color.red(out[16 * 64 + 56]).toDouble(), 1.0)
+    }
+
+    @Test
+    fun blurredExportTileMatchesTheFullRender() {
+        val n = 400
+        val src = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888).apply {
+            for (y in 0 until n) for (x in 0 until n) setPixel(x, y, Color.rgb(x * 255 / n, (x xor y) and 0xFF, 128))
+        }
+        for ((layers, pad) in listOf(
+            listOf(blur(100f)) to 64,
+            // lens with depth: radius 16 px, reach 1.3 x 16 + 2 rounded up to 64, as ImageIo pads
+            listOf(Layer(1, kind = LayerKind.Blur, detail = Detail(lens = true, amount = 100f, range = 0f))) to 64,
+        )) {
+        val depth = SubjectMask(64, 64, ByteArray(64 * 64) { ((it % 64) * 4).toByte() })
+        val full = pixels(src, layers) { p, b -> p.deband = false; p.setSource(b); p.setDepth(depth) }
+        val tile = Bitmap.createBitmap(src, 128 - pad, 128 - pad, 128 + 2 * pad, 128 + 2 * pad)
+        val part = pixels(tile, layers) { p, b -> p.deband = false; p.setSource(b, 128 - pad, 128 - pad, n, n); p.setDepth(depth) }
+        val tw = 128 + 2 * pad
+        for (y in 128 until 256) for (x in 128 until 256) {
+            val a = full[y * n + x]
+            val b = part[(y - 128 + pad) * tw + (x - 128 + pad)]
+            for (sh in listOf(16, 8, 0)) assertNear("${layers[0].detail.lens} ($x,$y)", (a shr sh) and 0xFF, (b shr sh) and 0xFF, 2)
+        }
+        }
     }
 
     // --- AI subject (M3) ---
