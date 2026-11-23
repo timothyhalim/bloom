@@ -1,0 +1,1 @@
+{"ops":[{"op":"add_color_layer","params":{"Temp":12,"Exposure":-8},"mask":[{"type":"subject"}]},{"op":"add_blur","type":"lens","amount":30,"mask":[{"type":"background"}]}]}

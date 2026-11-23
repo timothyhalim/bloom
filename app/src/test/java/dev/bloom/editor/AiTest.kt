@@ -5,6 +5,7 @@ import dev.bloom.editor.ai.AiConfig
 import dev.bloom.editor.ai.AiError
 import dev.bloom.editor.ai.AiProvider
 import dev.bloom.editor.ai.AiRequest
+import dev.bloom.editor.ai.AiResult
 import dev.bloom.editor.ai.Capability
 import dev.bloom.editor.ai.Choice
 import dev.bloom.editor.ai.ComfyUi
@@ -24,6 +25,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -223,6 +225,12 @@ class AiTest {
                 "/flaky" -> if (hits == 1) ex.close() else { ex.sendResponseHeaders(200, 2); ex.responseBody.use { it.write("ok".toByteArray()) } }
                 "/slow" -> { Thread.sleep(3000); ex.sendResponseHeaders(200, -1) }
                 "/huge" -> { ex.sendResponseHeaders(200, 0); ex.responseBody.use { o -> val b = ByteArray(1 shl 20); repeat(70) { o.write(b) } } }
+                "/v1/chat/completions" -> {
+                    // like a server without JSON schema support
+                    val schema = String(ex.requestBody.readBytes()).contains("response_format")
+                    val b = fixture(if (schema) "openai_error.json" else "openai_chat.json").toByteArray()
+                    ex.sendResponseHeaders(if (schema) 400 else 200, b.size.toLong()); ex.responseBody.use { it.write(b) }
+                }
                 "/redirect" -> { ex.responseHeaders.add("Location", "http://elsewhere/"); ex.sendResponseHeaders(302, -1) }
             }
             ex.close()
@@ -293,6 +301,26 @@ class AiTest {
             fail()
         } catch (e: AiError) {
         }
+    }
+
+    @Test
+    fun openAiChatRequestAndReply() = runBlocking {
+        val body = OpenAiCompatible.chat("qwen", "Request: make it warmer", schema = true)
+        val messages = body["messages"]!!.jsonArray
+        assertEquals("system", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals("Request: make it warmer", messages[1].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals("json_schema", body["response_format"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertNull(OpenAiCompatible.chat("qwen", "x", schema = false)["response_format"])
+        assertEquals("""{"ops":[{"op":"add_color_layer","params":{"Temp":15}}]}""", OpenAiCompatible.content(json("openai_chat.json")))
+        try {
+            OpenAiCompatible.content(Json.parseToJsonElement("""{"choices":[]}"""))
+            fail()
+        } catch (e: AiError) {
+        }
+        // refused with a schema, asked again without one
+        val r = OpenAiCompatible(base, null, emptyMap()).run(Capability.EDIT_COMMAND, "qwen", AiRequest(prompt = "make it warmer")) {} as AiResult.Text
+        assertTrue(r.text.contains("add_color_layer"))
+        assertEquals(2, hits)
     }
 
     @Test

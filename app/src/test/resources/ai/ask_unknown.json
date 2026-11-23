@@ -1,0 +1,9 @@
+{"ops":[
+ {"op":"rotate","degrees":90},
+ {"op":"add_color_layer","params":{"Warmth":20,"Contrast":15}},
+ {"op":"add_color_layer","params":{"Temp":10},"mask":[{"type":"sky"}]},
+ {"op":"set_param","layer":99,"param":"Temp","value":5},
+ {"op":"set_param","layer":1,"param":"Hue","value":5},
+ "make it pop",
+ {"op":"add_mask_step","layer":1,"step":{"type":"luminance","range":"highlights"}}
+]}

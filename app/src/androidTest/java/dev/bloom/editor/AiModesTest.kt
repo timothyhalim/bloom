@@ -20,6 +20,10 @@ import dev.bloom.editor.ai.ProviderConfig
 import dev.bloom.editor.ai.ProviderType
 import dev.bloom.editor.ai.png
 import dev.bloom.editor.model.BrushStep
+import dev.bloom.editor.model.ColorEffect
+import dev.bloom.editor.model.ColorParam
+import dev.bloom.editor.model.Document
+import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.Stroke
@@ -153,5 +157,94 @@ class AiModesTest {
         rule.onNodeWithText("My PC · sdxl").performClick()
         rule.runOnIdle { assertEquals(Choice("pc", "sdxl"), state.ai.choices[Capability.GEN_FILL]) }
         rule.onNodeWithText("Not now").performClick()
+    }
+
+    /** A fake OpenAI-compatible server answering every chat with [ops] (the JSON of an ops list). */
+    private fun llm(ops: String) = FakeServer { r ->
+        if (r.path == "/v1/chat/completions") {
+            val content = kotlinx.serialization.json.JsonPrimitive(ops).toString()
+            FakeServer.Reply("""{"choices":[{"index":0,"message":{"role":"assistant","content":$content}}]}""")
+        } else FakeServer.Reply("{}", 404)
+    }.also { server = it }
+
+    private fun askProvider(url: String) = AiConfig(listOf(ProviderConfig("llm", ProviderType.OpenAiCompatible, "My LLM", url, mapOf(Capability.EDIT_COMMAND to listOf("qwen")))))
+
+    @Test
+    fun askShowsAChecklistPreviewsItAndAppliesTheTickedOnesAsOneStep() {
+        val s = llm(
+            """{"ops":[{"op":"add_color_layer","params":{"Temp":12},"mask":[{"type":"subject"}]},
+            {"op":"add_blur","type":"gaussian","amount":20,"mask":[{"type":"background"}]},
+            {"op":"rotate"}]}""",
+        )
+        val state = rule.showEditor()
+        rule.runOnIdle { state.ai = askProvider(s.url) }
+        rule.onNodeWithContentDescription("AI").performClick()
+        rule.onNodeWithContentDescription("Ask").performClick()
+        rule.onNodeWithContentDescription("Send the request").assertIsNotEnabled()
+        rule.onNodeWithContentDescription("Describe the edit").performTextInput("make the subject warmer")
+        rule.onNodeWithContentDescription("Send the request").performClick() // no consent sheet: no photo is sent
+        rule.waitUntil(10_000) { !gone("Color layer · Temp +12 · mask: Subject") }
+        rule.onNodeWithText("Blur layer · Gaussian 20 · mask: Background").assertExists()
+        rule.onNodeWithText("Skipped an unknown change: rotate").assertExists()
+        rule.runOnIdle {
+            val sent = s.requests.single().text
+            assertTrue(sent.contains("make the subject warmer") && !sent.contains("image"))
+            assertEquals(2, state.rendered().count { it.kind == LayerKind.Color || it.kind == LayerKind.Blur }) // previewed
+            assertTrue(state.doc.layers.isEmpty())
+        }
+        rule.onNodeWithText("Blur layer · Gaussian 20 · mask: Background").performClick() // untick
+        rule.onNodeWithContentDescription("Apply 1 changes").performClick()
+        rule.runOnIdle {
+            assertEquals(listOf(LayerKind.Color), state.doc.layers.map { it.kind })
+            assertEquals(null, state.draft)
+            state.history = state.history.undo()
+            assertTrue(state.doc.layers.isEmpty())
+        }
+    }
+
+    @Test
+    fun cancelDiscardsTheReply() {
+        val s = llm("""{"ops":[{"op":"add_color_layer","params":{"Exposure":10}}]}""")
+        val state = rule.showEditor()
+        rule.runOnIdle { state.ai = askProvider(s.url) }
+        rule.onNodeWithContentDescription("AI").performClick()
+        rule.onNodeWithContentDescription("Ask").performClick()
+        rule.onNodeWithContentDescription("Describe the edit").performTextInput("brighter")
+        rule.onNodeWithContentDescription("Send the request").performClick()
+        rule.waitUntil(10_000) { !gone("Color layer · Exposure +10") }
+        rule.onNodeWithText("Cancel").performClick()
+        rule.onNodeWithText("Color layer · Exposure +10").assertDoesNotExist()
+        rule.runOnIdle { assertEquals(null, state.asked); assertTrue(state.rendered().none { it.kind == LayerKind.Color }) }
+    }
+
+    @Test
+    fun refineFromTheBubbleChangesOnlyThatLayer() {
+        val s = llm(
+            """{"ops":[{"op":"set_param","layer":1,"param":"Temp","value":8},
+            {"op":"set_param","layer":2,"param":"Exposure","value":50},
+            {"op":"add_color_layer","params":{"Tint":5}}]}""",
+        )
+        val warm = Layer(1, effect = ColorEffect().with(ColorParam.Temp, 20f))
+        val bright = Layer(2, effect = ColorEffect().with(ColorParam.Exposure, 10f))
+        val state = rule.showEditor(Document(listOf(warm, bright)))
+        rule.runOnIdle { state.bubble = 1L to 300f }
+        rule.onNodeWithText("Ask").assertDoesNotExist() // no Ask provider yet
+        rule.runOnIdle { state.ai = askProvider(s.url) }
+        rule.onNodeWithText("Ask").performClick()
+        rule.onNodeWithContentDescription("How to change this layer").performTextInput("a bit less orange")
+        rule.onNodeWithContentDescription("Send the request").performClick()
+        rule.waitUntil(10_000) { !gone("Color · Temp → +8") }
+        rule.onNodeWithText("Skipped a change to another layer").assertExists()
+        rule.runOnIdle {
+            val sent = s.requests.single().text
+            assertTrue(sent.contains("Change only layer 1") && !sent.contains("\\\"id\\\":2"))
+            assertEquals(1, state.asked!!.ops.size)
+        }
+        rule.onNodeWithContentDescription("Apply 1 changes").performClick()
+        rule.runOnIdle {
+            assertEquals(listOf(warm.copy(effect = ColorEffect().with(ColorParam.Temp, 8f)), bright), state.doc.layers)
+            state.history = state.history.undo()
+            assertEquals(listOf(warm, bright), state.doc.layers)
+        }
     }
 }

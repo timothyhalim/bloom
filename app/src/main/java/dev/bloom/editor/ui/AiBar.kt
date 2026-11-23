@@ -38,13 +38,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bloom.editor.ai.AiError
 import dev.bloom.editor.ai.Capability
+import dev.bloom.editor.ai.EditOps
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Checkbox
 import dev.bloom.editor.ai.Http
 import dev.bloom.editor.ai.Choice
 import dev.bloom.editor.model.Layer
 import kotlin.math.abs
 
 /** The AI tool's modes in bar order; each shows only when some provider can run it. Background joins with M8.5. */
-val AI_MODES = listOf(Capability.ERASE, Capability.GEN_FILL, Capability.UPSCALE)
+val AI_MODES = listOf(Capability.ERASE, Capability.GEN_FILL, Capability.UPSCALE, Capability.EDIT_COMMAND)
 
 /** Modes that run on the area painted into the layer's mask. */
 val PAINTED = setOf(Capability.ERASE, Capability.GEN_FILL)
@@ -53,6 +57,7 @@ private val Capability.icon: ImageVector get() = when (this) {
     Capability.ERASE -> Icons.Eraser
     Capability.GEN_FILL -> Icons.Fill
     Capability.UPSCALE -> Icons.Upscale
+    Capability.EDIT_COMMAND -> Icons.Ask
     else -> Icons.Sparkle
 }
 
@@ -81,6 +86,29 @@ fun AiRows(state: EditorState, mode: Capability, box: Modifier) {
                 Modifier.weight(1f).padding(horizontal = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant,
             )
         }
+        Capability.EDIT_COMMAND -> Column(box) {
+            val a = state.asked
+            if (a != null) {
+                for (n in a.notes) Text(n, Modifier.padding(horizontal = 16.dp, vertical = 2.dp), fontSize = 11.sp, color = Bloom.OnVariant)
+                a.ops.forEachIndexed { i, op ->
+                    val on = i !in state.askOff
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 44.dp).toggleable(on, role = Role.Checkbox) { state.askOff = if (it) state.askOff - i else state.askOff + i }
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(on, null)
+                        Text(EditOps.label(op, state.doc), fontSize = 13.sp, color = Bloom.On)
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                val target = state.askTarget?.let { id -> state.doc.layers.firstOrNull { it.id == id } }
+                TwoLineLabel("Ask", target?.let { it.name.ifEmpty { it.kind.label } } ?: "New layers")
+                PromptField(state.askText, if (target != null) "How to change this layer" else "Describe the edit", Modifier.weight(1f)) { state.askText = it }
+                if (a != null) TextButton({ state.asked = null }) { Text("Cancel", color = Bloom.Pollen) }
+            }
+        }
         else -> ToolBox(state.maskMore, { state.maskMore = !state.maskMore }, box, moreRows = { BrushRows(state) }) {
             MainSlider("Erase", "Size", state.brushSize, 4f..150f) { state.brushSize = it; state.showRing(it, state.softness) }
         }
@@ -99,17 +127,25 @@ fun RowScope.AiBar(
     val idle = state.running == null
     ToolIcon(Icons.Sparkle, "AI. Back to tools", onDiscard)
     Row(Modifier.weight(1f).scrollFade(), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-        for (m in modes) ParamChip(m.icon, m.label, false, m == mode) { if (idle) state.aiMode = m }
+        for (m in modes) ParamChip(m.icon, m.label, false, m == mode) {
+            if (idle && m != mode) {
+                state.aiMode = m
+                state.asked = null
+                state.askTarget = null
+            }
+        }
     }
     if (mode in PAINTED) MaskButton(d.mask) { if (idle) state.maskMode = true }
     val ready = idle && choice != null && when (mode) {
         Capability.GEN_FILL -> d.mask.active && state.fillPrompt.isNotBlank()
         Capability.UPSCALE -> state.project != null && state.photoSize?.let { upscaleInfo(it.first, it.second, state.upscaleBy).second } == true
+        Capability.EDIT_COMMAND -> state.asked?.let { it.ops.size > state.askOff.size } ?: state.askText.isNotBlank()
         else -> d.mask.active
     }
     val run = when (mode) {
         Capability.GEN_FILL -> "Fill the painted area"
         Capability.UPSCALE -> "Upscale the photo"
+        Capability.EDIT_COMMAND -> state.asked?.let { "Apply ${it.ops.size - state.askOff.size} changes" } ?: "Send the request"
         else -> "Erase the painted area"
     }
     Column(
@@ -118,8 +154,11 @@ fun RowScope.AiBar(
         ),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
     ) {
-        if (idle) Icon(mode.icon, null, tint = if (ready) Bloom.Pollen else Bloom.Outline)
-        else CircularProgressIndicator(Modifier.size(22.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+        val apply = state.asked?.takeIf { mode == Capability.EDIT_COMMAND }
+        if (!idle) CircularProgressIndicator(Modifier.size(22.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+        // the reply is waiting: the run button applies it
+        else if (apply != null) Text("Apply ${apply.ops.size - state.askOff.size}", fontSize = 12.sp, color = if (ready) Bloom.Pollen else Bloom.Outline, maxLines = 1)
+        else Icon(mode.icon, null, tint = if (ready) Bloom.Pollen else Bloom.Outline)
         // where it runs, under the icon
         Text(choice?.let { state.ai.name(it.provider) }.orEmpty(), fontSize = 9.sp, lineHeight = 11.sp, color = Bloom.OnVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }

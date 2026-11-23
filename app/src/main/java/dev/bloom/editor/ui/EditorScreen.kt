@@ -111,6 +111,8 @@ import dev.bloom.editor.ai.AiResult
 import dev.bloom.editor.ai.Capability
 import dev.bloom.editor.ai.OnDevice
 import dev.bloom.editor.ai.AiConfig
+import dev.bloom.editor.ai.AiError
+import dev.bloom.editor.ai.EditOps
 import dev.bloom.editor.ai.Choice
 import dev.bloom.editor.ai.Keys
 import dev.bloom.editor.ai.open
@@ -191,6 +193,10 @@ class EditorState {
     var aiMode by mutableStateOf(Capability.ERASE) // the AI tool's mode, if a provider still offers it
     var fillPrompt by mutableStateOf("") // what Fill paints
     var upscaleBy by mutableIntStateOf(2)
+    var askText by mutableStateOf("") // Ask's request
+    var askTarget by mutableStateOf<Long?>(null) // the layer Ask refines (from its bubble); null = any change
+    var asked by mutableStateOf<EditOps.Parsed?>(null) // Ask's reply, shown as a checklist and previewed
+    var askOff by mutableStateOf(emptySet<Int>()) // the reply's ops the user unticked
     var running by mutableStateOf<String?>(null) // an AI job running: what it is doing ("Downloading…", "Erasing…", "Queued, 3 ahead")
     var runCancel by mutableStateOf<(() -> Unit)?>(null) // a remote job running: stops it
     var ai by mutableStateOf(AiConfig()) // AI providers and choices (Settings)
@@ -204,13 +210,13 @@ class EditorState {
 
     /** A Lens blur or a depth range step exists (applied or in the draft), so the depth map is needed. */
     val needsDepth: Boolean
-        get() = (doc.layers + listOfNotNull(draft)).any { l ->
+        get() = ((askResult() ?: doc).layers + listOfNotNull(draft)).any { l ->
             l.effect.let { it is DetailEffect && !it.sharpen && it.detail.lens } || l.mask.steps.any { it is LuminanceStep && it.depth }
         }
 
     /** Pin sets of every Subject or Background step (applied layers and the draft): the masks needed. */
     val neededSubjects: Set<List<Float>>
-        get() = (doc.layers + listOfNotNull(draft)).flatMap { l -> l.mask.steps.filterIsInstance<SubjectStep>().map { it.pins } }.toSet()
+        get() = ((askResult() ?: doc).layers + listOfNotNull(draft)).flatMap { l -> l.mask.steps.filterIsInstance<SubjectStep>().map { it.pins } }.toSet()
     private var nextId = 1L
 
     val doc: Document get() = history.current
@@ -218,7 +224,7 @@ class EditorState {
     /** What the preview renders: committed layers (none while [layersHidden]), live opacity drag, then the draft. */
     fun rendered(): List<Layer> {
         if (comparing) return emptyList()
-        var d = doc
+        var d = askResult() ?: doc
         opacityPreview?.let { (id, o) ->
             d = d.copy(layers = d.layers.map { if (it.id == id) it.copy(opacity = o) else it }, groups = d.groups.map { if (it.id == id) it.copy(opacity = o) else it })
         }
@@ -229,6 +235,17 @@ class EditorState {
     }
 
     fun newId() = nextId++
+
+    /** The document with Ask's ticked changes, while its checklist shows. */
+    fun askResult(): Document? = asked?.let { a -> EditOps.apply(doc, a.ops.filterIndexed { i, _ -> i !in askOff }, nextId) }
+
+    /** Applies Ask's ticked changes as one document step and closes the tool. */
+    fun applyAsk() {
+        val d = askResult() ?: return
+        nextId += asked!!.ops.size
+        edit { d }
+        close()
+    }
 
     /** Opens the tool for a new layer of [effect], or for [edit]. */
     fun openTool(effect: Effect = ColorEffect(), edit: Layer? = null, mask: Boolean = false) {
@@ -315,7 +332,7 @@ class EditorState {
     fun addGradient() = addStep(GradientStep(false, 0.5f, 0.2f, 0.5f, 0.6f, add = maskAdd))
 
     val dirty: Boolean
-        get() = crop?.let { it != doc.crop } ?: draft?.let { d -> if (editingId != null) d != doc.layers.firstOrNull { it.id == d.id } else d.edited } ?: false
+        get() = asked != null || crop?.let { it != doc.crop } ?: draft?.let { d -> if (editingId != null) d != doc.layers.firstOrNull { it.id == d.id } else d.edited } ?: false
 
     fun apply() {
         val d = draft ?: return
@@ -338,6 +355,10 @@ class EditorState {
     }
 
     fun close() {
+        asked = null
+        askOff = emptySet()
+        askTarget = null
+        askText = ""
         crop = null
         draft = null
         editingId = null
@@ -690,6 +711,22 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         }
     }
 
+    // Ask: only the request and a summary of the layers go to the provider (no photo, so no consent sheet); the reply
+    // becomes a checklist previewed on the photo
+    fun ask() {
+        val c = state.ai.choice(Capability.EDIT_COMMAND, phone) ?: return
+        val text = state.askText.trim()
+        val doc = state.doc
+        val target = state.askTarget
+        runJob(c, "Asking…", "ask") {
+            val reply = provider(c).run(Capability.EDIT_COMMAND, c.model, AiRequest(prompt = EditOps.message(text, doc, target))) { state.running = it } as AiResult.Text
+            val parsed = EditOps.parse(reply.text, doc, target)
+            if (parsed.ops.isEmpty()) throw AiError(parsed.notes.firstOrNull() ?: "the model suggested no changes")
+            state.askOff = emptySet()
+            state.asked = parsed
+        }
+    }
+
     var exportScale by remember { mutableFloatStateOf(1f) }
     fun export(dst: android.net.Uri?, format: ImageIo.Format) {
         val src = state.source
@@ -806,6 +843,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                         when (aiMode) {
                             Capability.ERASE, Capability.GEN_FILL -> fill(aiMode)
                             Capability.UPSCALE -> upscale()
+                            Capability.EDIT_COMMAND -> if (state.asked == null) ask() else state.applyAsk()
                             else -> Unit
                         }
                     },
@@ -861,6 +899,12 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                             state.opacityPreview = null
                         },
                         onEdit = { state.openTool(edit = l) },
+                        // Refine with Ask: the AI tool's Ask, limited to this layer
+                        onAsk = if (Capability.EDIT_COMMAND in aiModes) ({
+                            state.openTool(RetouchEffect())
+                            state.aiMode = Capability.EDIT_COMMAND
+                            state.askTarget = id
+                        }) else null,
                         onEditMask = { state.openTool(edit = l, mask = true) },
                         onBlend = { b -> state.edit { d -> d.replace(l.copy(blend = b)) } },
                         onDelete = { state.edit { it.remove(id) }; state.bubble = null },

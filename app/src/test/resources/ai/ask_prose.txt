@@ -1,0 +1,12 @@
+<think>The user wants {warmer} light. Maybe [Temp].</think>
+Sure! Here is what I'd do:
+
+```json
+{
+  "ops": [
+    {"op": "add_color_layer", "params": {"Temp": 25, "Saturation": 10}, "mask": [{"type": "gradient", "from": "top"}, {"type": "subject", "add": false}]}
+  ]
+}
+```
+
+This warms the sky (note: "}" in prose is fine).

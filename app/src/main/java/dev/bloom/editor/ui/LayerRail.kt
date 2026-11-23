@@ -447,6 +447,7 @@ fun LayerBubble(
     onOpacity: (Float) -> Unit,
     onOpacityDone: () -> Unit,
     onEdit: () -> Unit,
+    onAsk: (() -> Unit)?,
     onEditMask: () -> Unit,
     onBlend: (Blend) -> Unit,
     onDelete: () -> Unit,
@@ -479,6 +480,7 @@ fun LayerBubble(
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
             BubbleAction(Icons.Brush, "Edit", Modifier.weight(1f), onEdit)
+            onAsk?.let { BubbleAction(Icons.Ask, "Ask", Modifier.weight(1f), it) }
             BubbleAction(Icons.Mask, "Edit mask", Modifier.weight(1f), onEditMask)
             BubbleAction(Icons.Trash, "Delete", Modifier.weight(1f), onDelete)
         }

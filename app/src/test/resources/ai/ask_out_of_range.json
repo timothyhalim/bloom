@@ -1,0 +1,1 @@
+{"ops":[{"op":"add_color_layer","params":{"Temp":500,"Exposure":-1e9,"Tint":"12.6"}},{"op":"add_blur","type":"Motion","amount":250},{"op":"set_param","layer":2,"param":"amount","value":-40}]}
