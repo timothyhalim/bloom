@@ -9,13 +9,14 @@ Free, open-source Android photo editor with on-device AI (selection, masking, co
 
 ## Design
 
-The first design, as a clickable mockup: [`design/mockup.html`](design/mockup.html) ([open it in the browser](https://htmlpreview.github.io/?https://github.com/timothyhalim/bloom/blob/main/design/mockup.html)). The app has moved on since (icon tool bars, one settings box per tool), but the layout and flow are the same.
+A clickable mockup of the current design: [`design/mockup.html`](design/mockup.html) ([open it in the browser](https://htmlpreview.github.io/?https://github.com/timothyhalim/bloom/blob/main/design/mockup.html)).
 
 <p align="center">
   <img src="design/screens/home.png" width="190" alt="Home">
   <img src="design/screens/editor.png" width="190" alt="Editor with the layer rail">
   <img src="design/screens/color.png" width="190" alt="Color tool">
   <img src="design/screens/mask.png" width="190" alt="Mask brush">
+  <img src="design/screens/ai.png" width="190" alt="AI eraser with the provider menu">
 </p>
 
 ## AI models
