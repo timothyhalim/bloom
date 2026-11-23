@@ -12,9 +12,9 @@
     </linearGradient>
     <!-- crisp darker blades fanning up each petal from behind the star (drawn for a petal of length 87.4) -->
     <g id="blades">
-      <path d="M0-10Q-2.2-30 0-63Q2.2-30 0-10Z"/>
-      <path d="M-2-6C-7-16-10.5-30-8.6-53C-8.2-38-6.5-24-3.5-12Z"/>
-      <path d="M2-6C7-16 10.2-29 8.6-51C8.2-37 6.5-24 3.5-12Z"/>
+      <path d="M0-8C-1.8-20-1.5-44 0-63C1.5-44 1.8-20 0-8Z"/>
+      <path d="M-2-6C-7-16-10.5-30-8.6-53C-6.8-41-5.4-24-2.6-10Z"/>
+      <path d="M2-6C7-16 10.2-29 8.6-51C6.8-40 5.4-24 2.6-10Z"/>
     </g>
     <radialGradient id="halo" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="32">
       <stop offset="0" stop-color="#fff0d0" stop-opacity=".95"/>
