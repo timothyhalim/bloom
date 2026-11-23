@@ -598,7 +598,7 @@ fun EditorScreen(photoView: PhotoView) {
     }
 
     var exportScale by remember { mutableFloatStateOf(1f) }
-    fun export(dst: android.net.Uri?, png: Boolean) {
+    fun export(dst: android.net.Uri?, format: ImageIo.Format) {
         val src = state.source
         if (dst == null || src == null) return
         val layers = state.doc.rendered()
@@ -610,15 +610,14 @@ fun EditorScreen(photoView: PhotoView) {
             val subjects = state.subjects
             val depth = state.depth
             val r = runCatching {
-                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png, subjects, depth, crop, scale) { exporting = it } }
+                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, format, subjects, depth, crop, scale) { exporting = it } }
             }
             exporting = null
             r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "export failed", it) }
             snackbar.showSnackbar(r.fold({ "Saved" }, { "Export failed: ${it.message ?: it}" }))
         }
     }
-    val saveJpeg = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/jpeg")) { export(it, false) }
-    val savePng = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { export(it, true) }
+    val savers = ImageIo.Format.entries.associateWith { f -> rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(f.mime)) { export(it, f) } }
     val openPicker = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
 
     fun toggle(l: Layer) {
@@ -670,10 +669,7 @@ fun EditorScreen(photoView: PhotoView) {
         TopBar(
             state, exporting, exportScale, { exportScale = it },
             onBack = closePhoto,
-            onExport = { png ->
-                val name = "bloom_${System.currentTimeMillis()}"
-                if (png) savePng.launch("$name.png") else saveJpeg.launch("$name.jpg")
-            },
+            onExport = { f -> savers.getValue(f).launch("bloom_${System.currentTimeMillis()}.${f.ext}") },
         )
         Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { canvasTop = it.positionInRoot().y; canvasBottom = canvasTop + it.size.height }) {
             AndroidView({ photoView }, Modifier.fillMaxSize())
@@ -840,7 +836,7 @@ fun EditorScreen(photoView: PhotoView) {
 }
 
 @Composable
-private fun TopBar(state: EditorState, exporting: Float?, scale: Float, onScale: (Float) -> Unit, onBack: () -> Unit, onExport: (png: Boolean) -> Unit) {
+private fun TopBar(state: EditorState, exporting: Float?, scale: Float, onScale: (Float) -> Unit, onBack: () -> Unit, onExport: (ImageIo.Format) -> Unit) {
     val busy = exporting != null
     val open = state.source != null
     val idle = state.draft == null && state.crop == null // inside a tool, undo/redo step through the tool's own gestures
@@ -877,8 +873,21 @@ private fun TopBar(state: EditorState, exporting: Float?, scale: Float, onScale:
             DropdownMenu(menu, { menu = false }, Modifier.background(Bloom.SurfaceHigh)) {
                 // size cycles in place; the menu stays open
                 DropdownMenuItem({ Text("Size: ${(scale * 100).toInt()}%", color = Bloom.OnVariant) }, { onScale(if (scale == 1f) 0.5f else if (scale == 0.5f) 0.25f else 1f) })
-                DropdownMenuItem({ Text("JPEG", color = Bloom.On) }, { menu = false; onExport(false) })
-                DropdownMenuItem({ Text("16-bit PNG (larger, for further editing)", color = Bloom.On) }, { menu = false; onExport(true) })
+                for (f in ImageIo.Format.entries) if (f.available) DropdownMenuItem(
+                    {
+                        Text(
+                            when (f) {
+                                ImageIo.Format.JPEG -> "JPEG"
+                                ImageIo.Format.WEBP -> "WebP"
+                                ImageIo.Format.HEIC -> "HEIC"
+                                ImageIo.Format.AVIF -> "AVIF"
+                                ImageIo.Format.PNG -> "16-bit PNG (larger, for further editing)"
+                            },
+                            color = Bloom.On,
+                        )
+                    },
+                    { menu = false; onExport(f) },
+                )
             }
         }
     }

@@ -33,7 +33,7 @@ Free, open-source (GPL-3.0) Android photo editor. Everything that can run on the
 | AI (own server / own key) | IOPaint, ComfyUI, fal key; natural-language edits via llama.cpp, LiteLLM, any OpenAI-compatible endpoint | |
 | AI (paid, Bloom Cloud → fal) | Prompted generative fill, creative upscale, text-prompted background + relighting | |
 | Range / HDR | Dithered 8-bit output, 16-bit sources, smooth banding (done) | Ultra HDR gain maps, DNG, AI "Recover" (see M2.5) |
-| Basics | Hold to compare, navigator when zoomed, export JPEG with EXIF | PNG/WebP/16-bit export, saved projects to reopen and keep editing (M7) |
+| Basics | Hold to compare, navigator when zoomed, export JPEG with EXIF; **done:** WebP (with EXIF), HEIC and AVIF (where the phone encodes them), 16-bit PNG export | saved projects to reopen and keep editing (M7) |
 
 ## Budgets ("lightweight")
 
@@ -134,5 +134,5 @@ Requested while testing M2a; `design/UI.md` still shows the frozen version.
 - Swipe the layers button left / right to hide / show all adjustment layers at once (like Compare, but it stays).
 - Layer groups: collect layers into a group; hide, show, reorder and set opacity for the group together.
 - Save the work file and a start screen of recent files with thumbnails: already M7 (projects autosave + Recent projects); the user asked for it again, so keep it first in M7.
-- More export types (e.g. WebP, HEIC/AVIF where the phone encodes them) next to JPEG and 16-bit PNG.
+- More export types (e.g. WebP, HEIC/AVIF where the phone encodes them) next to JPEG and 16-bit PNG: **done**.
 - Code: split `Layer`'s per-kind fields (values/curves, detail, warp, patch) into `Layer(…, effect: Effect)` with one sealed `Effect` subtype per kind. Do it before M7's project file format fixes the layer shape, or when a 6th kind arrives.

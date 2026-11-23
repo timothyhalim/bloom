@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- heifwriter wants API 29; HEIC/AVIF export is gated at run time (ImageIo.Format.available) -->
+    <uses-sdk tools:overrideLibrary="androidx.heifwriter" />
 
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
     <!-- only to download AI models on first use (assets/models.json); photos never leave the phone -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="Bloom"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity

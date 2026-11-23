@@ -174,7 +174,7 @@ class PipelineTest {
     private fun exportPng(src: java.io.File, layers: List<Layer>): Pair<ByteArray, Bitmap> {
         val dst = java.io.File(ctx.cacheDir, "t_out.png")
         val steps = mutableListOf<Float>()
-        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(src), android.net.Uri.fromFile(dst), ctx.cacheDir, layers, false, png = true) { steps += it }
+        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(src), android.net.Uri.fromFile(dst), ctx.cacheDir, layers, false, ImageIo.Format.PNG) { steps += it }
         assertTrue("progress rises to 1: $steps", steps.zipWithNext().all { (a, b) -> b >= a } && steps.last() == 1f)
         val bytes = dst.readBytes()
         return bytes to android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
@@ -211,13 +211,56 @@ class PipelineTest {
         assertEquals(0, androidx.exifinterface.media.ExifInterface(dst).rotationDegrees)
     }
 
+    // --- WebP, HEIC, AVIF export ---
+
+    /** 128x256 sensor pixels, red top half, blue bottom, tagged "rotate 90": upright it is 256x128, blue on the left. */
+    private fun exportAs(format: ImageIo.Format): Bitmap {
+        org.junit.Assume.assumeTrue("no ${format.name} encoder", format.available)
+        val src = Bitmap.createBitmap(128, 256, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.rgb(200, 40, 40))
+            android.graphics.Canvas(this).drawRect(0f, 128f, 128f, 256f, android.graphics.Paint().apply { color = Color.rgb(40, 40, 200) })
+        }
+        val f = java.io.File(ctx.cacheDir, "t_fmt.jpg").apply { outputStream().use { src.compress(Bitmap.CompressFormat.JPEG, 100, it) } }
+        androidx.exifinterface.media.ExifInterface(f).apply {
+            setAttribute(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90.toString())
+            setAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE, "BloomCam")
+            saveAttributes()
+        }
+        val dst = java.io.File(ctx.cacheDir, "t_fmt_out.${format.ext}")
+        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(f), android.net.Uri.fromFile(dst), ctx.cacheDir, listOf(Layer(1)), false, format)
+        val out = android.graphics.BitmapFactory.decodeFile(dst.path) ?: error("${format.name} output doesn't decode")
+        assertEquals(256, out.width)
+        assertEquals(128, out.height)
+        val blue = out.getPixel(40, 64)
+        val red = out.getPixel(216, 64)
+        assertTrue("blue on the left: ${Integer.toHexString(blue)}", Color.blue(blue) > 160 && Color.red(blue) < 80)
+        assertTrue("red on the right: ${Integer.toHexString(red)}", Color.red(red) > 160 && Color.blue(red) < 80)
+        return out
+    }
+
+    @Test
+    fun webpExport() {
+        exportAs(ImageIo.Format.WEBP)
+        val dst = java.io.File(ctx.cacheDir, "t_fmt_out.webp")
+        assertEquals("RIFF", String(dst.readBytes(), 0, 4))
+        val exif = androidx.exifinterface.media.ExifInterface(dst)
+        assertEquals("EXIF kept", "BloomCam", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE))
+        assertEquals("upright", 0, exif.rotationDegrees)
+    }
+
+    @Test
+    fun heicExport() { exportAs(ImageIo.Format.HEIC) }
+
+    @Test
+    fun avifExport() { exportAs(ImageIo.Format.AVIF) }
+
     // --- Crop (M4.5) ---
 
     /** Exports [src] (saved as a lossless PNG) as a 16-bit PNG with [crop] and [scale]; returns its pixels, 8-bit. */
     private fun exportCropped(src: Bitmap, crop: Crop, scale: Float = 1f): Bitmap {
         val f = java.io.File(ctx.cacheDir, "t_crop.png").apply { outputStream().use { src.compress(Bitmap.CompressFormat.PNG, 100, it) } }
         val dst = java.io.File(ctx.cacheDir, "t_crop_out.png")
-        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(f), android.net.Uri.fromFile(dst), ctx.cacheDir, emptyList(), false, png = true, crop = crop, scale = scale)
+        ImageIo.export(ctx.contentResolver, android.net.Uri.fromFile(f), android.net.Uri.fromFile(dst), ctx.cacheDir, emptyList(), false, ImageIo.Format.PNG, crop = crop, scale = scale)
         val out = android.graphics.BitmapFactory.decodeFile(dst.path)
         return out.copy(Bitmap.Config.ARGB_8888, false)
     }

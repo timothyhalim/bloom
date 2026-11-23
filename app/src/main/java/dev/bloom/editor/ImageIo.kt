@@ -9,9 +9,13 @@ import android.graphics.ColorSpace
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
+import android.media.MediaCodecList
+import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
 import androidx.exifinterface.media.ExifInterface
+import androidx.heifwriter.AvifWriter
+import androidx.heifwriter.HeifWriter
 import dev.bloom.editor.gl.DEBAND_RADIUS
 import dev.bloom.editor.gl.detailReach
 import dev.bloom.editor.gl.HdrGain
@@ -28,6 +32,20 @@ import kotlin.math.roundToInt
 object ImageIo {
     const val PREVIEW_MAX = 2048
     const val TILE = 1024
+
+    enum class Format(val mime: String, val ext: String) {
+        JPEG("image/jpeg", "jpg"), WEBP("image/webp", "webp"), HEIC("image/heic", "heic"), AVIF("image/avif", "avif"), PNG("image/png", "png");
+
+        /** HEIC and AVIF need a hardware or software video encoder, which not every phone has. */
+        val available by lazy {
+            fun encodes(vararg mimes: String) = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { c -> c.isEncoder && c.supportedTypes.any { it in mimes } }
+            when (this) {
+                HEIC -> Build.VERSION.SDK_INT >= 29 && encodes(MediaFormat.MIMETYPE_IMAGE_ANDROID_HEIC, MediaFormat.MIMETYPE_VIDEO_HEVC)
+                AVIF -> Build.VERSION.SDK_INT >= 34 && encodes(MediaFormat.MIMETYPE_VIDEO_AV1) // AVIF muxing is API 34+
+                else -> true
+            }
+        }
+    }
 
     /** Smallest power-of-two sample size that keeps the long side <= maxSide. */
     fun sampleSize(w: Int, h: Int, maxSide: Int): Int {
@@ -71,16 +89,19 @@ object ImageIo {
 
     /**
      * Full-resolution export with [layers] applied tile by tile on the GPU, then [crop] and [scale] (output size / full).
-     * JPEG keeps sensor orientation and the copied EXIF orientation tag; 16-bit [png], and anything cropped or scaled,
-     * is drawn upright, since many viewers ignore orientation in PNG.
+     * JPEG keeps sensor orientation and the copied EXIF orientation tag; other formats, and anything cropped or scaled,
+     * are drawn upright, since many viewers ignore orientation outside JPEG (HEIC and AVIF get no EXIF at all).
+     * PNG is 16-bit.
      * Must run on a thread with no GL context of its own (it creates one). [progress] gets 0..1 on this thread.
      */
     fun export(
-        cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>, deband: Boolean, png: Boolean = false,
+        cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>, deband: Boolean, format: Format = Format.JPEG,
         subjects: Map<List<Float>, SubjectMask> = emptyMap(), depth: SubjectMask? = null,
         crop: Crop = Crop(), scale: Float = 1f, progress: (Float) -> Unit = {},
     ) {
         val warped = !crop.isIdentity || scale != 1f
+        val png = format == Format.PNG
+        val turn = format != Format.JPEG // draw upright
         // Raw files decode whole (already upright); everything else is read tile by tile in sensor orientation.
         // ponytail: whole raw in memory (~14 B/px peak in LibRaw, then 8 B/px), fine to ~50 MP on 8 GB phones
         // Share of the bar: raw decode (when there is one), then tiles, then the last 5% for encoding.
@@ -122,14 +143,14 @@ object ImageIo {
         val oh = if (warped) (ch * uprightH * scale).roundToInt().coerceAtLeast(1) else 0
         // output 0..1 -> sensor 0..1
         val toSensor = Crop.mul(FloatArray(9).also { Matrix().apply { orient.invert(this) }.getValues(it) }, crop.matrix(aspect))
-        if (png && !warped) {
+        if (turn && !warped) {
             upright.postRotate(rotation.toFloat())
             if (flipped) upright.postScale(-1f, 1f)
             val b = RectF(0f, 0f, w.toFloat(), h.toFloat()).also(upright::mapRect)
             upright.postTranslate(-b.left, -b.top)
         }
-        val outW = if (warped) ow else if (png) uprightW else w
-        val outH = if (warped) oh else if (png) uprightH else h
+        val outW = if (warped) ow else if (turn) uprightW else w
+        val outH = if (warped) oh else if (turn) uprightH else h
         val out = Bitmap.createBitmap(outW, outH, if (png) Bitmap.Config.RGBA_F16 else Bitmap.Config.ARGB_8888, false, SRGB)
         val canvas = Canvas(out).apply { concat(upright) }
         val gpu = if (warped || layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
@@ -189,11 +210,25 @@ object ImageIo {
             raw?.recycle()
         }
 
-        val tmp = File(cacheDir, if (png) "export.png" else "export.jpg")
+        val tmp = File(cacheDir, "export.${format.ext}")
         try {
-            tmp.outputStream().use { out.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 95, it) }
+            // ponytail: HEIC/AVIF upload the whole bitmap as one GL texture, so the long side is capped by GL_MAX_TEXTURE_SIZE
+            // (16384 on most phones, 8192 on some); feed YUV buffers instead if that bites
+            when (format) {
+                Format.HEIC -> HeifWriter.Builder(tmp.path, outW, outH, HeifWriter.INPUT_MODE_BITMAP).setQuality(95).build()
+                    .use { it.start(); it.addBitmap(out); it.stop(0) }
+                Format.AVIF -> AvifWriter.Builder(tmp.path, outW, outH, AvifWriter.INPUT_MODE_BITMAP).setQuality(95).build()
+                    .use { it.start(); it.addBitmap(out); it.stop(0) }
+                else -> {
+                    @Suppress("DEPRECATION") // WEBP_LOSSY is API 30+; WEBP is lossy at quality < 100 too
+                    val webp = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+                    val cf = when (format) { Format.PNG -> Bitmap.CompressFormat.PNG; Format.WEBP -> webp; else -> Bitmap.CompressFormat.JPEG }
+                    // WebP stops at 16383 px a side
+                    check(tmp.outputStream().use { out.compress(cf, 95, it) }) { "${format.name} can't encode ${outW}x$outH" }
+                }
+            }
             out.recycle()
-            copyExif(cr, src, tmp, upright = png || warped || raw != null)
+            if (format != Format.HEIC && format != Format.AVIF) copyExif(cr, src, tmp, upright = turn || warped || raw != null)
             cr.openOutputStream(dst)!!.use { o -> tmp.inputStream().use { it.copyTo(o) } }
             progress(1f)
         } finally {

@@ -15,6 +15,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
+| Launcher icon: adaptive (navy gradient + sparkles background, flower foreground, white monochrome for themed icons), PNGs rasterized from design/icon_foreground.svg and design/icon.svg; Play store icon app/src/main/ic_launcher-playstore.png | app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml, AndroidManifest.xml | none | manual |
 | Edge-to-edge window with dark transparent system bars | MainActivity.kt:15 | none | manual |
 | One PhotoView created per activity, follows the lifecycle (pause/resume GL) | MainActivity.kt:16-17, PhotoView.kt:311-312 | none | manual |
 | First run (no photo): empty state shows "Bloom", tagline "Edit in layers. Everything runs on your phone." | ui/EditorScreen.kt:682-686 | none | UI |
@@ -89,8 +90,8 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Export progress: ring + "NN%" in the Export button while exporting | ui/EditorScreen.kt:660-663 | none | UI |
 | Export menu: "Size: 100%" cycles 100 → 50 → 25 → 100 in place, menu stays open | ui/EditorScreen.kt:666-668 | none | UI |
 | Export size choice is kept for the session (not persisted) | ui/EditorScreen.kt:475 | none | UI |
-| Export menu: "JPEG" opens Save-as with `bloom_<millis>.jpg` | ui/EditorScreen.kt:669, 536-539, 495 | none | UI |
-| Export menu: "16-bit PNG (larger, for further editing)" opens Save-as with `bloom_<millis>.png` | ui/EditorScreen.kt:670, 536-539, 496 | none | UI |
+| Export menu: one entry per format: JPEG, WebP, HEIC, AVIF, "16-bit PNG (larger, for further editing)"; each opens Save-as with `bloom_<millis>.<ext>` and its MIME type | ui/EditorScreen.kt:876-891, 620, 672 | none | UI |
+| HEIC shown only on API 29+ with a HEVC/HEIC encoder; AVIF only on API 34+ with an AV1 encoder | ImageIo.kt:36-47 | GPU: heicExport, avifExport (skip without encoder) | GPU |
 
 ## 5. Undo / redo (history)
 
@@ -516,8 +517,10 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | No visible layers and no crop/scale: tiles copied without the GPU | ImageIo.kt:135, 179 | none | GPU |
 | Tiles overlap by the largest reach (feather, deband, subject edge, blur, liquify); blur pads align to 64 px | ImageIo.kt:106-115 | GPU: paddedTileMatchesFullRenderWithFeather, blurredExportTileMatchesTheFullRender | GPU |
 | JPEG: quality 95, sensor orientation kept with EXIF orientation tag | ImageIo.kt:194, 131-132 | none | GPU |
+| WebP: lossy, quality 95, drawn upright, EXIF copied; fails clearly past 16383 px a side | ImageIo.kt:222-231 | GPU: webpExport | GPU |
+| HEIC / AVIF: quality 95 via androidx.heifwriter (bitmap input), drawn upright, no EXIF. Long side capped by GL_MAX_TEXTURE_SIZE | ImageIo.kt:216-221 | GPU: heicExport, avifExport | GPU |
 | 16-bit PNG keeps levels between 8-bit steps | ImageIo.kt:133, gl/Pipeline.kt:461-486 | GPU: pngExportKeepsLevelsBetweenEightBitSteps | GPU |
-| PNG (and anything cropped or scaled) drawn upright; orientation tag reset to normal | ImageIo.kt:125-130, 237 | GPU: pngExportIsUpright | GPU |
+| Everything but JPEG (and anything cropped or scaled) drawn upright; orientation tag reset to normal | ImageIo.kt:125-130, 237 | GPU: pngExportIsUpright | GPU |
 | Masks line up in rotated (EXIF) tiles | ImageIo.kt:95-102 | GPU: rotatedExportTilesMatchTheUprightPreview | GPU |
 | Size 50% / 25%: output averages source pixels (n×n box) | ImageIo.kt:150, gl/Pipeline.kt:857-859 | GPU: halfSizeExportAveragesPixels | GPU |
 | EXIF copied from the source, minus pixel-layout and thumbnail tags | ImageIo.kt:204-239 | none | GPU (instrumented, file I/O) |
