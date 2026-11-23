@@ -1,4 +1,4 @@
-# Implementation plan: M8 to M10
+# Implementation plan: M8, M8.5 and M10
 
 Follows `docs/PLAN.md` (milestones, provider rules) and the decisions there. Each milestone: goal, steps in build order, tests, done-when, open questions. Estimates are for one developer with the current codebase. Every step ends with a commit once its tests pass.
 
@@ -79,33 +79,9 @@ Same erase works on device, IOPaint and fal; "make it warmer" gives correct laye
 
 ---
 
-## M9: Bloom Cloud (~3–4 weeks)
+## Bloom Cloud
 
-**Goal:** paid generative fill, creative upscale and background generation, with no provider key on the phone.
-
-The backend lives in its own repository, started later; this repo only gets the app side (steps 3, 4, 6, 7) once the backend's API exists. M8 stays a separate milestone, so bring-your-own providers ship without waiting for it.
-
-### Steps
-1. **Backend** (separate repo, later; closed or AGPL): small HTTP service (Kotlin/Ktor or Go) + Postgres. Endpoints: `POST /v1/auth` (Google sign-in token → session), `GET /v1/balance`, `POST /v1/jobs` (capability, crop, mask, prompt; idempotency key), `GET /v1/jobs/<id>`, `POST /v1/report`. Calls fal server-side; stores nothing but job metadata (images deleted after delivery, max 24 h).
-2. **Credit ledger**: append-only table (grant, purchase, spend, refund). A job reserves credits, commits on success, refunds on provider failure. The idempotency key makes retries charge once.
-3. **Play Billing** (play flavor only): consumable credit packs; purchase token verified server-side with the Play Developer API, then credits granted; acknowledged after the grant.
-4. **App**: `BloomCloud` adapter (all capabilities), account section in Settings (sign in, balance, buy, sign out, delete account), cost shown on the run button, Report button on generated results.
-5. **Safety**: provider safety filter on; prompt filter for obvious abuse; rate limits per account; abuse report queue.
-6. **Legal and store**: privacy policy and terms (OpenRAIL-M use restrictions if SD is used server-side), Play Data Safety form, AI-generated content policy (report button), account deletion flow (required by Play).
-7. **fdroid flavor**: no billing, no Google sign-in; Bloom Cloud hidden (bring-your-own providers still there).
-
-### Tests
-- Backend: unit tests for the ledger (reserve/commit/refund, idempotent retry, concurrent jobs), integration tests with a fake fal.
-- App: billing flow with Play's test cards on the internal track; `apktool d` the release APK and grep for keys (none).
-- Load: 50 concurrent jobs without double charges.
-
-### Done when
-Purchase → fill → balance deducted, no double charge on retry; no provider key in the APK.
-
-### Open questions (user decisions)
-- Hosting (Fly.io, Cloud Run, a VPS?) and budget.
-- Pricing: credits per action; free monthly credits?
-- Sign-in: Google only, or also email link?
+Not a milestone of this repo: the paid cloud (backend, credits, billing) is planned in its own repository later. When its API exists, this app gets a `BloomCloud` provider adapter like the others.
 
 ---
 
@@ -133,7 +109,6 @@ Purchase → fill → balance deducted, no double charge on retry; no provider k
 1. M8 steps 1–2 (interface + on-device, no behaviour change) → commit.
 2. M8 settings + HTTP + IOPaint → test with a local IOPaint → commit. Then ComfyUI, fal, Ask, one commit each.
 3. M8.5 upscale → matting → background swap, one commit each.
-4. M9 needs the user's decisions (hosting, pricing, sign-in) before starting.
-5. M10 starts with the spike; continue only if the numbers hold.
+4. M10 starts with the spike; continue only if the numbers hold.
 
 Each milestone also adds its rows to `docs/FEATURES.md` with test names.
