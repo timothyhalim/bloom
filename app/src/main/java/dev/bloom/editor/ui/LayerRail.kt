@@ -2,6 +2,9 @@ package dev.bloom.editor.ui
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -117,7 +120,7 @@ fun LayerRail(
         }
         Box(Modifier.weight(1f, fill = false)) {
             Column(Modifier.verticalScroll(scroll)) {
-                if (pendingNew) Thumb(pending = true) { Icon(Icons.Adjust, null, Modifier.size(18.dp), tint = Bloom.On) }
+                if (pendingNew) Thumb(pending = true, desc = "New layer, not applied yet") { Icon(Icons.Adjust, null, Modifier.size(18.dp), tint = Bloom.On) }
                 layers.forEachIndexed { i, l -> RailItem(l, i, layers.size, l.id == activeId, rowPx, onTap, onToggle, onMove) }
                 Thumb(
                     Modifier.onGloballyPositioned { photoY = it.positionInRoot().y + it.size.height / 2f }
@@ -227,7 +230,7 @@ private fun Thumb(
     Box(modifier.size(44.dp, 48.dp).semantics { if (desc.isNotEmpty()) contentDescription = desc }, contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(36.dp).clip(shape).background(Bloom.SurfaceContainer)
-                .border(if (active || pending) 2.dp else 1.dp, if (active || pending) Bloom.Pollen else Bloom.Outline, shape)
+                .then(if (pending) Modifier else Modifier.border(if (active) 2.dp else 1.dp, if (active) Bloom.Pollen else Bloom.Outline, shape))
                 .graphicsLayer { alpha = if (hidden) 0.45f else 1f },
             contentAlignment = Alignment.Center,
         ) { content() }
@@ -240,7 +243,14 @@ private fun Thumb(
             drawArc(Bloom.On, 90f, 180f, true)
             drawCircle(Bloom.On, size.minDimension / 2, style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
         }
-        if (pending) Text("new", Modifier.align(Alignment.BottomCenter), fontSize = 8.sp, color = Bloom.Pollen)
+        // dashed: a draft layer that isn't part of the photo until applied
+        if (pending) Canvas(Modifier.size(36.dp)) {
+            val dash = 4.dp.toPx()
+            drawRoundRect(
+                Bloom.Pollen, cornerRadius = CornerRadius(8.dp.toPx()),
+                style = Stroke(2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(dash, dash))),
+            )
+        }
         if (active) Box(Modifier.align(Alignment.CenterStart).size(3.dp, 16.dp).background(Bloom.Pollen, RoundedCornerShape(2.dp)))
     }
 }
