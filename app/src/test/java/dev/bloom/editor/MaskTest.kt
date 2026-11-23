@@ -1,6 +1,8 @@
 package dev.bloom.editor
 
 import dev.bloom.editor.model.BrushStep
+import dev.bloom.editor.model.ColorStep
+import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.Stroke
@@ -31,5 +33,22 @@ class MaskTest {
         assertTrue(m.active)
         assertFalse(m.copy(steps = m.steps.map { it.with(visible = false) }).active)
         assertEquals(false, m.steps[1].with(add = false).add)
+    }
+
+    @Test
+    fun moveKeepsEveryStep() {
+        val steps = listOf(BrushStep(), GradientStep(false, 0f, 0f, 1f, 1f), ColorStep(), LuminanceStep.Shadows)
+        val m = Mask(steps)
+        assertEquals(listOf(steps[1], steps[2], steps[0], steps[3]), m.move(0, 2).steps)
+        assertEquals(listOf(steps[3], steps[0], steps[1], steps[2]), m.move(3, 0).steps)
+        assertEquals(steps, m.move(1, 99).move(3, 1).steps)
+    }
+
+    @Test
+    fun readsBelowAndMaxFeatherCountVisibleStepsOnly() {
+        val m = Mask(listOf(BrushStep(feather = 0.3f), LuminanceStep.Shadows.copy(visible = false, feather = 0.9f)))
+        assertFalse(m.readsBelow)
+        assertEquals(0.3f, m.maxFeather)
+        assertTrue(m.copy(steps = m.steps + ColorStep()).readsBelow)
     }
 }

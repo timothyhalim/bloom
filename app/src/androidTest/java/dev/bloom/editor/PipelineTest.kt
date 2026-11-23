@@ -9,11 +9,14 @@ import android.graphics.Matrix
 import dev.bloom.editor.model.Blend
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
+import dev.bloom.editor.model.ColorStep
+import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.Stroke
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.math.pow
@@ -155,4 +158,92 @@ class PipelineTest {
 
     private fun assertNear(msg: String, expected: Int, actual: Int, tol: Int) =
         org.junit.Assert.assertTrue("$msg: expected $expected, got $actual", kotlin.math.abs(expected - actual) <= tol)
+
+    // --- color / luminance ranges, feather, eyedropper (M2b) ---
+
+    /** Renders [layers] over [src] and returns every pixel (ARGB), row by row. */
+    private fun pixels(src: Bitmap, layers: List<Layer>, setup: (Pipeline, Bitmap) -> Unit = { p, b -> p.setSource(b) }): IntArray =
+        Offscreen().use {
+            val p = Pipeline()
+            try {
+                setup(p, src)
+                val out = p.renderToBitmap(layers)
+                IntArray(out.width * out.height).also { out.getPixels(it, 0, out.width, 0, 0, out.width, out.height) }
+            } finally {
+                p.release()
+            }
+        }
+
+    @Test
+    fun luminanceStepSelectsOnlyItsRange() {
+        val ramp = Bitmap.createBitmap(256, 1, Bitmap.Config.ARGB_8888).apply { for (x in 0 until 256) setPixel(x, 0, Color.rgb(x, x, x)) }
+        val out = pixels(ramp, listOf(plusOne.copy(mask = Mask(listOf(LuminanceStep(0.4f, 0.4f, 0.6f, 0.6f))))))
+        for (x in 0 until 256) {
+            val inside = x / 255.0 in 0.41..0.59
+            val outside = x / 255.0 !in 0.39..0.61
+            if (inside) assertTrue("x=$x should change", Color.red(out[x]) > x + 5)
+            if (outside) assertEquals("x=$x should not change", x.toDouble(), Color.red(out[x]).toDouble(), 1.0)
+        }
+    }
+
+    @Test
+    fun colorStepSelectsTheSampledHueOnly() {
+        val red = Color.rgb(200, 40, 40)
+        val blue = Color.rgb(40, 40, 200)
+        val src = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { for (y in 0 until 8) for (x in 0 until 8) setPixel(x, y, if (x < 4) red else blue) }
+        val step = ColorStep(listOf(200 / 255f, 40 / 255f, 40 / 255f))
+        val out = pixels(src, listOf(plusOne.copy(mask = Mask(listOf(step)))))
+        assertTrue("red changed", Color.green(out[0]) > 40 + 10)
+        assertEquals("blue unchanged", 40.0, Color.green(out[7]).toDouble(), 1.0)
+    }
+
+    @Test
+    fun featherSoftensAnEdgeEvenly() {
+        // 200 px tall: feather 1 = 6 px radius. Hard dab edge 50 px right of centre.
+        val gray = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(128, 128, 128)) }
+        val out = pixels(gray, listOf(plusOne.copy(mask = Mask(listOf(dab(0.5f, 0.5f, 0.25f).copy(feather = 1f))))))
+        fun f(x: Int) = (Color.red(out[100 * 200 + x]) - 128) / (plusOneValue - 128)
+        assertEquals("on the edge", 0.5, f(150), 0.12)
+        assertTrue("well inside: ${f(140)}", f(140) > 0.9)
+        assertTrue("well outside: ${f(160)}", f(160) < 0.1)
+        assertTrue("softened: ${f(147)}", f(147) in 0.55..0.95)
+    }
+
+    @Test
+    fun paddedTileMatchesFullRenderWithFeather() {
+        val src = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888).apply {
+            for (y in 0 until 200) for (x in 0 until 200) setPixel(x, y, Color.rgb(x, y, 128))
+        }
+        val layers = listOf(plusOne.copy(mask = Mask(listOf(dab(0.45f, 0.5f, 0.2f).copy(feather = 1f), LuminanceStep.Midtones.copy(add = false, feather = 0.5f)))))
+        val full = pixels(src, layers)
+        // tile covering x, y in 40..140 plus 8 px of overlap, as export does
+        val tile = Bitmap.createBitmap(src, 32, 32, 116, 116)
+        val part = pixels(tile, layers) { p, b -> p.setSource(b, 32, 32, 200, 200) }
+        for (y in 40 until 140) for (x in 40 until 140) {
+            val a = full[y * 200 + x]
+            val b = part[(y - 32) * 116 + (x - 32)]
+            for (sh in listOf(16, 8, 0)) assertNear("($x,$y)", (a shr sh) and 0xFF, (b shr sh) and 0xFF, 2)
+        }
+    }
+
+    @Test
+    fun eyedropperReadsTheLayersBelow() = Offscreen().use {
+        val p = Pipeline()
+        try {
+            p.setSource(Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(128, 128, 128)) })
+            val c = p.sample(listOf(plusOne), 0.5f, 0.5f)
+            c.forEach { assertEquals(plusOneValue / 255, it.toDouble(), 2.0 / 255) }
+        } finally {
+            p.release()
+        }
+    }
+
+    @Test
+    fun luminanceFollowsEarlierLayers() {
+        // gray 128 (luma 0.5) is outside 0.6..0.8 until the layer below brightens it to ~0.69
+        val b = Layer(2).with(ColorParam.Exposure, 100f / 3).copy(mask = Mask(listOf(LuminanceStep(0.6f, 0.6f, 0.8f, 0.8f))))
+        assertEquals(128, reds(listOf(b), 8, 8)[0])
+        val twice = 255 * linearToSrgb(4 * srgbToLinear(128 / 255.0))
+        assertEquals(twice, reds(listOf(plusOne, b), 8, 8)[0].toDouble(), 2.0)
+    }
 }

@@ -6,9 +6,13 @@ import android.opengl.GLES30.*
 import android.opengl.GLUtils
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorParam
+import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Layer
+import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.Mask
+import dev.bloom.editor.model.MaskStep
+import kotlin.math.sqrt
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -34,17 +38,20 @@ class Pipeline {
 
     // Mask geometry: maps a pipeline pixel to upright image coordinates (0..1, top-left), so masks line up in export tiles too.
     private val geo = FloatArray(5) // origin x, y, full width, full height, upright aspect
+    private var uprightHeight = 1f // in source pixels; feather radii are relative to it
     private val toUpright = FloatArray(9)
     private val fromUpright = FloatArray(9)
-    private class MaskTex(val tex: Int, val fbo: Int, var mask: Mask? = null)
+    private class MaskTex(val tex: Int, val fbo: Int, var mask: Mask? = null, var below: List<Layer>? = null)
     private val masks = HashMap<Long, MaskTex>()
     private var scratch: MaskTex? = null // ping-pong partner while combining steps
-    private var brush: MaskTex? = null // one brush step's dabs
+    private var brush: MaskTex? = null // one step's value when it comes from a texture (brush dabs, or feathered)
+    private var soft: MaskTex? = null // feather blur intermediate
 
     private val colorProgram = link(PASS_VERTEX, COLOR_FRAGMENT)
     private val copyProgram = link(PASS_VERTEX, COPY_FRAGMENT)
     private val maskProgram = link(PASS_VERTEX, MASK_FRAGMENT)
     private val dabProgram = link(DAB_VERTEX, DAB_FRAGMENT)
+    private val blurProgram = link(PASS_VERTEX, BLUR_FRAGMENT)
     private val params = FloatArray(ColorParam.entries.size)
 
     // Half-float intermediates keep values above 1 between passes; plain RGBA8 is the fallback.
@@ -56,6 +63,7 @@ class Pipeline {
         glUniform1i(glGetUniformLocation(colorProgram, "uMask"), 1)
         glUseProgram(maskProgram)
         glUniform1i(glGetUniformLocation(maskProgram, "uBrush"), 1)
+        glUniform1i(glGetUniformLocation(maskProgram, "uBelow"), 2)
     }
 
     /**
@@ -76,6 +84,7 @@ class Pipeline {
             allocTargets()
         }
         geo[0] = originX.toFloat(); geo[1] = originY.toFloat(); geo[2] = fullW.toFloat(); geo[3] = fullH.toFloat(); geo[4] = aspect
+        uprightHeight = sqrt(fullW.toFloat() * fullH / aspect) // upright w × h = full w × h, and w / h = aspect
         columnMajor(orient, toUpright)
         columnMajor(Matrix().also { orient.invert(it) }, fromUpright)
         masks.values.forEach { it.mask = null }
@@ -89,7 +98,7 @@ class Pipeline {
         masks.keys.filter { id -> layers.none { it.id == id } }.forEach { id -> masks.remove(id)?.let(::delete) }
         var input = source
         active.forEachIndexed { i, l ->
-            val m = if (l.mask.active) maskFor(l) else 0
+            val m = if (l.mask.active) maskFor(l, input, active.subList(0, i)) else 0
             val out = i % 2
             glBindFramebuffer(GL_FRAMEBUFFER, fbo[out])
             glViewport(0, 0, width, height)
@@ -120,7 +129,26 @@ class Pipeline {
 
     /** Renders [layers] and reads the result back as an 8-bit bitmap (export). */
     fun renderToBitmap(layers: List<Layer>): Bitmap {
-        val t = render(layers)
+        copyToRead(render(layers))
+        val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buf)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { copyPixelsFromBuffer(buf.rewind()) }
+    }
+
+    /** Eyedropper: the color of [layers] at upright (u, v), averaged over 3×3 pixels, as sRGB 0..1. Preview only (no tile offset). */
+    fun sample(layers: List<Layer>, u: Float, v: Float): FloatArray {
+        copyToRead(render(layers))
+        val x = (u * width).toInt().coerceIn(1, width - 2)
+        val y = (v * height).toInt().coerceIn(1, height - 2)
+        val buf = ByteBuffer.allocateDirect(9 * 4).order(ByteOrder.nativeOrder())
+        glReadPixels(x - 1, y - 1, 3, 3, GL_RGBA, GL_UNSIGNED_BYTE, buf)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        return FloatArray(3) { c -> (0 until 9).sumOf { buf.get(it * 4 + c).toInt() and 0xFF } / 9f / 255f }
+    }
+
+    /** Copies [t] into the RGBA8 read target and leaves that framebuffer bound for glReadPixels. */
+    private fun copyToRead(t: Int) {
         if (readW != width || readH != height) {
             glDeleteTextures(1, read, 0)
             glDeleteFramebuffers(1, read, 1)
@@ -137,10 +165,6 @@ class Pipeline {
         glViewport(0, 0, width, height)
         glUseProgram(copyProgram)
         drawQuad(t)
-        val buf = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
-        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buf)
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply { copyPixelsFromBuffer(buf.rewind()) }
     }
 
     fun release() {
@@ -150,34 +174,85 @@ class Pipeline {
         glDeleteTextures(1, read, 0)
         glDeleteFramebuffers(1, read, 1)
         freeMasks()
-        listOf(colorProgram, copyProgram, maskProgram, dabProgram).forEach(::glDeleteProgram)
+        listOf(colorProgram, copyProgram, maskProgram, dabProgram, blurProgram).forEach(::glDeleteProgram)
     }
 
-    /** Builds the layer's mask texture, or reuses it if the mask hasn't changed since this source was set. */
-    private fun maskFor(l: Layer): Int {
+    /**
+     * Builds the layer's mask texture, or reuses it if neither the mask nor (for Color/Luminance steps) the layers below
+     * have changed since this source was set. [below] is the composite under the layer, [belowLayers] what made it.
+     */
+    private fun maskFor(l: Layer, below: Int, belowLayers: List<Layer>): Int {
         val e = masks.getOrPut(l.id) { newMask() }
-        if (e.mask == l.mask) return e.tex
+        val key = if (l.mask.readsBelow) belowLayers else null
+        if (e.mask == l.mask && e.below == key) return e.tex
         e.mask = l.mask
+        e.below = key
         val steps = l.mask.steps.filter { it.visible }
         val other = scratch!!
+        val b = brush!!
         steps.forEachIndexed { i, s ->
-            if (s is BrushStep) drawDabs(s)
+            // A step whose value comes from a texture: brush dabs, or any feathered step drawn and blurred first.
+            val fromTex = s is BrushStep || s.feather > 0f
+            if (s is BrushStep) drawDabs(s) else if (fromTex) drawStep(s, b.fbo, 0, below, first = true, valueOnly = true)
+            if (s.feather > 0f) feather(s.feather)
             // alternate targets so the last step lands in the layer's own texture
             val (dst, prev) = if ((steps.size - 1 - i) % 2 == 0) e to other else other to e
-            glBindFramebuffer(GL_FRAMEBUFFER, dst.fbo)
-            glViewport(0, 0, width, height)
-            glUseProgram(maskProgram)
-            setGeometry(maskProgram, toUpright)
-            glUniform1i(glGetUniformLocation(maskProgram, "uFirst"), if (i == 0) 1 else 0)
-            glUniform1i(glGetUniformLocation(maskProgram, "uAdd"), if (s.add) 1 else 0)
-            val g = s as? GradientStep
-            glUniform1i(glGetUniformLocation(maskProgram, "uKind"), if (g == null) 0 else if (g.radial) 2 else 1)
-            if (g != null) glUniform4f(glGetUniformLocation(maskProgram, "uG"), g.x0, g.y0, g.x1, g.y1)
-            glActiveTexture(GL_TEXTURE1)
-            glBindTexture(GL_TEXTURE_2D, brush!!.tex)
-            drawQuad(prev.tex)
+            drawStep(if (fromTex) null else s, dst.fbo, prev.tex, below, first = i == 0, valueOnly = false, add = s.add)
         }
         return e.tex
+    }
+
+    /**
+     * One pass of the mask program into [fbo]. [s] = null takes the step value from the brush texture.
+     * valueOnly writes the step value itself; otherwise it is combined with [prev] (the mask so far).
+     */
+    private fun drawStep(s: MaskStep?, fbo: Int, prev: Int, below: Int, first: Boolean, valueOnly: Boolean, add: Boolean = true) {
+        val p = maskProgram
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+        glViewport(0, 0, width, height)
+        glUseProgram(p)
+        setGeometry(p, toUpright)
+        glUniform1i(glGetUniformLocation(p, "uFirst"), if (first) 1 else 0)
+        glUniform1i(glGetUniformLocation(p, "uValueOnly"), if (valueOnly) 1 else 0)
+        glUniform1i(glGetUniformLocation(p, "uAdd"), if (add) 1 else 0)
+        val kind = when (s) {
+            null, is BrushStep -> 0
+            is GradientStep -> if (s.radial) 2 else 1
+            is ColorStep -> 3
+            is LuminanceStep -> 4
+        }
+        glUniform1i(glGetUniformLocation(p, "uKind"), kind)
+        when (s) {
+            is GradientStep -> glUniform4f(glGetUniformLocation(p, "uG"), s.x0, s.y0, s.x1, s.y1)
+            is LuminanceStep -> glUniform4f(glGetUniformLocation(p, "uG"), s.a, s.b, s.c, s.d)
+            is ColorStep -> {
+                val n = minOf(s.samples.size / 3, ColorStep.MAX_SAMPLES)
+                glUniform1i(glGetUniformLocation(p, "uN"), n)
+                if (n > 0) glUniform3fv(glGetUniformLocation(p, "uS"), n, s.samples.toFloatArray(), 0)
+                glUniform4f(glGetUniformLocation(p, "uG"), s.range, s.smooth, 0f, 0f)
+            }
+            else -> Unit
+        }
+        glActiveTexture(GL_TEXTURE1)
+        glBindTexture(GL_TEXTURE_2D, brush!!.tex)
+        glActiveTexture(GL_TEXTURE2)
+        glBindTexture(GL_TEXTURE_2D, below)
+        drawQuad(prev)
+    }
+
+    /** Blurs the brush texture in place: horizontal into [soft], vertical back. Radius = [amount] × 3% of the upright image height. */
+    private fun feather(amount: Float) {
+        val taps = 12 // per side; the kernel spans ±2σ
+        val stride = amount * 0.03f * uprightHeight / taps // source pixels per tap, the same on both axes
+        val b = brush!!
+        val t = soft!!
+        glUseProgram(blurProgram)
+        for ((src, dst, dir) in listOf(Triple(b, t, 0), Triple(t, b, 1))) {
+            glBindFramebuffer(GL_FRAMEBUFFER, dst.fbo)
+            glViewport(0, 0, width, height)
+            glUniform2f(glGetUniformLocation(blurProgram, "uStep"), if (dir == 0) stride / width else 0f, if (dir == 1) stride / height else 0f)
+            drawQuad(src.tex)
+        }
     }
 
     private fun drawDabs(s: BrushStep) {
@@ -233,10 +308,11 @@ class Pipeline {
     }
 
     private fun freeMasks() {
-        (masks.values + listOfNotNull(scratch, brush)).forEach(::delete)
+        (masks.values + listOfNotNull(scratch, brush, soft)).forEach(::delete)
         masks.clear()
         scratch = null
         brush = null
+        soft = null
     }
 
     private fun allocTargets() {
@@ -254,6 +330,7 @@ class Pipeline {
         freeMasks()
         scratch = newMask()
         brush = newMask()
+        soft = newMask()
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
     }
 
@@ -328,33 +405,88 @@ void main() {
     outColor = vec4(mix(src.rgb, p, uOpacity * m), 1.0);
 }"""
 
-        // Combines one mask step into the mask so far (uTex). uKind: 0 brush (uBrush), 1 linear, 2 radial gradient.
+        // Combines one mask step into the mask so far (uTex), or with uValueOnly writes the step value alone.
+        // uKind: 0 from texture (uBrush), 1 linear, 2 radial gradient, 3 color range, 4 luminance range.
         // Gradient math runs in upright image coordinates scaled by aspect, so circles stay round.
+        // Color and luminance read the composite of the layers below (uBelow).
         const val MASK_FRAGMENT = """#version 300 es
 precision highp float;
 uniform sampler2D uTex;
 uniform sampler2D uBrush;
+uniform sampler2D uBelow;
 uniform mat3 uMap;
 uniform vec2 uOrigin;
 uniform vec2 uFull;
 uniform float uAspect;
 uniform bool uFirst;
 uniform bool uAdd;
+uniform bool uValueOnly;
 uniform int uKind;
 uniform vec4 uG;
+uniform vec3 uS[4];
+uniform int uN;
 out vec4 outColor;
+vec3 toLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+vec3 oklab(vec3 c) {
+    c = toLinear(clamp(c, 0.0, 1.0));
+    vec3 lms = pow(vec3(
+        0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b,
+        0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b,
+        0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b), vec3(1.0 / 3.0));
+    return vec3(
+        0.2104542553 * lms.x + 0.7936177850 * lms.y - 0.0040720468 * lms.z,
+        1.9779984951 * lms.x - 2.4285922050 * lms.y + 0.4505937099 * lms.z,
+        0.0259040371 * lms.x + 0.7827717662 * lms.y - 0.8086757660 * lms.z);
+}
+// 0 below a, 1 from b; a hard step when a == b
+float rise(float a, float b, float x) { return b <= a ? step(a, x) : smoothstep(a, b, x); }
 void main() {
     ivec2 px = ivec2(gl_FragCoord.xy);
-    float prev = uFirst ? 0.0 : texelFetch(uTex, px, 0).r;
-    vec2 a = vec2(uAspect, 1.0);
-    vec2 q = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy * a;
-    vec2 q0 = uG.xy * a;
-    vec2 d = uG.zw * a - q0;
     float s;
     if (uKind == 0) s = texelFetch(uBrush, px, 0).r;
-    else if (uKind == 1) s = 1.0 - smoothstep(0.0, 1.0, dot(q - q0, d) / max(dot(d, d), 1e-8));
-    else s = 1.0 - smoothstep(0.5, 1.0, length(q - q0) / max(length(d), 1e-6));
-    outColor = vec4(uAdd ? max(prev, s) : prev * (1.0 - s), 0.0, 0.0, 1.0);
+    else if (uKind <= 2) {
+        vec2 a = vec2(uAspect, 1.0);
+        vec2 q = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy * a;
+        vec2 q0 = uG.xy * a;
+        vec2 d = uG.zw * a - q0;
+        if (uKind == 1) s = 1.0 - smoothstep(0.0, 1.0, dot(q - q0, d) / max(dot(d, d), 1e-8));
+        else s = 1.0 - smoothstep(0.5, 1.0, length(q - q0) / max(length(d), 1e-6));
+    } else {
+        vec3 c = texelFetch(uBelow, px, 0).rgb;
+        if (uKind == 3) {
+            // lightness counts half, so a sampled blue still matches its lighter and darker shades
+            vec3 w = vec3(0.5, 1.0, 1.0);
+            vec3 lab = oklab(c);
+            float d = 10.0;
+            for (int i = 0; i < 4; i++) if (i < uN) d = min(d, length((lab - oklab(uS[i])) * w));
+            float r = uG.x * 0.25;
+            s = 1.0 - smoothstep(r, r + 0.01 + uG.y * 0.15, d);
+            if (uN == 0) s = 0.0;
+        } else {
+            float l = dot(clamp(c, 0.0, 1.0), vec3(0.2126, 0.7152, 0.0722));
+            s = rise(uG.x, uG.y, l) * (uG.w <= uG.z ? step(l, uG.z) : 1.0 - smoothstep(uG.z, uG.w, l));
+        }
+    }
+    float prev = uFirst ? 0.0 : texelFetch(uTex, px, 0).r;
+    outColor = vec4(uValueOnly ? s : uAdd ? max(prev, s) : prev * (1.0 - s), 0.0, 0.0, 1.0);
+}"""
+
+        // Separable Gaussian, 25 taps spanning ±2σ, uStep apart (uv units, one axis at a time).
+        const val BLUR_FRAGMENT = """#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2 uStep;
+out vec4 outColor;
+void main() {
+    vec2 uv = gl_FragCoord.xy / vec2(textureSize(uTex, 0));
+    float sum = 0.0;
+    float wsum = 0.0;
+    for (int i = -12; i <= 12; i++) {
+        float w = exp(-float(i * i) / 72.0);
+        sum += w * texture(uTex, uv + uStep * float(i)).r;
+        wsum += w;
+    }
+    outColor = vec4(sum / wsum, 0.0, 0.0, 1.0);
 }"""
 
         // One instanced quad per dab: centre in upright coordinates -> source pixel -> this tile's clip space.

@@ -74,7 +74,10 @@ import dev.bloom.editor.ImageIo
 import dev.bloom.editor.PhotoView
 import dev.bloom.editor.model.ColorParam
 import dev.bloom.editor.model.Document
+import dev.bloom.editor.model.BrushStep
+import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
+import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.History
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.Mask
@@ -106,6 +109,7 @@ class EditorState {
     var brushSize by mutableFloatStateOf(40f) // radius in dp on screen
     var softness by mutableFloatStateOf(50f)
     var flow by mutableFloatStateOf(100f)
+    var addingSample by mutableStateOf(false) // the next eyedropper tap adds a sample instead of replacing
     private var nextId = 1L
 
     val doc: Document get() = history.current
@@ -147,16 +151,34 @@ class EditorState {
     fun selectStep(i: Int) {
         stepIndex = if (stepIndex == i) null else i
         val s = draft?.mask?.steps?.getOrNull(i) ?: return
-        maskTool = if (s is GradientStep) MaskTool.Gradient else MaskTool.Brush
+        maskTool = toolFor(s)
+        addingSample = false
+    }
+
+    private fun toolFor(s: MaskStep) = when (s) {
+        is BrushStep -> MaskTool.Brush
+        is GradientStep -> MaskTool.Gradient
+        is ColorStep -> MaskTool.Color
+        is LuminanceStep -> MaskTool.Luminance
+    }
+
+    /** Adds [step] at the end of the mask, selects it and switches to its tool. */
+    fun addStep(step: MaskStep) {
+        val m = draft?.mask ?: return
+        setMask(m.copy(steps = m.steps + step))
+        stepIndex = m.steps.size
+        maskTool = toolFor(step)
+        addingSample = false
+    }
+
+    /** Committed layers under the draft: what Color and Luminance steps and the eyedropper see. */
+    fun below(): List<Layer> {
+        val d = draft ?: return emptyList()
+        return if (editingId != null) doc.layers.takeWhile { it.id != d.id } else doc.layers
     }
 
     /** Adds a gradient with the current sign (full at the top, fading out past the middle) and selects it. */
-    fun addGradient() {
-        val m = draft?.mask ?: return
-        setMask(m.copy(steps = m.steps + GradientStep(false, 0.5f, 0.2f, 0.5f, 0.6f, add = maskAdd)))
-        stepIndex = m.steps.size
-        maskTool = MaskTool.Gradient
-    }
+    fun addGradient() = addStep(GradientStep(false, 0.5f, 0.2f, 0.5f, 0.6f, add = maskAdd))
 
     val dirty: Boolean
         get() = draft?.let { d -> if (editingId != null) d != doc.layers.firstOrNull { it.id == d.id } else d.values.any { it != 0f } } ?: false
@@ -208,12 +230,19 @@ fun EditorScreen(photoView: PhotoView) {
         photoView.onTransform = { transformTick++ }
         snapshotFlow { state.rendered() }.collect(photoView::setLayers)
     }
-    // Mask overlay: tint + edge in mask mode, edge only in the tool. Painting is on only in mask mode.
+    // Mask overlay and painting only in mask mode.
     val shownPreview = state.preview
+    // Loupe while painting or picking a color; brush ring only for the brush.
+    LaunchedEffect(state.maskMode, state.maskTool, state.brushSize) {
+        photoView.loupe = state.maskMode && (state.maskTool == MaskTool.Brush || state.maskTool == MaskTool.Color)
+        photoView.brushRadiusPx = if (state.maskMode && state.maskTool == MaskTool.Brush) state.brushSize * density.density else 0f
+    }
     LaunchedEffect(state.draft?.id, state.maskMode, shownPreview) {
-        photoView.setOverlay(state.draft?.id, state.maskMode)
+        photoView.setOverlay(state.draft?.id?.takeIf { state.maskMode })
         photoView.onTool = if (state.maskMode && shownPreview != null) {
-            MaskTouch(state, photoView, shownPreview.width.toFloat() / shownPreview.height, density.density)::on
+            MaskTouch(state, photoView, shownPreview.width.toFloat() / shownPreview.height, density.density) { u, v, done ->
+                photoView.sample(state.below(), u, v, done)
+            }::on
         } else null
     }
 

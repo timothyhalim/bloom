@@ -32,29 +32,72 @@ data class Stroke(val points: List<Float>, val radius: Float, val softness: Floa
     }
 }
 
-/** One mask step. Add: mask = max(mask, step). Remove: mask = mask × (1 − step). */
+/**
+ * One mask step. Add: mask = max(mask, step). Remove: mask = mask × (1 − step).
+ * [feather] (0..1) blurs the step's edge before it is combined; 1 = a radius of 3% of the image height.
+ */
 sealed interface MaskStep {
     val add: Boolean
     val visible: Boolean
+    val feather: Float
 }
 
-data class BrushStep(val strokes: List<Stroke> = emptyList(), override val add: Boolean = true, override val visible: Boolean = true) : MaskStep
+data class BrushStep(
+    val strokes: List<Stroke> = emptyList(),
+    override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
+) : MaskStep
 
 /** Linear: full at (x0, y0), fading to none at (x1, y1). Radial: centre (x0, y0), edge at (x1, y1). Upright image coordinates. */
 data class GradientStep(
     val radial: Boolean, val x0: Float, val y0: Float, val x1: Float, val y1: Float,
-    override val add: Boolean = true, override val visible: Boolean = true,
+    override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
 ) : MaskStep
 
-fun MaskStep.with(add: Boolean = this.add, visible: Boolean = this.visible): MaskStep = when (this) {
-    is BrushStep -> copy(add = add, visible = visible)
-    is GradientStep -> copy(add = add, visible = visible)
+/**
+ * Selects colors of the layers below close to any of [samples] (r, g, b triples, sRGB 0..1, at most [MAX_SAMPLES]).
+ * [range] widens the match, [smooth] softens its edge; both 0..1.
+ */
+data class ColorStep(
+    val samples: List<Float> = emptyList(), val range: Float = 0.3f, val smooth: Float = 0.5f,
+    override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
+) : MaskStep {
+    companion object {
+        const val MAX_SAMPLES = 4
+    }
+}
+
+/** Selects by brightness of the layers below: rises from [a] to [b], full to [c], falls to none at [d] (0..1, a ≤ b ≤ c ≤ d). */
+data class LuminanceStep(
+    val a: Float, val b: Float, val c: Float, val d: Float,
+    override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
+) : MaskStep {
+    companion object {
+        val Shadows = LuminanceStep(0f, 0f, 0.25f, 0.4f)
+        val Midtones = LuminanceStep(0.25f, 0.4f, 0.6f, 0.75f)
+        val Highlights = LuminanceStep(0.6f, 0.75f, 1f, 1f)
+    }
+}
+
+fun MaskStep.with(add: Boolean = this.add, visible: Boolean = this.visible, feather: Float = this.feather): MaskStep = when (this) {
+    is BrushStep -> copy(add = add, visible = visible, feather = feather)
+    is GradientStep -> copy(add = add, visible = visible, feather = feather)
+    is ColorStep -> copy(add = add, visible = visible, feather = feather)
+    is LuminanceStep -> copy(add = add, visible = visible, feather = feather)
 }
 
 /** Ordered steps, evaluated first to last from empty, then [invert]. */
 data class Mask(val steps: List<MaskStep> = emptyList(), val invert: Boolean = false) {
     /** A mask with no visible steps leaves the whole layer on. */
     val active: Boolean get() = steps.any { it.visible }
+
+    /** Color and Luminance steps sample the layers below, so the mask changes when they do. */
+    val readsBelow: Boolean get() = steps.any { it.visible && (it is ColorStep || it is LuminanceStep) }
+
+    /** Largest feather of a visible step (0..1); export tiles need that much overlap. */
+    val maxFeather: Float get() = steps.filter { it.visible }.maxOfOrNull { it.feather } ?: 0f
+
+    /** Moves step [from] to index [to], keeping the others in order. */
+    fun move(from: Int, to: Int): Mask = copy(steps = steps.toMutableList().apply { add(to.coerceIn(0, size - 1), removeAt(from)) })
 }
 
 /** One Color layer. Values are slider units (-100..100), indexed by [ColorParam.ordinal]. */

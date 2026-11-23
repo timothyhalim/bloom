@@ -60,18 +60,26 @@ object ImageIo {
             if (exif.isFlipped) postScale(-1f, 1f, 0.5f, 0.5f)
         }
         val aspect = if (exif.rotationDegrees % 180 == 0) w.toFloat() / h else h.toFloat() / w
+        // Feathered masks blur across tile edges, so each tile is rendered with that much overlap and cropped back.
+        val uprightH = if (exif.rotationDegrees % 180 == 0) h else w
+        val feather = layers.filter { it.visible }.maxOfOrNull { it.mask.maxFeather } ?: 0f
+        val pad = if (feather > 0f) (feather * 0.03f * uprightH).toInt() + 2 else 0
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
         val gpu = if (layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
         val pipeline = gpu?.let { Pipeline() }
         try {
-            // Color layers and masks are per-pixel, so tiles need no overlap. Blur/liquify (later) will need padded tiles.
             for (y in 0 until h step TILE) for (x in 0 until w step TILE) {
-                var tile = decoder.decodeRegion(Rect(x, y, minOf(x + TILE, w), minOf(y + TILE, h)), null)
+                val r = Rect(maxOf(x - pad, 0), maxOf(y - pad, 0), minOf(x + TILE + pad, w), minOf(y + TILE + pad, h))
+                var tile = decoder.decodeRegion(r, null)
                 if (pipeline != null) {
-                    pipeline.setSource(tile, x, y, w, h, orient, aspect)
+                    pipeline.setSource(tile, r.left, r.top, w, h, orient, aspect)
                     tile.recycle()
-                    tile = pipeline.renderToBitmap(layers)
+                    val padded = pipeline.renderToBitmap(layers)
+                    tile = if (pad == 0) padded
+                    else Bitmap.createBitmap(padded, x - r.left, y - r.top, minOf(TILE, w - x), minOf(TILE, h - y)).also { padded.recycle() }
+                } else if (pad > 0) {
+                    tile = Bitmap.createBitmap(tile, x - r.left, y - r.top, minOf(TILE, w - x), minOf(TILE, h - y))
                 }
                 canvas.drawBitmap(tile, x.toFloat(), y.toFloat(), null)
                 tile.recycle()
