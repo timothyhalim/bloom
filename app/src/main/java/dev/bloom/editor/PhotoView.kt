@@ -248,7 +248,7 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
 
     fun upload(bmp: Bitmap) {
         bitmap = bmp
-        pipeline?.setSource(bmp)
+        pipeline?.let { it.setSource(bmp); it.setGainmap(ImageIo.gainOf(bmp)) }
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -258,7 +258,7 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         uOffset = glGetUniformLocation(program, "uOffset")
         glUseProgram(program)
         glUniform1i(glGetUniformLocation(program, "uMask"), 1)
-        pipeline = Pipeline().also { p -> bitmap?.let(p::setSource) }
+        pipeline = Pipeline().also { p -> bitmap?.let { p.setSource(it); p.setGainmap(ImageIo.gainOf(it)) } }
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {

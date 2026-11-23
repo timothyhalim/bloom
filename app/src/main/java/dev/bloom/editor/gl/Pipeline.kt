@@ -35,6 +35,16 @@ class Pipeline {
     private var sourceFbo = 0
     private var prepared = false
 
+    // Ultra HDR: the gain map turns the photo back into its full highlight range (hdrSource). The layers then run on both
+    // versions and each pixel blends to the full range as far as the edits darken it, so the photo opens exactly as in the
+    // gallery and lowering Exposure brings back real highlight detail.
+    private var gain: HdrGain? = null
+    private var gainTex = 0
+    private var hdrSource = 0
+    private var hdrFbo = 0
+    private var sdrKeep = 0 // the edited normal photo, kept while the full-range chain runs
+    private var sdrFbo = 0
+
     /** Smooth 8-bit banding in the source before the layers run. No effect on sources with more than 8 bits. */
     var deband = true
         set(v) {
@@ -65,6 +75,7 @@ class Pipeline {
     private val dabProgram = link(DAB_VERTEX, DAB_FRAGMENT)
     private val blurProgram = link(PASS_VERTEX, BLUR_FRAGMENT)
     private val prepareProgram = link(PASS_VERTEX, PREPARE_FRAGMENT)
+    private val combineProgram = link(PASS_VERTEX, COMBINE_FRAGMENT)
     private val params = FloatArray(ColorParam.entries.size)
     private val curveTex = genTexture().also {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -81,13 +92,18 @@ class Pipeline {
     private val truncates = half && writesTruncate()
 
     init {
-        for (prog in listOf(colorProgram, prepareProgram)) {
+        for (prog in listOf(colorProgram, prepareProgram, combineProgram)) {
             glUseProgram(prog)
             glUniform1i(glGetUniformLocation(prog, "uTrunc"), if (truncates) 1 else 0)
         }
         glUseProgram(colorProgram)
         glUniform1i(glGetUniformLocation(colorProgram, "uMask"), 1)
         glUniform1i(glGetUniformLocation(colorProgram, "uCurve"), 3)
+        glUseProgram(prepareProgram)
+        glUniform1i(glGetUniformLocation(prepareProgram, "uGain"), 1)
+        glUseProgram(combineProgram)
+        glUniform1i(glGetUniformLocation(combineProgram, "uSdr"), 1)
+        glUniform1i(glGetUniformLocation(combineProgram, "uSrc"), 2)
         glUseProgram(maskProgram)
         glUniform1i(glGetUniformLocation(maskProgram, "uBrush"), 1)
         glUniform1i(glGetUniformLocation(maskProgram, "uBelow"), 2)
@@ -127,6 +143,23 @@ class Pipeline {
         rendered = null
     }
 
+    /** The whole photo's Ultra HDR gain map, in the same orientation as [setSource]'s tiles; null for an ordinary photo. */
+    fun setGainmap(g: HdrGain?) {
+        glDeleteTextures(1, intArrayOf(gainTex), 0)
+        gainTex = 0
+        gain = g
+        if (g != null) {
+            gainTex = genTexture()
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            // single-channel maps go up as RGBA (value in alpha): GL_ALPHA textures stall some drivers (seen on the emulator)
+            val m = if (g.map.config == Bitmap.Config.ALPHA_8) g.map.copy(Bitmap.Config.ARGB_8888, false) else g.map
+            GLUtils.texImage2D(GL_TEXTURE_2D, 0, m, 0)
+            if (m !== g.map) m.recycle()
+        }
+        prepared = false
+        rendered = null
+    }
+
     /** Renders [layers] (bottom to top) and returns the texture holding the result. Cached until layers change. */
     fun render(layers: List<Layer>): Int {
         if (!prepared) prepare()
@@ -134,10 +167,40 @@ class Pipeline {
         if (active == rendered) return result
         masks.keys.filter { id -> layers.none { it.id == id } }.forEach { id -> masks.remove(id)?.let(::delete) }
         var input = source
+        if (gain != null && active.isNotEmpty()) {
+            val sdr = chain(source, active, sdrFbo to sdrKeep)
+            val hdr = chain(hdrSource, active, null) // masks come from the cache filled by the normal chain
+            val out = if (hdr == tex[0]) 1 else 0
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[out])
+            glViewport(0, 0, width, height)
+            glUseProgram(combineProgram)
+            glActiveTexture(GL_TEXTURE1)
+            glBindTexture(GL_TEXTURE_2D, sdr)
+            glActiveTexture(GL_TEXTURE2)
+            glBindTexture(GL_TEXTURE_2D, source)
+            drawQuad(hdr)
+            input = tex[out]
+        } else if (active.isNotEmpty()) {
+            input = chain(source, active, null)
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        if (active.isNotEmpty()) {
+            glBindTexture(GL_TEXTURE_2D, input)
+            glGenerateMipmap(GL_TEXTURE_2D) // the preview minifies the result
+        }
+        rendered = active
+        result = input
+        return input
+    }
+
+    /** Runs [active] over [src] through the ping-pong targets, the last pass into [last] (fbo, texture) if given. */
+    private fun chain(src: Int, active: List<Layer>, last: Pair<Int, Int>?): Int {
+        var input = src
         active.forEachIndexed { i, l ->
             val m = if (l.mask.active) maskFor(l, input, active.subList(0, i)) else 0
             val out = i % 2
-            glBindFramebuffer(GL_FRAMEBUFFER, fbo[out])
+            val toLast = last != null && i == active.lastIndex
+            glBindFramebuffer(GL_FRAMEBUFFER, if (toLast) last!!.first else fbo[out])
             glViewport(0, 0, width, height)
             glUseProgram(colorProgram)
             for (p in params.indices) params[p] = l.values[p] / 100f
@@ -158,15 +221,8 @@ class Pipeline {
             glActiveTexture(GL_TEXTURE1)
             glBindTexture(GL_TEXTURE_2D, m)
             drawQuad(input)
-            input = tex[out]
+            input = if (toLast) last!!.second else tex[out]
         }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        if (active.isNotEmpty()) {
-            glBindTexture(GL_TEXTURE_2D, input)
-            glGenerateMipmap(GL_TEXTURE_2D) // the preview minifies the result
-        }
-        rendered = active
-        result = input
         return input
     }
 
@@ -214,14 +270,15 @@ class Pipeline {
     }
 
     fun release() {
-        glDeleteTextures(3, intArrayOf(raw, source, curveTex), 0)
+        glDeleteTextures(4, intArrayOf(raw, source, curveTex, gainTex), 0)
+        freeHdrTargets()
         glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
         glDeleteTextures(2, tex, 0)
         glDeleteFramebuffers(2, fbo, 0)
         glDeleteTextures(1, read, 0)
         glDeleteFramebuffers(1, read, 1)
         freeMasks()
-        listOf(colorProgram, copyProgram, maskProgram, dabProgram, blurProgram, prepareProgram).forEach(::glDeleteProgram)
+        listOf(colorProgram, copyProgram, maskProgram, dabProgram, blurProgram, prepareProgram, combineProgram).forEach(::glDeleteProgram)
     }
 
     /** Writes 0.5 + 3/4 of a half-float step into an RGBA16F target and reads it back: 0.5 means the GPU truncates. */
@@ -247,19 +304,60 @@ class Pipeline {
 
     /** raw -> source: sRGB-encode linear decodes and deband 8-bit ones, then mipmap for the preview. */
     private fun prepare() {
-        glBindFramebuffer(GL_FRAMEBUFFER, sourceFbo)
+        drawPrepare(sourceFbo, false)
+        glBindTexture(GL_TEXTURE_2D, source)
+        glGenerateMipmap(GL_TEXTURE_2D)
+        val g = gain
+        if (g != null) {
+            if (hdrSource == 0) {
+                target().let { (t, f) -> hdrSource = t; hdrFbo = f }
+                target().let { (t, f) -> sdrKeep = t; sdrFbo = f }
+            }
+            glUseProgram(prepareProgram)
+            glUniform3fv(glGetUniformLocation(prepareProgram, "uRatioMin"), 1, g.ratioMin, 0)
+            glUniform3fv(glGetUniformLocation(prepareProgram, "uRatioMax"), 1, g.ratioMax, 0)
+            glUniform3fv(glGetUniformLocation(prepareProgram, "uGamma"), 1, g.gamma, 0)
+            glUniform3fv(glGetUniformLocation(prepareProgram, "uEpsSdr"), 1, g.epsSdr, 0)
+            glUniform3fv(glGetUniformLocation(prepareProgram, "uEpsHdr"), 1, g.epsHdr, 0)
+            glUniform1i(glGetUniformLocation(prepareProgram, "uGainAlpha"), if (g.map.config == Bitmap.Config.ALPHA_8) 1 else 0)
+            glUniform2f(glGetUniformLocation(prepareProgram, "uFull"), geo[2], geo[3])
+            glActiveTexture(GL_TEXTURE1)
+            glBindTexture(GL_TEXTURE_2D, gainTex)
+            drawPrepare(hdrFbo, true)
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        prepared = true
+        rendered = null
+    }
+
+    private fun drawPrepare(target: Int, hdr: Boolean) {
+        glBindFramebuffer(GL_FRAMEBUFFER, target)
         glViewport(0, 0, width, height)
         glUseProgram(prepareProgram)
+        glUniform1i(glGetUniformLocation(prepareProgram, "uHdr"), if (hdr) 1 else 0)
         glUniform1i(glGetUniformLocation(prepareProgram, "uLinear"), if (rawLinear) 1 else 0)
         glUniform1i(glGetUniformLocation(prepareProgram, "uDeband"), if (deband && !rawDeep) 1 else 0)
         glUniform1f(glGetUniformLocation(prepareProgram, "uRadius"), DEBAND_RADIUS * uprightHeight)
         glUniform2f(glGetUniformLocation(prepareProgram, "uOrigin"), geo[0], geo[1])
         drawQuad(raw)
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        glBindTexture(GL_TEXTURE_2D, source)
-        glGenerateMipmap(GL_TEXTURE_2D)
-        prepared = true
-        rendered = null
+    }
+
+    /** A single-level render target of the pipeline's size: (texture, framebuffer). */
+    private fun target(): Pair<Int, Int> {
+        val t = genTexture()
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexStorage2D(GL_TEXTURE_2D, 1, if (half) GL_RGBA16F else GL_RGBA8, width, height)
+        val f = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
+        glBindFramebuffer(GL_FRAMEBUFFER, f)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t, 0)
+        checkFramebuffer()
+        return t to f
+    }
+
+    private fun freeHdrTargets() {
+        glDeleteTextures(2, intArrayOf(hdrSource, sdrKeep), 0)
+        glDeleteFramebuffers(2, intArrayOf(hdrFbo, sdrFbo), 0)
+        hdrSource = 0; hdrFbo = 0; sdrKeep = 0; sdrFbo = 0
     }
 
     /**
@@ -407,6 +505,7 @@ class Pipeline {
         val levels = 32 - Integer.numberOfLeadingZeros(maxOf(width, height))
         glDeleteTextures(1, intArrayOf(source), 0)
         glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
+        freeHdrTargets()
         source = genTexture()
         glTexStorage2D(GL_TEXTURE_2D, levels, if (half) GL_RGBA16F else GL_RGBA8, width, height)
         sourceFbo = IntArray(1).also { glGenFramebuffers(1, it, 0) }[0]
@@ -448,7 +547,18 @@ uniform bool uDeband;
 """ + HALF_ROUND + """
 uniform float uRadius;
 uniform vec2 uOrigin;
+uniform bool uHdr;
+uniform sampler2D uGain;
+uniform bool uGainAlpha;
+uniform vec3 uRatioMin;
+uniform vec3 uRatioMax;
+uniform vec3 uGamma;
+uniform vec3 uEpsSdr;
+uniform vec3 uEpsHdr;
+uniform vec2 uFull;
 out vec4 outColor;
+vec3 lin(vec3 c) { c = max(c, 0.0); return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+vec3 srgb(vec3 c) { c = max(c, 0.0); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 vec3 enc(vec3 c) { c = max(c, 0.0); return uLinear ? mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)) : c; }
 vec3 fetch(vec2 p) { return enc(texelFetch(uTex, clamp(ivec2(p), ivec2(0), textureSize(uTex, 0) - 1), 0).rgb); }
 uvec3 pcg3d(uvec3 v) {
@@ -470,7 +580,34 @@ void main() {
             if (all(lessThan(abs(avg - c), vec3(3.0 / 255.0 / float(i))))) c = avg;
         }
     }
+    if (uHdr) {
+        // Ultra HDR at full headroom (android.graphics.Gainmap): hdr = (sdr + epsSdr) * exp(mix(ln min, ln max, g^gamma)) - epsHdr
+        vec4 t = texture(uGain, (p + uOrigin) / uFull);
+        vec3 g = uGainAlpha ? vec3(t.a) : t.rgb;
+        c = srgb((lin(c) + uEpsSdr) * exp(mix(log(uRatioMin), log(uRatioMax), pow(g, uGamma))) - uEpsHdr);
+    }
     outColor = vec4(store(c), 1.0);
+}"""
+
+        // Ultra HDR: blend the edited normal photo (uSdr) toward the edited full-range one (uTex) as far as the edits darkened
+        // the pixel: unchanged or brighter keeps the gallery look; a stop darker or more shows the full range.
+        const val COMBINE_FRAGMENT = """#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform sampler2D uSdr;
+uniform sampler2D uSrc;
+out vec4 outColor;
+""" + HALF_ROUND + """
+float luma(vec3 c) {
+    c = max(c, 0.0);
+    return dot(mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)), vec3(0.2126, 0.7152, 0.0722));
+}
+void main() {
+    ivec2 px = ivec2(gl_FragCoord.xy);
+    vec3 h = texelFetch(uTex, px, 0).rgb;
+    vec3 s = texelFetch(uSdr, px, 0).rgb;
+    float r = luma(s) / max(luma(texelFetch(uSrc, px, 0).rgb), 1e-4);
+    outColor = vec4(store(mix(s, h, 1.0 - smoothstep(0.5, 1.0, r))), 1.0);
 }"""
 
         /** android.graphics.Matrix is row-major; GLES wants column-major without transpose. */
@@ -681,6 +818,12 @@ internal fun drawFullQuad() {
     glVertexAttribPointer(0, 2, GL_FLOAT, false, 0, QUAD)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
 }
+
+/** An Ultra HDR photo's gain map and its metadata (android.graphics.Gainmap), per channel. */
+class HdrGain(
+    val map: Bitmap, val ratioMin: FloatArray, val ratioMax: FloatArray, val gamma: FloatArray,
+    val epsSdr: FloatArray, val epsHdr: FloatArray,
+)
 
 /** Deband sample radius as a fraction of the upright image height; the second pass reaches twice as far. */
 const val DEBAND_RADIUS = 0.01f

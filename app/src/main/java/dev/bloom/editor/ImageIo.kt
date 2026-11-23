@@ -9,8 +9,10 @@ import android.graphics.ColorSpace
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.net.Uri
+import android.os.Build
 import androidx.exifinterface.media.ExifInterface
 import dev.bloom.editor.gl.DEBAND_RADIUS
+import dev.bloom.editor.gl.HdrGain
 import dev.bloom.editor.gl.Offscreen
 import dev.bloom.editor.gl.Pipeline
 import dev.bloom.editor.model.Layer
@@ -30,7 +32,14 @@ object ImageIo {
     /** The pipeline works in sRGB; wide-gamut photos are converted on decode. Sources deeper than 8 bits still decode to F16. */
     private val SRGB by lazy { ColorSpace.get(ColorSpace.Named.SRGB) } // lazy: JVM unit tests touch this object
 
-    /** Downsampled, upright bitmap for on-screen preview. */
+    /** The photo's Ultra HDR gain map (Android 14+), or null. */
+    fun gainOf(bmp: Bitmap): HdrGain? {
+        if (Build.VERSION.SDK_INT < 34 || !bmp.hasGainmap()) return null
+        val g = bmp.gainmap ?: return null
+        return HdrGain(g.gainmapContents, g.ratioMin, g.ratioMax, g.gamma, g.epsilonSdr, g.epsilonHdr)
+    }
+
+    /** Downsampled, upright bitmap for on-screen preview. Ultra HDR photos keep their gain map (rotated with them). */
     fun loadPreview(cr: ContentResolver, uri: Uri): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         cr.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, bounds) }
@@ -76,6 +85,15 @@ object ImageIo {
         val canvas = Canvas(out)
         val gpu = if (layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
         val pipeline = gpu?.let { Pipeline() }
+        if (pipeline != null && Build.VERSION.SDK_INT >= 34) {
+            // The whole photo's gain map, at the preview's size so export matches it; sensor orientation like the tiles.
+            cr.openInputStream(src)!!.use {
+                BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply {
+                    inSampleSize = sampleSize(w, h, PREVIEW_MAX)
+                    inPreferredColorSpace = SRGB
+                })
+            }?.let { whole -> gainOf(whole)?.let(pipeline::setGainmap); whole.recycle() }
+        }
         try {
             for (y in 0 until h step TILE) for (x in 0 until w step TILE) {
                 val r = Rect(maxOf(x - pad, 0), maxOf(y - pad, 0), minOf(x + TILE + pad, w), minOf(y + TILE + pad, h))

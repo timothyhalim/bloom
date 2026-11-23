@@ -10,3 +10,4 @@ Local test photos, never shipped in the app. For checking banding, 16-bit loadin
 | `8bit_fog_beach.jpg` | Soft grey fog gradients | [Commons](https://commons.wikimedia.org/wiki/File:Beach_covered_in_Fog_(Unsplash).jpg) | CC0 |
 | `8bit_overexposed_glowing_sunset.jpg` | Overexposed, 42% of pixels clipped | [Commons](https://commons.wikimedia.org/wiki/File:Glowing_sunset_at_Island_in_the_Sky_(Unsplash).jpg) | CC0 |
 | `8bit_underexposed_dark_plane_window.jpg` | Underexposed, 50% of pixels near black | [Commons](https://commons.wikimedia.org/wiki/File:Dark_plane_in_bright_skies_(Unsplash).jpg) | CC0 |
+| `uhdr_pixel_01.jpg` | Ultra HDR (JPEG_R) from a Pixel 6 Pro: bright clouds over a car park | [GitHub](https://github.com/MishaalRahmanGH/Ultra_HDR_Samples/blob/main/Originals/Ultra_HDR_Samples_Originals_01.jpg) | CC BY 4.0, Mishaal Rahman |

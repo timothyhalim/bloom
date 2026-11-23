@@ -12,6 +12,7 @@ Free, open-source (GPL-3.0) Android photo editor. Everything that can run on the
 | M2b Masks: color range, luminance range, feather, loupe, reorder, copy/clear | Done (not yet tested on a phone) |
 | M1.5 Curves | Done (not yet tested on a phone) |
 | M2.5a Recover: 16-bit sources kept, smooth banding on 8-bit photos | Done (not yet tested on a phone) |
+| M2.5c part 1: Ultra HDR photos (open as in the gallery; darkening edits reveal the hidden highlight range) | Done (not yet tested on a phone) |
 | Everything below | Not started |
 
 ## Features
@@ -122,3 +123,4 @@ Requested while testing M2a; `design/UI.md` still shows the frozen version.
 - A step's extra settings (Softness, Flow, Smoothness, Feather) open inside the same box as its main slider.
 - Scrolling rows fade at the edge that has more content.
 - The mask overlay (red tint and dashed edge) shows only in mask mode; the tool screen shows the plain result.
+- Exposure reads in stops (EV, −3.0 to +3.0 in 0.1 steps), like a camera.

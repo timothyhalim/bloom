@@ -439,10 +439,10 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
             Row(rowModifier, verticalAlignment = Alignment.CenterVertically) {
                 Text(p.name, Modifier.width(92.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
                 Slider(
-                    value = d[p], onValueChange = { state.draft = d.with(p, it.roundToInt().toFloat()) },
+                    value = d[p], onValueChange = { state.draft = d.with(p, snap(p, it)) },
                     valueRange = -100f..100f, modifier = Modifier.weight(1f), colors = sliderColors(),
                 )
-                Text(signed(d[p]), Modifier.width(44.dp), fontSize = 14.sp, color = Bloom.On)
+                Text(shown(p, d[p]), Modifier.width(44.dp), fontSize = 14.sp, color = Bloom.On)
                 IconButton({ state.draft = d.with(p, 0f) }) { Icon(Icons.Reset, "Reset ${p.name}", tint = Bloom.On) }
             }
         }
@@ -471,7 +471,7 @@ private fun Chrome(state: EditorState, onBarTop: (Float) -> Unit, onDiscard: () 
                     ColorParam.entries.forEach { p ->
                         // Curves sits with the tone controls, before color
                         if (p == ColorParam.Temp) ParamChip(Icons.Curves, "Curves" + if (d.curves.active) ", edited" else "", d.curves.active, state.curvesOpen) { state.curvesOpen = true }
-                        ParamChip(p.icon, "${p.name} ${signed(d[p])}", d[p] != 0f, !state.curvesOpen && p == state.param) {
+                        ParamChip(p.icon, "${p.name} ${shown(p, d[p])}" + if (p == ColorParam.Exposure) " stops" else "", d[p] != 0f, !state.curvesOpen && p == state.param) {
                             state.param = p
                             state.curvesOpen = false
                         }
@@ -518,6 +518,21 @@ private fun ParamChip(icon: ImageVector, desc: String, changed: Boolean, selecte
         Icon(icon, null, Modifier.size(22.dp), tint = if (selected) Bloom.Pollen else Bloom.On)
         // changed values get a dot, so state isn't carried by color alone
         if (changed) Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 6.dp).size(5.dp).background(Bloom.Pollen, CircleShape))
+    }
+}
+
+// Exposure reads in stops (EV), like a camera: the stored ±100 is ±3 stops, set in 0.1-stop steps.
+private fun stops(v: Float) = (v * 3 / 100 * 10).roundToInt() / 10f
+
+private fun snap(p: ColorParam, v: Float) = if (p == ColorParam.Exposure) stops(v) * 100 / 3 else v.roundToInt().toFloat()
+
+private fun shown(p: ColorParam, v: Float): String {
+    if (p != ColorParam.Exposure) return signed(v)
+    val s = stops(v)
+    return when {
+        s > 0 -> "+%.1f".format(s)
+        s < 0 -> "−%.1f".format(-s)
+        else -> "0"
     }
 }
 

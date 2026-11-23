@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.bloom.editor.gl.Offscreen
+import dev.bloom.editor.gl.HdrGain
 import dev.bloom.editor.gl.Pipeline
 import android.graphics.Matrix
 import dev.bloom.editor.model.Blend
@@ -165,6 +166,71 @@ class PipelineTest {
             // eight plain layers: each pass must round its half-float output to nearest, not down
             assertEquals("$space, 8 layers", 128.25, redsOf(src, List(8) { Layer(it.toLong()) }).average(), 0.1)
         }
+    }
+
+    // --- Ultra HDR (M2.5c) ---
+
+    /** A flat gain map: every pixel says "g of the way from ratioMin to ratioMax" (ratios 1 and 4 = up to 2 stops). */
+    private fun flatGain(g: Int, single: Boolean = false) = HdrGain(
+        if (single) Bitmap.createBitmap(4, 4, Bitmap.Config.ALPHA_8).apply { eraseColor(Color.argb(g, 0, 0, 0)) }
+        else Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(g, g, g)) },
+        floatArrayOf(1f, 1f, 1f), floatArrayOf(4f, 4f, 4f), floatArrayOf(1f, 1f, 1f), floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 0f, 0f),
+    )
+
+    private fun hdrReds(layers: List<Layer>, gain: HdrGain?, level: Int = 250): IntArray = Offscreen().use {
+        val p = Pipeline()
+        try {
+            p.setSource(gray(32, 32) { _, _ -> level })
+            p.setGainmap(gain)
+            val out = p.renderToBitmap(layers)
+            IntArray(32 * 32).also { out.getPixels(it, 0, 32, 0, 0, 32, 32) }.map { Color.red(it) }.toIntArray()
+        } finally {
+            p.release()
+        }
+    }
+
+    private val minusTwo = Layer(1).with(ColorParam.Exposure, -200f / 3)
+
+    @Test
+    fun ultraHdrBringsBackHighlightsWhenDarkened() {
+        // full gain = 4x = 2 stops; two stops down lands back on the original value, where an ordinary photo goes grey
+        for (single in listOf(false, true)) {
+            assertEquals("single=$single", 250.0, hdrReds(listOf(minusTwo), flatGain(255, single)).average(), 1.5)
+        }
+        val plain = 255 * linearToSrgb(srgbToLinear(250 / 255.0) / 4)
+        assertEquals(plain, hdrReds(listOf(minusTwo), null).average(), 1.5)
+        // half the gain map (g = 128/255): 4^0.5 = 2x, so two stops down is one stop below the original
+        val half = 255 * linearToSrgb(srgbToLinear(250 / 255.0) * Math.pow(4.0, 128 / 255.0) / 4)
+        assertEquals(half, hdrReds(listOf(minusTwo), flatGain(128)).average(), 1.5)
+    }
+
+    @Test
+    fun ultraHdrOpensLikeTheGalleryPhoto() {
+        val g = flatGain(255)
+        assertEquals(250.0, hdrReds(emptyList(), g).average(), 0.6)
+        assertEquals(250.0, hdrReds(listOf(Layer(1)), g).average(), 0.6)
+        // brightening edits use the normal photo too
+        val up = Layer(1).with(ColorParam.Exposure, 20f)
+        assertEquals(hdrReds(listOf(up), null, 120).average(), hdrReds(listOf(up), g, 120).average(), 0.6)
+    }
+
+    @Test
+    fun androidKeepsTheGainMapThroughJpegAndRotation() {
+        if (android.os.Build.VERSION.SDK_INT < 34) return
+        val base = gray(64, 48) { x, _ -> 100 + x }
+        val gm = android.graphics.Gainmap(Bitmap.createBitmap(16, 12, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GRAY) })
+        gm.setRatioMax(4f, 4f, 4f)
+        gm.setDisplayRatioForFullHdr(4f)
+        base.gainmap = gm
+        val bytes = java.io.ByteArrayOutputStream().also { base.compress(Bitmap.CompressFormat.JPEG, 95, it) }.toByteArray()
+        val back = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val g = ImageIo.gainOf(back)
+        assertTrue("decoded Ultra HDR has a gain map", g != null)
+        assertEquals(4f, g!!.ratioMax[0], 0.05f)
+        val rotated = Bitmap.createBitmap(back, 0, 0, back.width, back.height, Matrix().apply { postRotate(90f) }, true)
+        val r = ImageIo.gainOf(rotated)
+        assertTrue("rotation keeps the gain map", r != null)
+        assertEquals("gain map turns with the photo", r!!.map.width < r.map.height, rotated.width < rotated.height)
     }
 
     // --- masks and blend modes (M2) ---
