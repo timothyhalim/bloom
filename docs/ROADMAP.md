@@ -72,8 +72,10 @@ Same erase works on device, IOPaint and fal; "make it warmer" gives correct laye
 
 **Goal:** paid generative fill, creative upscale and background generation, with no provider key on the phone.
 
+The backend lives in its own repository, started later; this repo only gets the app side (steps 3, 4, 6, 7) once the backend's API exists. M8 stays a separate milestone, so bring-your-own providers ship without waiting for it.
+
 ### Steps
-1. **Backend** (separate repo, closed or AGPL): small HTTP service (Kotlin/Ktor or Go) + Postgres. Endpoints: `POST /v1/auth` (Google sign-in token → session), `GET /v1/balance`, `POST /v1/jobs` (capability, crop, mask, prompt; idempotency key), `GET /v1/jobs/<id>`, `POST /v1/report`. Calls fal server-side; stores nothing but job metadata (images deleted after delivery, max 24 h).
+1. **Backend** (separate repo, later; closed or AGPL): small HTTP service (Kotlin/Ktor or Go) + Postgres. Endpoints: `POST /v1/auth` (Google sign-in token → session), `GET /v1/balance`, `POST /v1/jobs` (capability, crop, mask, prompt; idempotency key), `GET /v1/jobs/<id>`, `POST /v1/report`. Calls fal server-side; stores nothing but job metadata (images deleted after delivery, max 24 h).
 2. **Credit ledger**: append-only table (grant, purchase, spend, refund). A job reserves credits, commits on success, refunds on provider failure. The idempotency key makes retries charge once.
 3. **Play Billing** (play flavor only): consumable credit packs; purchase token verified server-side with the Play Developer API, then credits granted; acknowledged after the grant.
 4. **App**: `BloomCloud` adapter (all capabilities), account section in Settings (sign in, balance, buy, sign out, delete account), cost shown on the run button, Report button on generated results.
