@@ -22,8 +22,11 @@ import dev.bloom.editor.model.WarpStroke
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.MaskStep
-import dev.bloom.editor.model.Patch
+import dev.bloom.editor.model.BackgroundEffect
+import dev.bloom.editor.model.BackgroundSource
 import dev.bloom.editor.model.RetouchEffect
+import dev.bloom.editor.model.matchGain
+import dev.bloom.editor.model.matchStats
 import dev.bloom.editor.model.SubjectStep
 import dev.bloom.editor.model.PersonStep
 import dev.bloom.editor.SubjectMask
@@ -106,7 +109,17 @@ class Pipeline {
         val buf: java.nio.FloatBuffer = ByteBuffer.allocateDirect(field.d.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
     }
     private val warps = HashMap<Long, WarpTex>()
-    private val patches = HashMap<Long, Pair<Patch, Int>>() // Retouch: each layer's patch and its texture
+    private val uploads = HashMap<Long, Pair<Bitmap, Int>>() // a Retouch patch's or Background image's pixels per layer, and their texture
+    private val Layer.pixels: Bitmap? get() = when (val e = effect) {
+        is RetouchEffect -> e.patch?.pixels
+        is BackgroundEffect -> e.image?.pixels?.takeIf { e.source == BackgroundSource.Image }
+        else -> null
+    }
+    private val matches = HashMap<Long, Pair<Any, FloatArray?>>() // Background colour match per layer: what was measured, and matchStats
+    private var statsTarget: Pair<Int, Int>? = null
+
+    /** Export: keep the colour match measured on the whole photo for every tile, instead of measuring each tile on its own. */
+    var keepMatches = false
     private val params = FloatArray(ColorParam.entries.size)
     private val curveTex = genTexture().also {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -181,6 +194,7 @@ class Pipeline {
         columnMajor(orient, toUpright)
         columnMajor(Matrix().also { orient.invert(it) }, fromUpright)
         masks.values.forEach { it.mask = null }
+        if (!keepMatches) matches.clear()
         rendered = null
     }
 
@@ -234,7 +248,7 @@ class Pipeline {
         if (active == rendered) return result
         masks.keys.filter { id -> layers.none { it.id == id } }.forEach { id -> masks.remove(id)?.let(::delete) }
         warps.keys.filter { id -> layers.none { it.id == id && it.kind == LayerKind.Liquify } }.forEach { id -> glDeleteTextures(1, intArrayOf(warps.remove(id)!!.tex), 0) }
-        patches.keys.filter { id -> layers.none { it.id == id && (it.effect as? RetouchEffect)?.patch === patches[id]!!.first } }.forEach { id -> glDeleteTextures(1, intArrayOf(patches.remove(id)!!.second), 0) }
+        uploads.keys.filter { id -> layers.none { it.id == id && it.pixels === uploads[id]!!.first } }.forEach { id -> glDeleteTextures(1, intArrayOf(uploads.remove(id)!!.second), 0) }
         rendered = active
         result = source
         if (active.isEmpty()) return result
@@ -268,9 +282,12 @@ class Pipeline {
             val det = (e as? DetailEffect)?.detail ?: Detail()
             val curves = color?.curves?.takeIf { it.active }
             if (e is DetailEffect) detailPasses(l, e, input, m)
+            // a blurred-photo background averages only outside the matte, so the subject doesn't smear into it
+            if (e is BackgroundEffect && e.source == BackgroundSource.Blur) gauss(input, e.blur / 100f * BG_BLUR_MAX * uprightHeight, m, !l.mask.invert, detailTargets()[1].second)
             val out = i % 2
             val toLast = last != null && i == active.lastIndex
-            glBindFramebuffer(GL_FRAMEBUFFER, if (toLast) last!!.first else fbo[out])
+            val dst = if (toLast) last!!.first else fbo[out]
+            glBindFramebuffer(GL_FRAMEBUFFER, dst)
             glViewport(0, 0, width, height)
             glUseProgram(colorProgram)
             for (p in params.indices) params[p] = (color?.values?.get(p) ?: 0f) / 100f
@@ -287,8 +304,29 @@ class Pipeline {
             if (e is RetouchEffect) {
                 val pt = e.patch
                 glActiveTexture(GL_TEXTURE7)
-                glBindTexture(GL_TEXTURE_2D, if (pt != null) patchTexture(l.id, pt) else 0)
+                glBindTexture(GL_TEXTURE_2D, if (pt != null) uploadTexture(l.id, pt.pixels) else 0)
                 glUniform4f(glGetUniformLocation(colorProgram, "uRect"), pt?.left ?: 0f, pt?.top ?: 0f, pt?.right ?: 0f, pt?.bottom ?: 0f)
+            }
+            if (e is BackgroundEffect) {
+                val img = l.pixels
+                val none = e.source == BackgroundSource.Image && img == null // no image picked yet: the photo shows through
+                glActiveTexture(GL_TEXTURE7)
+                glBindTexture(GL_TEXTURE_2D, if (img != null) uploadTexture(l.id, img) else 0)
+                glActiveTexture(GL_TEXTURE4)
+                glBindTexture(GL_TEXTURE_2D, detail?.get(1)?.first ?: 0)
+                glActiveTexture(GL_TEXTURE1)
+                glBindTexture(GL_TEXTURE_2D, m)
+                val c = e.color
+                glUniform4f(glGetUniformLocation(colorProgram, "uBg"), (c shr 16 and 0xFF) / 255f, (c shr 8 and 0xFF) / 255f, (c and 0xFF) / 255f, if (none) 3f else e.source.ordinal.toFloat())
+                // cover: the image fills the frame, cut off at the sides or at the top and bottom
+                val ia = if (img != null) img.width.toFloat() / img.height else 1f
+                glUniform2f(glGetUniformLocation(colorProgram, "uCover"), minOf(1f, geo[4] / ia), minOf(1f, ia / geo[4]))
+                glUniform1f(glGetUniformLocation(colorProgram, "uWrap"), e.lightWrap * WRAP_MAX * uprightHeight)
+                val g = matchGain(if (e.colorMatch > 0f && !none) measure(l, e, input, active.subList(0, i)) else null, e.colorMatch)
+                glUniform3f(glGetUniformLocation(colorProgram, "uGain"), g[0], g[1], g[2])
+                glUniform3f(glGetUniformLocation(colorProgram, "uOffset"), g[3], g[4], g[5])
+                glBindFramebuffer(GL_FRAMEBUFFER, dst)
+                glViewport(0, 0, width, height)
             }
             if (e is WarpEffect) {
                 glActiveTexture(GL_TEXTURE6)
@@ -317,14 +355,39 @@ class Pipeline {
         return input
     }
 
-    /** [p]'s pixels as a texture, uploaded once per patch. */
-    private fun patchTexture(id: Long, p: Patch): Int {
-        patches[id]?.let { (old, tex) -> if (old === p) return tex; glDeleteTextures(1, intArrayOf(tex), 0) }
+    /** Layer [id]'s [pixels] (a Retouch patch, a Background image) as a mipmapped texture, uploaded once per bitmap. */
+    private fun uploadTexture(id: Long, pixels: Bitmap): Int {
+        uploads[id]?.let { (old, tex) -> if (old === pixels) return tex; glDeleteTextures(1, intArrayOf(tex), 0) }
         val t = genTexture()
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        GLUtils.texImage2D(GL_TEXTURE_2D, 0, p.pixels, 0)
-        patches[id] = p to t
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR) // a big background image shrinks a lot
+        GLUtils.texImage2D(GL_TEXTURE_2D, 0, pixels, 0)
+        glGenerateMipmap(GL_TEXTURE_2D)
+        uploads[id] = pixels to t
         return t
+    }
+
+    /**
+     * Background layer [l]'s colour match, measured over the composite [input] below it (its uniforms and matte already
+     * bound): subject and background colours sampled on a STATS x STATS grid. Kept until the layer (strengths aside),
+     * its mask, the layers below or the source change.
+     */
+    private fun measure(l: Layer, e: BackgroundEffect, input: Int, below: List<Layer>): FloatArray? {
+        val key = listOf(e.copy(colorMatch = 0f, lightWrap = 0f), l.mask, below)
+        matches[l.id]?.let { (k, s) -> if (keepMatches || k == key) return s }
+        glActiveTexture(GL_TEXTURE0) // making the target binds it: not on the matte's unit
+        val (_, f) = statsTarget ?: target(GL_RGBA8, 1, STATS, STATS).also { statsTarget = it }
+        glBindFramebuffer(GL_FRAMEBUFFER, f)
+        glViewport(0, 0, STATS, STATS)
+        glUniform2f(glGetUniformLocation(colorProgram, "uStatsScale"), width.toFloat() / STATS, height.toFloat() / STATS)
+        val buf = ByteBuffer.allocateDirect(STATS * STATS * 4)
+        val px = List(2) { pass ->
+            glUniform1i(glGetUniformLocation(colorProgram, "uStats"), pass + 1)
+            drawQuad(input)
+            glReadPixels(0, 0, STATS, STATS, GL_RGBA, GL_UNSIGNED_BYTE, buf.rewind())
+            ByteArray(STATS * STATS * 4).also { buf.rewind(); buf.get(it) }
+        }
+        glUniform1i(glGetUniformLocation(colorProgram, "uStats"), 0)
+        return matchStats(px[0], px[1]).also { matches[l.id] = key to it }
     }
 
     /** Layer [id]'s mask from the last [render], as width × height bytes (row 0 at the top), or null if it has none. */
@@ -368,7 +431,7 @@ class Pipeline {
      * A masked Blur only averages pixels inside its mask, so a blurred background doesn't pick up the subject's colors.
      */
     private fun detailPasses(l: Layer, e: DetailEffect, src: Int, mask: Int) {
-        val d = detail ?: List(3) { i -> target(levels = if (i == 0) mipLevels() else 1) }.also { detail = it }
+        val d = detailTargets()
         val det = e.detail
         when {
             e.sharpen -> {
@@ -380,6 +443,8 @@ class Pipeline {
             else -> gauss(src, det.amount / 100f * BLUR_MAX * uprightHeight, mask, l.mask.invert, d[1].second)
         }
     }
+
+    private fun detailTargets() = detail ?: List(3) { i -> target(levels = if (i == 0) mipLevels() else 1) }.also { detail = it }
 
     /** Motion or Zoom blur of [src] into framebuffer [out]: averages along a line (see STREAK_FRAGMENT). */
     private fun streak(src: Int, det: Detail, out: Int) {
@@ -902,9 +967,16 @@ uniform int uBlend;
 uniform bool uMasked;
 uniform bool uInvert;
 uniform bool uCurves;
-uniform int uKind; // LayerKind.ordinal: 0 Color, 1 Blur, 2 Sharpen, 3 Liquify, 4 Retouch; must follow the enum's order
-uniform sampler2D uPatch; // Retouch: the filled pixels
+uniform int uKind; // LayerKind.ordinal: 0 Color, 1 Blur, 2 Sharpen, 3 Liquify, 4 Retouch, 5 Background; must follow the enum's order
+uniform sampler2D uPatch; // Retouch: the filled pixels. Background: the image
 uniform vec4 uRect; // Retouch: where they go, upright 0..1
+uniform vec4 uBg; // Background: rgb the colour, a the source (0 the blurred photo in uF1, 1 the colour, 2 the image, 3 none: the photo)
+uniform vec2 uCover; // Background: the image's span of the upright frame, around its centre
+uniform float uWrap; // Background: light wrap depth, px
+uniform vec3 uGain; // Background: colour match, subject x gain + offset
+uniform vec3 uOffset;
+uniform int uStats; // Background colour match measuring: 1 writes (subject colour, matte), 2 (background colour, matte), on a coarse grid
+uniform vec2 uStatsScale; // pipeline pixels per grid cell
 uniform sampler2D uF1; // Blur: the blurred layer input. Sharpen: its small blur
 uniform sampler2D uF2; // Sharpen: the large blur, for clarity
 uniform vec2 uDetail; // Sharpen: amount, clarity
@@ -921,11 +993,44 @@ vec3 blend(vec3 b, vec3 s) {
     if (uBlend == 3) return mix(2.0 * b * s, 1.0 - 2.0 * (1.0 - b) * (1.0 - s), step(0.5, b));
     return (1.0 - 2.0 * s) * b * b + 2.0 * s * b;
 }
+float matte(ivec2 q) {
+    if (!uMasked) return 1.0;
+    float m = texelFetch(uMask, clamp(q, ivec2(0), textureSize(uMask, 0) - 1), 0).r;
+    return uInvert ? 1.0 - m : m;
+}
+vec3 background(vec2 q, float bias) {
+    ivec2 c = clamp(ivec2(q), ivec2(0), textureSize(uTex, 0) - 1);
+    if (uBg.a < 0.5) return texelFetch(uF1, c, 0).rgb;
+    if (uBg.a < 1.5) return uBg.rgb;
+    if (uBg.a < 2.5) return texture(uPatch, (upright(q) - 0.5) * uCover + 0.5, bias).rgb;
+    return texelFetch(uTex, c, 0).rgb;
+}
 void main() {
-    ivec2 px = ivec2(gl_FragCoord.xy);
+    vec2 fc = uStats == 0 ? gl_FragCoord.xy : gl_FragCoord.xy * uStatsScale;
+    ivec2 px = ivec2(fc);
     vec4 src = texelFetch(uTex, px, 0);
     vec3 p;
     if (uKind == 1) p = texelFetch(uF1, px, 0).rgb;
+    else if (uKind == 5) {
+        // Background: the new background outside the matte (the layer mask); inside, the subject colour-matched and lit
+        // at its edge by the background around it (light wrap)
+        float a = matte(px);
+        if (uStats != 0) { outColor = vec4(uStats == 1 ? src.rgb : background(fc, 0.0), a); return; }
+        vec3 fg = src.rgb * uGain + uOffset;
+        if (uWrap > 0.0) {
+            vec3 sum = vec3(0.0);
+            float n = 0.0;
+            for (int i = 0; i < 16; i++) {
+                // a golden-angle spiral filling the disc
+                vec2 q = fc + uWrap * sqrt((float(i) + 0.5) / 16.0) * vec2(cos(float(i) * 2.39996), sin(float(i) * 2.39996));
+                float w = 1.0 - matte(ivec2(q));
+                sum += w * background(q, 2.0);
+                n += w;
+            }
+            fg = mix(fg, sum / max(n, 1e-4), 0.5 * a * n / 16.0);
+        }
+        p = mix(background(fc, 0.0), fg, a);
+    }
     else if (uKind == 3) {
         vec2 uv = upright(gl_FragCoord.xy);
         vec2 o = texture(uWarp, uv).rg;
@@ -965,11 +1070,8 @@ void main() {
     }
     }
     if (uBlend != 0) p = blend(src.rgb, p);
-    float m = 1.0;
-    if (uMasked) {
-        m = texelFetch(uMask, px, 0).r;
-        if (uInvert) m = 1.0 - m;
-    }
+    // a Background layer's mask is its matte, used above
+    float m = uKind == 5 ? 1.0 : matte(px);
     outColor = vec4(store(mix(src.rgb, p, uOpacity * m)), 1.0);
 }"""
 
@@ -1221,10 +1323,14 @@ private const val ZOOM_MAX = 0.3f // Zoom blur at 100: streaks reach 30% of the 
 private const val STREAK_TAPS = 48
 private const val SHARPEN_SCALE = 3000f // Sharpen radius 0..100 = sigma 0.5..3 px on a 3000 px tall photo
 private const val CLARITY_RADIUS = 0.015f // of the image height
+private const val BG_BLUR_MAX = 0.04f // Background blur at 100: sigma 4% of the upright image height
+private const val WRAP_MAX = 0.03f // light wrap at 1: 3% of the upright image height deep
+private const val STATS = 64 // colour match samples per side
 
 /** How far (fraction of the upright height) a layer reads around a pixel; export tiles overlap by this. */
 fun detailReach(l: Layer): Float {
     val e = l.effect
+    if (l.visible && e is BackgroundEffect) return maxOf(if (e.source == BackgroundSource.Blur) 3f * BG_BLUR_MAX * e.blur / 100f else 0f, WRAP_MAX * e.lightWrap)
     if (!l.visible || e !is DetailEffect) return 0f
     val d = e.detail
     return when {

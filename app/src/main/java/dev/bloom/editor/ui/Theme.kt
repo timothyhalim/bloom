@@ -102,6 +102,7 @@ object Icons {
     val MoveDown = icon("M12 5v14M6 13l6 6 6-6")
     val Group = icon("M3 6h6l2 2h10v11H3z")
     val Ungroup = icon("M3 6h6l2 2h10v11H3zM4 4l16 16")
+    val Palette = icon("M12 3a9 9 0 1 0 0 18c1 0 1.5-.7 1.5-1.5 0-1.2-1-1.3-1-2.5 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.1-4-7.5-9-7.5zM7.5 11.5h.01M9.5 7.5h.01M14.5 7.5h.01")
     val Image = icon("M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4")
     // Color parameters
     val Exposure = icon("M4 4h16v16H4zM4 20L20 4M6.5 8h4M8.5 6v4M13.5 16h4")

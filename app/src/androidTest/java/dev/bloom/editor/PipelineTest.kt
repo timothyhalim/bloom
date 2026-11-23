@@ -30,6 +30,9 @@ import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.Stroke
 import dev.bloom.editor.model.SubjectStep
 import dev.bloom.editor.model.PersonStep
+import dev.bloom.editor.model.BackgroundEffect
+import dev.bloom.editor.model.BackgroundImage
+import dev.bloom.editor.model.BackgroundSource
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -450,11 +453,16 @@ class PipelineTest {
      */
     private fun assertTileMatchesFull(
         src: Bitmap, layers: List<Layer>, x0: Int, y0: Int, size: Int, pad: Int, tol: Int,
-        deband: Boolean = false, label: String = "", extra: Pipeline.() -> Unit = {},
+        deband: Boolean = false, label: String = "", wholeFirst: Boolean = false, extra: Pipeline.() -> Unit = {},
     ) {
         val full = pixels(src, layers, deband) { setSource(it); this.extra() }
         val tile = Bitmap.createBitmap(src, x0 - pad, y0 - pad, size + 2 * pad, size + 2 * pad)
-        val part = pixels(tile, layers, deband) { setSource(it, x0 - pad, y0 - pad, src.width, src.height); this.extra() }
+        val part = pixels(tile, layers, deband) {
+            // as export does for a Background colour match: measured once on the whole photo
+            if (wholeFirst) { setSource(src); this.extra(); render(layers); keepMatches = true }
+            setSource(it, x0 - pad, y0 - pad, src.width, src.height)
+            this.extra()
+        }
         val tw = size + 2 * pad
         for (y in y0 until y0 + size) for (x in x0 until x0 + size) {
             assertRgbNear("$label($x,$y)", full[y * src.width + x], part[(y - y0 + pad) * tw + (x - x0 + pad)], tol)
@@ -710,6 +718,88 @@ class PipelineTest {
         val out = redsOf(gray(64, 32) { _, _ -> 100 }, listOf(layer)) { setSource(it); setSubjects(mapOf(PersonStep.KEY to matte)) }
         assertTrue("person brightened (${out[16 * 64 + 8]})", out[16 * 64 + 8] > 140)
         assertEquals(100.0, out[16 * 64 + 56].toDouble(), 1.0)
+    }
+
+    // --- Background swap (M8.5) ---
+
+    /** [w] × [h]: a subject on the left half (red at 160, 60, 60, with a little texture), the old background on the right (grey-blue). */
+    private fun portrait(w: Int, h: Int) = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+        setPixels(IntArray(w * h) { i -> val x = i % w; val y = i / w; if (x < w / 2) Color.rgb(150 + (x + y) % 21, 60, 60) else Color.rgb(90, 110, 130) }, 0, w, 0, 0, w, h)
+    }
+
+    private fun swap(e: BackgroundEffect) = Layer(1, effect = e, mask = Mask(listOf(PersonStep())))
+    private val leftPerson: Pipeline.() -> Unit = { setSubjects(mapOf(PersonStep.KEY to leftHalf(Segment.SIZE))) }
+
+    @Test
+    fun backgroundReplacesThePhotoOutsideTheMatte() {
+        val w = 200
+        val src = portrait(w, 200)
+        val green = Color.rgb(20, 200, 40)
+        val out = pixels(src, listOf(swap(BackgroundEffect(BackgroundSource.Color, color = green, colorMatch = 0f, lightWrap = 0f))), deband = false) { setSource(it); leftPerson() }
+        assertRgbNear("background", green, out[100 * w + 180], 1)
+        assertRgbNear("next to the edge", green, out[100 * w + 104], 2)
+        assertRgbNear("subject untouched", src.getPixel(20, 100), out[100 * w + 20], 1)
+        // an image background covers the frame: a 2:1 image on a square photo shows its middle half
+        val img = Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888).apply { for (x in 0 until 400) for (y in 0 until 200) setPixel(x, y, if (x < 100 || x >= 300) Color.RED else Color.BLUE) }
+        val e = BackgroundEffect(BackgroundSource.Image, image = BackgroundImage("image_1.jpg", img), colorMatch = 0f, lightWrap = 0f)
+        val shown = pixels(src, listOf(swap(e)), deband = false) { setSource(it); leftPerson() }
+        assertRgbNear("image middle", Color.BLUE, shown[100 * w + 190], 1)
+        // without a matte step there is no person: nothing is replaced
+        val bare = pixels(src, listOf(swap(e).copy(mask = Mask())), deband = false)
+        assertRgbNear("no matte", src.getPixel(180, 100), bare[100 * w + 180], 1)
+    }
+
+    @Test
+    fun blurredBackgroundDoesntSmearTheSubjectIntoIt() {
+        val w = 300
+        val src = portrait(w, 300)
+        val out = pixels(src, listOf(swap(BackgroundEffect(BackgroundSource.Blur, blur = 100f, colorMatch = 0f, lightWrap = 0f))), deband = false) { setSource(it); leftPerson() }
+        val reds = (w / 2 + 2 until w / 2 + 20).map { Color.red(out[150 * w + it]) }
+        assertTrue("no red next to the subject: $reds", reds.all { it < 100 })
+    }
+
+    @Test
+    fun colorMatchMovesTheSubjectsMeanTowardTheBackground() {
+        val w = 200
+        val src = portrait(w, 200)
+        val white = Color.rgb(240, 240, 240)
+        fun subjectMean(k: Float, ch: (Int) -> Int): Double {
+            val out = pixels(src, listOf(swap(BackgroundEffect(BackgroundSource.Color, color = white, colorMatch = k, lightWrap = 0f))), deband = false) { setSource(it); leftPerson() }
+            return (10 until 90).flatMap { x -> (10 until 190).map { y -> ch(out[y * w + x]) } }.average()
+        }
+        val g0 = subjectMean(0f, Color::green)
+        val g5 = subjectMean(0.5f, Color::green)
+        val g1 = subjectMean(1f, Color::green)
+        assertEquals(60.0, g0, 1.0)
+        // half way: 60 + (240 - 60) / 2 = 150 (the edge samples shift it a little)
+        assertEquals(150.0, g5, 8.0)
+        assertTrue("all the way: $g1", g1 > 225)
+    }
+
+    @Test
+    fun lightWrapOnlyReachesNearTheEdge() {
+        val w = 400
+        val src = portrait(w, 400)
+        val blue = Color.rgb(30, 60, 230)
+        val (plain, wrapped) = listOf(0f, 1f).map { lw ->
+            pixels(src, listOf(swap(BackgroundEffect(BackgroundSource.Color, color = blue, colorMatch = 0f, lightWrap = lw))), deband = false) { setSource(it); leftPerson() }
+        }
+        // 1 = 3% of 400 px: 12 px deep
+        assertTrue("edge takes the background's blue", Color.blue(wrapped[200 * w + 198]) > Color.blue(plain[200 * w + 198]) + 20)
+        assertEquals("deep inside unchanged", plain[200 * w + 150], wrapped[200 * w + 150])
+        assertEquals("background unchanged", plain[200 * w + 300], wrapped[200 * w + 300])
+    }
+
+    @Test
+    fun backgroundExportTileMatchesTheFullRender() {
+        val n = 400
+        val src = portrait(n, n)
+        val img = pattern(300, 500)
+        // blur 50 reaches 3 x 2% of 400 px = 24 px; light wrap 12 px; subject edges 3 mask texels: one 64 px pad
+        for (e in listOf(
+            BackgroundEffect(BackgroundSource.Blur, blur = 50f, colorMatch = 0.5f, lightWrap = 1f),
+            BackgroundEffect(BackgroundSource.Image, image = BackgroundImage("image_1.jpg", img), colorMatch = 0.5f, lightWrap = 1f),
+        )) assertTileMatchesFull(src, listOf(swap(e)), 192, 128, 128, 64, 3, label = "${e.source} ", wholeFirst = true, extra = leftPerson)
     }
 
     @Test

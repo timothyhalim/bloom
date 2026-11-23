@@ -356,6 +356,7 @@ val LayerKind.icon get() = when (this) {
     LayerKind.Sharpen -> Icons.Sharpen
     LayerKind.Liquify -> Icons.Liquify
     LayerKind.Retouch -> Icons.Eraser
+    LayerKind.Background -> Icons.Background
 }
 
 /** Bubble id of the Photo layer; layer ids start at 1. */

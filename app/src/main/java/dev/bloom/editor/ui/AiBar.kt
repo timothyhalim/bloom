@@ -45,10 +45,27 @@ import androidx.compose.material3.Checkbox
 import dev.bloom.editor.ai.Http
 import dev.bloom.editor.ai.Choice
 import dev.bloom.editor.model.Layer
+import dev.bloom.editor.model.BackgroundEffect
+import dev.bloom.editor.model.BackgroundSource
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.selected
+import kotlin.math.roundToInt
 import kotlin.math.abs
 
-/** The AI tool's modes in bar order; each shows only when some provider can run it. Background joins with M8.5. */
-val AI_MODES = listOf(Capability.ERASE, Capability.GEN_FILL, Capability.UPSCALE, Capability.EDIT_COMMAND)
+/** The AI tool's modes in bar order; each shows only when some provider can run it. */
+val AI_MODES = listOf(Capability.ERASE, Capability.GEN_FILL, Capability.UPSCALE, Capability.BG_REPLACE, Capability.EDIT_COMMAND)
+
+/** Background's plain colours: white, grey, black, studio blue, beige, green. */
+private val SWATCHES = listOf(0xFFFFFFFF, 0xFF808080, 0xFF101010, 0xFF3A6EA5, 0xFFE8DCC8, 0xFF2E7D32).map { it.toInt() }
 
 /** Modes that run on the area painted into the layer's mask. */
 val PAINTED = setOf(Capability.ERASE, Capability.GEN_FILL)
@@ -58,12 +75,13 @@ private val Capability.icon: ImageVector get() = when (this) {
     Capability.GEN_FILL -> Icons.Fill
     Capability.UPSCALE -> Icons.Upscale
     Capability.EDIT_COMMAND -> Icons.Ask
+    Capability.BG_REPLACE -> Icons.Background
     else -> Icons.Sparkle
 }
 
 /** One box above the AI bar with the mode's settings; while a job runs, what it is doing (and Cancel when it runs off the phone). */
 @Composable
-fun AiRows(state: EditorState, mode: Capability, box: Modifier) {
+fun AiRows(state: EditorState, mode: Capability, box: Modifier, onPickImage: () -> Unit) {
     val busy = state.running
     if (busy != null) Row(box.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         StatusRow(busy, null, start = 16.dp)
@@ -85,6 +103,54 @@ fun AiRows(state: EditorState, mode: Capability, box: Modifier) {
                 if (size == null) "Works on JPEG, PNG, WebP and HEIC photos" else upscaleInfo(size.first, size.second, state.upscaleBy).first,
                 Modifier.weight(1f).padding(horizontal = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant,
             )
+        }
+        Capability.BG_REPLACE -> Column(box) {
+            val d = state.draft ?: return@Column
+            val e = d.effect as? BackgroundEffect ?: return@Column
+            val set = { n: BackgroundEffect -> state.draft = d.copy(effect = n) }
+            if (state.maskMore) {
+                SliderRow("Color match", e.colorMatch * 100f, 0f..100f) { set(e.copy(colorMatch = it / 100f)) }
+                SliderRow("Light wrap", e.lightWrap * 100f, 0f..100f) { set(e.copy(lightWrap = it / 100f)) }
+            }
+            // the person matte is found once per photo: "Finding people…", download %, or why it failed (tap to retry)
+            state.subjectStatus?.let { Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) { StatusRow(it, { state.aiRetry++ }, start = 16.dp) } }
+            // Prompt (a generated background) waits for a provider that offers it
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                TwoLineLabel("Background", e.source.name)
+                for ((src, icon) in listOf(BackgroundSource.Blur to Icons.Blur, BackgroundSource.Color to Icons.Palette, BackgroundSource.Image to Icons.Image)) {
+                    ParamChip(icon, "${src.name} background", false, e.source == src) { set(e.copy(source = src)) }
+                }
+            }
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                when (e.source) {
+                    BackgroundSource.Blur -> {
+                        Text("Amount", Modifier.widthIn(min = 84.dp).padding(start = 16.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+                        Slider(e.blur, { set(e.copy(blur = it.roundToInt().toFloat())) }, Modifier.weight(1f).sliderLabel("Amount", "${e.blur.roundToInt()}"), valueRange = 0f..100f, colors = sliderColors())
+                        Text("${e.blur.roundToInt()}", Modifier.widthIn(min = 36.dp), fontSize = 14.sp, color = Bloom.On)
+                    }
+                    BackgroundSource.Color -> Row(Modifier.weight(1f).padding(start = 8.dp).horizontalScroll(rememberScrollState())) {
+                        for (c in SWATCHES) Box(
+                            Modifier.size(48.dp).clickable(role = Role.Tab) { set(e.copy(color = c)) }
+                                .semantics { selected = e.color == c; contentDescription = "Color #%06X".format(c and 0xFFFFFF) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(Modifier.size(30.dp).border(if (e.color == c) 2.dp else 1.dp, if (e.color == c) Bloom.Pollen else Bloom.Outline, CircleShape).padding(3.dp).background(Color(c), CircleShape))
+                        }
+                    }
+                    BackgroundSource.Image -> {
+                        IconButton(onPickImage, Modifier.padding(start = 8.dp)) { Icon(Icons.Image, "Pick a background image", tint = Bloom.On) }
+                        Text(
+                            when {
+                                state.project == null -> "Open the photo as a project to add an image"
+                                e.image == null -> "Pick a photo for the background"
+                                else -> "Fitted to fill the frame. Tap to change it"
+                            },
+                            Modifier.weight(1f), fontSize = 12.sp, color = Bloom.OnVariant,
+                        )
+                    }
+                }
+                IconButton({ state.maskMore = !state.maskMore }) { Icon(Icons.Up, if (state.maskMore) "Less" else "More settings", Modifier.rotate(if (state.maskMore) 180f else 0f), tint = Bloom.On) }
+            }
         }
         Capability.EDIT_COMMAND -> Column(box) {
             val a = state.asked
@@ -128,24 +194,23 @@ fun RowScope.AiBar(
     ToolIcon(Icons.Sparkle, "AI. Back to tools", onDiscard)
     Row(Modifier.weight(1f).scrollFade(), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
         for (m in modes) ParamChip(m.icon, m.label, false, m == mode) {
-            if (idle && m != mode) {
-                state.aiMode = m
-                state.asked = null
-                state.askTarget = null
-            }
+            if (idle && m != mode) state.switchAiMode(m)
         }
     }
-    if (mode in PAINTED) MaskButton(d.mask) { if (idle) state.maskMode = true }
+    // Background's mask is its matte: a Person step to start with
+    if (mode in PAINTED || mode == Capability.BG_REPLACE) MaskButton(d.mask) { if (idle) state.maskMode = true }
     val ready = idle && choice != null && when (mode) {
         Capability.GEN_FILL -> d.mask.active && state.fillPrompt.isNotBlank()
         Capability.UPSCALE -> state.project != null && state.photoSize?.let { upscaleInfo(it.first, it.second, state.upscaleBy).second } == true
         Capability.EDIT_COMMAND -> state.asked?.let { it.ops.size > state.askOff.size } ?: state.askText.isNotBlank()
+        Capability.BG_REPLACE -> d.edited
         else -> d.mask.active
     }
     val run = when (mode) {
         Capability.GEN_FILL -> "Fill the painted area"
         Capability.UPSCALE -> "Upscale the photo"
         Capability.EDIT_COMMAND -> state.asked?.let { "Apply ${it.ops.size - state.askOff.size} changes" } ?: "Send the request"
+        Capability.BG_REPLACE -> if (state.editingId != null) "Apply changes" else "Replace the background"
         else -> "Erase the painted area"
     }
     Column(

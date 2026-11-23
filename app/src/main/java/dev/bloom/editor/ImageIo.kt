@@ -21,6 +21,7 @@ import dev.bloom.editor.gl.detailReach
 import dev.bloom.editor.gl.HdrGain
 import dev.bloom.editor.gl.Offscreen
 import dev.bloom.editor.gl.Pipeline
+import dev.bloom.editor.model.BackgroundEffect
 import dev.bloom.editor.model.Crop
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.WarpEffect
@@ -180,6 +181,16 @@ object ImageIo {
                     inPreferredColorSpace = SRGB
                 })
             }?.let { whole -> gainOf(whole)?.let(pipeline::setGainmap); whole.recycle() }
+        }
+        // Background colour match measures the subject and the background over the whole photo: once, at preview size, for every tile
+        if (pipeline != null && layers.any { l -> l.visible && (l.effect as? BackgroundEffect)?.colorMatch?.let { it > 0f } == true }) {
+            val k = sampleSize(w, h, PREVIEW_MAX)
+            val whole = if (raw != null) Bitmap.createScaledBitmap(raw, maxOf(1, w / k), maxOf(1, h / k), true)
+            else cr.openInputStream(src)!!.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = k; inPreferredColorSpace = SRGB }) }!!
+            pipeline.setSource(whole, 0, 0, whole.width, whole.height, orient, aspect)
+            pipeline.render(layers)
+            pipeline.keepMatches = true
+            whole.recycle()
         }
         // output tiles shrink with the scale, so the source each one reads stays about TILE (×1.4 when rotated)
         val step = if (warped) (TILE * minOf(scale, 1f)).toInt().coerceAtLeast(64) else TILE

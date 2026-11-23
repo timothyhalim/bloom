@@ -234,8 +234,8 @@ private fun tangents(p: List<Float>): FloatArray {
     return m
 }
 
-/** What a layer does, derived from its [Effect]. The shader reads the ordinal (uKind), so don't reorder. */
-enum class LayerKind { Color, Blur, Sharpen, Liquify, Retouch }
+/** What a layer does, derived from its [Effect]. The shader reads the ordinal (uKind), so don't reorder; add at the end. */
+enum class LayerKind { Color, Blur, Sharpen, Liquify, Retouch, Background }
 
 /** A Retouch layer's filled pixels (AI eraser) and where they go: upright 0..1, right / bottom exclusive. */
 class Patch(val left: Float, val top: Float, val right: Float, val bottom: Float, val pixels: android.graphics.Bitmap)
@@ -287,6 +287,79 @@ data class WarpEffect(val strokes: List<WarpStroke> = emptyList()) : Effect
 @Serializable @SerialName("retouch")
 data class RetouchEffect(@Contextual val patch: Patch? = null) : Effect
 
+/** Where a Background layer's new background comes from. */
+enum class BackgroundSource { Blur, Color, Image }
+
+/** A picked background image: its file in the project folder and its pixels (upright). */
+class BackgroundImage(val file: String, val pixels: android.graphics.Bitmap)
+
+/**
+ * Background swap. Outside the matte (the layer's mask, a Person step to start with) the photo is replaced by [source]:
+ * the photo itself blurred by [blur] (0..100, 100 = sigma 4% of the image height), the solid sRGB [color], or [image]
+ * scaled to cover the frame. Inside, the subject's colours move [colorMatch] (0..1) of the way toward the background's
+ * mean and contrast, and the blurred background bleeds into its edge, [lightWrap] (0..1, 1 = 3% of the image height) deep.
+ */
+@Serializable @SerialName("background")
+data class BackgroundEffect(
+    val source: BackgroundSource = BackgroundSource.Blur,
+    val blur: Float = 50f,
+    val color: Int = -1, // white
+    @Contextual val image: BackgroundImage? = null,
+    val colorMatch: Float = 0.3f,
+    val lightWrap: Float = 0.3f,
+) : Effect
+
+/**
+ * Background colour match, measured: from [fg] and [bg] (RGBA samples of the subject's and the background's colour at
+ * the same spots, alpha = the matte there) per channel the subject's mean and deviation, then the background's, 0..1.
+ * Null without both a subject and a background in the samples.
+ */
+fun matchStats(fg: ByteArray, bg: ByteArray): FloatArray? {
+    val out = FloatArray(12)
+    for ((half, px) in listOf(fg, bg).withIndex()) {
+        var n = 0.0
+        val sum = DoubleArray(3)
+        val sq = DoubleArray(3)
+        for (i in 0 until px.size / 4) {
+            val a = (fg[i * 4 + 3].toInt() and 0xFF) / 255.0
+            val w = if (half == 0) a else 1 - a
+            n += w
+            for (k in 0..2) {
+                val v = (px[i * 4 + k].toInt() and 0xFF) / 255.0
+                sum[k] += w * v
+                sq[k] += w * v * v
+            }
+        }
+        if (n < 1.0) return null
+        for (k in 0..2) {
+            val mean = sum[k] / n
+            out[half * 6 + k] = mean.toFloat()
+            out[half * 6 + 3 + k] = sqrt(maxOf(0.0, sq[k] / n - mean * mean)).toFloat()
+        }
+    }
+    return out
+}
+
+/**
+ * Gain and offset per channel (r, g, b gains, then offsets: x × gain + offset) moving the subject [k] (0..1) of the way
+ * to the background's mean and contrast from [matchStats]. Contrast changes at most 1.4× either way, so a plain colour
+ * background doesn't flatten the subject.
+ */
+fun matchGain(stats: FloatArray?, k: Float): FloatArray {
+    if (stats == null || k <= 0f) return floatArrayOf(1f, 1f, 1f, 0f, 0f, 0f)
+    val out = FloatArray(6)
+    for (c in 0..2) {
+        val ms = stats[c]
+        val ds = stats[3 + c]
+        val mb = stats[6 + c]
+        val db = stats[9 + c]
+        val gain = 1f + k * ((db / maxOf(ds, 1e-4f)).coerceIn(1f / 1.4f, 1.4f) - 1f)
+        out[c] = gain
+        out[3 + c] = ms * (1f - gain) + k * (mb - ms)
+    }
+    return out
+}
+
 /** One layer. [name] is the user's name for it, empty if none. [group] is the id of the [Group] it belongs to. */
 @Serializable
 data class Layer(
@@ -304,6 +377,7 @@ data class Layer(
         is DetailEffect -> if (effect.sharpen) LayerKind.Sharpen else LayerKind.Blur
         is WarpEffect -> LayerKind.Liquify
         is RetouchEffect -> LayerKind.Retouch
+        is BackgroundEffect -> LayerKind.Background
     }
 
     /** Whether the layer changes the photo at all (mask and blend aside). */
@@ -312,6 +386,7 @@ data class Layer(
         is DetailEffect -> effect.detail.amount > 0f || effect.sharpen && effect.detail.clarity != 0f
         is WarpEffect -> effect.strokes.isNotEmpty()
         is RetouchEffect -> effect.patch != null
+        is BackgroundEffect -> effect.source != BackgroundSource.Image || effect.image != null
     }
 }
 

@@ -8,11 +8,15 @@ import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import dev.bloom.editor.gl.Offscreen
 import dev.bloom.editor.gl.Pipeline
+import dev.bloom.editor.model.BackgroundEffect
+import dev.bloom.editor.model.BackgroundImage
 import dev.bloom.editor.model.Document
 import dev.bloom.editor.model.Patch
 import dev.bloom.editor.model.RetouchEffect
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
@@ -36,7 +40,7 @@ private class Head(val name: String)
 /**
  * A saved project: a folder under files/projects with `original.<ext>` (a byte copy of the opened file, so it decodes
  * as before), `doc.json`, `patch_*.png` (Retouch pixels, lossless), `upscaled_*.jpg` (Upscale results; the one
- * [Document.source] names is used) and `thumb.jpg` (the result, for Home).
+ * [Document.source] names is used), `image_*.jpg` (Background layers' images) and `thumb.jpg` (the result, for Home).
  * doc.json appears with the first edit; a folder without one is a photo opened and never edited.
  */
 class Project(val dir: File) {
@@ -51,17 +55,32 @@ class Project(val dir: File) {
     fun photo(doc: Document): File =
         doc.source.takeIf { it.isNotEmpty() }?.let { File(dir, it) }?.takeIf { it.parentFile == dir && it.isFile } ?: original
 
-    /** Saves [b], an upscaled copy of the photo, and returns its file name for [Document.source]. */
-    fun addUpscaled(b: Bitmap): String {
-        val name = "upscaled_${System.currentTimeMillis()}.jpg"
-        write(File(dir, name)) { check(b.compress(Bitmap.CompressFormat.JPEG, 95, it)) { "can't encode the upscaled photo" } }
+    /** Saves [b] as a new `<prefix>_<time>.jpg` here (an upscaled photo for [Document.source], a background image) and returns its name. */
+    fun addJpeg(prefix: String, b: Bitmap): String {
+        val name = "${prefix}_${System.currentTimeMillis()}.jpg"
+        write(File(dir, name)) { check(b.compress(Bitmap.CompressFormat.JPEG, 95, it)) { "can't encode $name" } }
         return name
     }
 
     val json = Json {
         ignoreUnknownKeys = true // a file from a newer Bloom still opens, minus what this one doesn't know
         encodeDefaults = true // defaults may change later; a saved edit must not
-        serializersModule = SerializersModule { contextual(Patch::class, PatchSerializer()) }
+        serializersModule = SerializersModule {
+            contextual(Patch::class, PatchSerializer())
+            contextual(BackgroundImage::class, ImageSerializer())
+        }
+    }
+
+    /** A Background layer's image in doc.json: its file name here. */
+    private inner class ImageSerializer : KSerializer<BackgroundImage> {
+        override val descriptor = PrimitiveSerialDescriptor("BackgroundImage", PrimitiveKind.STRING)
+
+        override fun serialize(encoder: Encoder, value: BackgroundImage) = encoder.encodeString(value.file)
+
+        override fun deserialize(decoder: Decoder): BackgroundImage {
+            val f = decoder.decodeString()
+            return BackgroundImage(f, BitmapFactory.decodeFile(File(dir, f).path) ?: error("$f is missing"))
+        }
     }
 
     private inner class PatchSerializer : KSerializer<Patch> {
@@ -114,6 +133,7 @@ class Project(val dir: File) {
     companion object {
         const val VERSION = 1
         const val THUMB = 360 // long side, px
+        const val IMAGE_MAX = 3072 // a Background layer's image, long side, px
 
         private val headJson = Json { ignoreUnknownKeys = true }
 
@@ -145,8 +165,9 @@ class Project(val dir: File) {
             check(s.version <= VERSION) { "it was saved by a newer Bloom" }
             p.name = s.name
             p.saved = s.doc
-            // copies an undone Upscale left behind; history doesn't outlive the session
-            dir.listFiles { f -> f.name.startsWith("upscaled_") && f.name != s.doc.source }?.forEach { it.delete() }
+            // copies an undone Upscale and images of removed Background layers left behind; history doesn't outlive the session
+            val images = s.doc.layers.mapNotNull { (it.effect as? BackgroundEffect)?.image?.file }
+            dir.listFiles { f -> f.name.startsWith("upscaled_") && f.name != s.doc.source || f.name.startsWith("image_") && f.name !in images }?.forEach { it.delete() }
             return p to s.doc
         }
 

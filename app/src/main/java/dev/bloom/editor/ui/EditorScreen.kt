@@ -92,6 +92,9 @@ import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.SubjectStep
 import dev.bloom.editor.model.PersonStep
+import dev.bloom.editor.model.BackgroundEffect
+import dev.bloom.editor.model.BackgroundImage
+import dev.bloom.editor.model.BackgroundSource
 import dev.bloom.editor.model.BlurType
 import dev.bloom.editor.model.LayerKind
 import dev.bloom.editor.model.Patch
@@ -248,6 +251,27 @@ class EditorState {
         nextId += asked!!.ops.size
         edit { d }
         close()
+    }
+
+    /** Opens the AI tool in [aiMode]. */
+    fun openAi() {
+        openTool(RetouchEffect())
+        switchAiMode(aiMode)
+    }
+
+    /**
+     * Switches the AI tool to mode [m]. Background works on a new Background layer cut along a Person step, the other
+     * modes on a Retouch one; an applied layer being edited keeps its kind.
+     */
+    fun switchAiMode(m: Capability) {
+        aiMode = m
+        asked = null
+        askTarget = null
+        val d = draft ?: return
+        val bg = m == Capability.BG_REPLACE
+        if (editingId != null || bg == (d.effect is BackgroundEffect)) return
+        draft = d.copy(effect = if (bg) BackgroundEffect() else RetouchEffect(), mask = if (bg) Mask(listOf(PersonStep())) else Mask())
+        steps = History(current = draft to crop)
     }
 
     /** Opens the tool for a new layer of [effect], or for [edit]. */
@@ -626,6 +650,26 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         }
     }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), ::open)
+    // A Background layer's image: copied into the project folder, so the project and its export keep it
+    val pickBackground = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val p = state.project
+        val id = state.draft?.id
+        if (uri == null || p == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val b = ImageIo.loadPreview(context.contentResolver, uri, Project.IMAGE_MAX).let { if (it.config == Bitmap.Config.ARGB_8888) it else it.copy(Bitmap.Config.ARGB_8888, false) }
+                    BackgroundImage(p.addJpeg("image", b), b)
+                }
+            }.onSuccess { img ->
+                val d = state.draft
+                val e = d?.effect as? BackgroundEffect
+                if (d?.id != id || e == null) return@onSuccess
+                state.draft = d.copy(effect = e.copy(source = BackgroundSource.Image, image = img))
+                state.commitStep()
+            }.onFailure { if (it is CancellationException) throw it; snackbar.showSnackbar("Can't open the image: ${reason(it)}") }
+        }
+    }
     // Files the photo picker doesn't list, e.g. CR3 raws (Android has no MIME type for them, so they show as octet-stream)
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::open)
     // A photo crop goes to a provider off the phone only after the consent sheet
@@ -705,7 +749,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                 val name = withContext(Dispatchers.IO) {
                     // a model with another factor (a 4× ComfyUI workflow asked for 2×) is resampled to what was asked
                     val sized = if (out.width == w * by && out.height == h * by) out else Bitmap.createScaledBitmap(out, w * by, h * by, true).also { out.recycle() }
-                    p.addUpscaled(sized).also {
+                    p.addJpeg("upscaled", sized).also {
                         sized.recycle()
                         ImageIo.copyExif(context.contentResolver, Uri.fromFile(p.original), File(p.dir, it), upright = true)
                     }
@@ -844,15 +888,17 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                     // so rows appearing above it never move the photo.
                     onBarTop = { top -> photoView.setBottomInset((canvasBottom - top).roundToInt()) },
                     onDiscard = leaveTool,
-                    onRun = {
-                        when (aiMode) {
+                    onRun = { mode ->
+                        when (mode) {
                             Capability.ERASE, Capability.GEN_FILL -> fill(aiMode)
                             Capability.UPSCALE -> upscale()
                             Capability.EDIT_COMMAND -> if (state.asked == null) ask() else state.applyAsk()
+                            Capability.BG_REPLACE -> state.apply()
                             else -> Unit
                         }
                     },
                     onSettings = { settings = true },
+                    onPickImage = { if (state.project != null) pickBackground.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged {
                         chromePx = it.height
                     },
@@ -907,7 +953,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                         // Refine with Ask: the AI tool's Ask, limited to this layer
                         onAsk = if (Capability.EDIT_COMMAND in aiModes) ({
                             state.openTool(RetouchEffect())
-                            state.aiMode = Capability.EDIT_COMMAND
+                            state.switchAiMode(Capability.EDIT_COMMAND)
                             state.askTarget = id
                         }) else null,
                         onEditMask = { state.openTool(edit = l, mask = true) },
@@ -1124,7 +1170,7 @@ private class Send(val cap: Capability, val choice: Choice, val what: String, va
 @Composable
 private fun Chrome(
     state: EditorState, aiModes: List<Capability>, aiMode: Capability, phone: OnDevice,
-    onBarTop: (Float) -> Unit, onDiscard: () -> Unit, onRun: () -> Unit, onSettings: () -> Unit, modifier: Modifier,
+    onBarTop: (Float) -> Unit, onDiscard: () -> Unit, onRun: (Capability) -> Unit, onSettings: () -> Unit, onPickImage: () -> Unit, modifier: Modifier,
 ) {
     val float = RoundedCornerShape(16.dp)
     Column(modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1139,7 +1185,8 @@ private fun Chrome(
                 is ColorEffect -> ColorRows(state, d, e, box)
                 is DetailEffect -> DetailRows(state, d, e, box)
                 is WarpEffect -> LiquifyRows(state, box)
-                is RetouchEffect -> AiRows(state, aiMode, box)
+                is RetouchEffect -> AiRows(state, aiMode, box, onPickImage)
+                is BackgroundEffect -> AiRows(state, Capability.BG_REPLACE, box, onPickImage)
             }
         }
         Row(
@@ -1155,17 +1202,22 @@ private fun Chrome(
                     ToolButton("Detail", Icons.Detail, Modifier.weight(1f)) { state.openTool(DetailEffect()) }
                     ToolButton("Liquify", Icons.Liquify, Modifier.weight(1f)) { state.openTool(WarpEffect()) }
                     ToolButton("Crop", Icons.Crop, Modifier.weight(1f)) { state.openCrop() }
-                    ToolButton("AI", Icons.Sparkle, Modifier.weight(1f)) { state.openTool(RetouchEffect()) }
+                    ToolButton("AI", Icons.Sparkle, Modifier.weight(1f)) { state.openAi() }
                 }
                 state.maskMode -> MaskBar(state)
                 else -> when (val e = d.effect) {
                     is ColorEffect -> ColorBar(state, d, e, onDiscard)
                     is DetailEffect -> DetailBar(state, d, onDiscard)
                     is WarpEffect -> LiquifyBar(state, d, onDiscard)
-                    is RetouchEffect -> AiBar(
-                        state, d, aiModes, aiMode, state.ai.choice(aiMode, phone), state.ai.options(aiMode, phone), onDiscard, onRun,
-                        onPick = { state.ai = state.ai.copy(choices = state.ai.choices + (aiMode to it)) }, onSettings = onSettings,
-                    )
+                    is RetouchEffect, is BackgroundEffect -> {
+                        // an applied Background layer keeps its kind, so its mode is the only one
+                        val mode = if (e is BackgroundEffect) Capability.BG_REPLACE else aiMode
+                        AiBar(
+                            state, d, if (e is BackgroundEffect && state.editingId != null) listOf(mode) else aiModes, mode,
+                            state.ai.choice(mode, phone), state.ai.options(mode, phone), onDiscard, { onRun(mode) },
+                            onPick = { state.ai = state.ai.copy(choices = state.ai.choices + (mode to it)) }, onSettings = onSettings,
+                        )
+                    }
                 }
             }
         }
