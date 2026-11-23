@@ -28,8 +28,10 @@ All run on the phone through MNN. Each is downloaded the first time a tool needs
 | Tap to select an object | MobileSAM encoder + SAM decoder | Apache-2.0 | [Acly/MobileSAM](https://huggingface.co/Acly/MobileSAM) | `mobilesam_encoder_w8.mnn`, `mobilesam_decoder_w8.mnn` (8-bit, 11 + 9 MB) |
 | Depth for lens blur and depth masks | Depth Anything V2 Small | Apache-2.0 (only the Small model is) | [onnx-community/depth-anything-v2-small](https://huggingface.co/onnx-community/depth-anything-v2-small) | `depth_anything_v2_small_w8.mnn` (8-bit, 27 MB) |
 | AI eraser | Big LaMa | Apache-2.0 | [Carve/LaMa-ONNX](https://huggingface.co/Carve/LaMa-ONNX) | `lama_f16.mnn` (half precision, 105 MB; in two parts because GitHub limits files to 100 MB) |
+| Upscale 2× / 4× | Real-ESRGAN general x4v3 | BSD-3-Clause | [xinntao/Real-ESRGAN release](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth) (exported to ONNX from the official weights) | `realesr_x4v3_f16.mnn` (half precision, 2.5 MB) |
+| Person mask, background swap | Robust Video Matting, MobileNetV3 | GPL-3.0 | [PeterL1n/RobustVideoMatting release](https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx) | `rvm_mobilenetv3_f16.mnn` (half precision, 7.6 MB) |
 
-Each was converted from ONNX with MNN's converter. LaMa keeps half-precision weights because 8-bit weights break its Fourier layers.
+Each was converted from ONNX with MNN's converter. LaMa keeps half-precision weights because 8-bit weights break its Fourier layers; Real-ESRGAN and RVM keep them because 8-bit weights drift about 10× further from the original for 1–3 MB saved (see [docs/eval/m85-models.md](docs/eval/m85-models.md)).
 
 ## License
 
