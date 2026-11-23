@@ -1,0 +1,4 @@
+[submodule "app/src/main/cpp/mnn"]
+	path = app/src/main/cpp/mnn
+	url = https://github.com/alibaba/MNN
+	shallow = true

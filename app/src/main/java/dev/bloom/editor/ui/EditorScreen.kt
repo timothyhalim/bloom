@@ -81,6 +81,10 @@ import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.LuminanceStep
+import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.ModelStore
+import dev.bloom.editor.Segment
+import dev.bloom.editor.SubjectMask
 import dev.bloom.editor.model.History
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.Mask
@@ -115,6 +119,13 @@ class EditorState {
     var softness by mutableFloatStateOf(50f)
     var flow by mutableFloatStateOf(100f)
     var addingSample by mutableStateOf(false) // the next eyedropper tap adds a sample instead of replacing
+    var subjects by mutableStateOf(emptyMap<List<Float>, SubjectMask>()) // this photo's subject masks, by pins (empty = automatic)
+    var subjectStatus by mutableStateOf<String?>(null) // "Downloading…", "Finding…", or an error while there is no mask
+    var subjectRetry by mutableIntStateOf(0)
+
+    /** Pin sets of every Subject or Background step (applied layers and the draft): the masks needed. */
+    val neededSubjects: Set<List<Float>>
+        get() = (doc.layers + listOfNotNull(draft)).flatMap { l -> l.mask.steps.filterIsInstance<SubjectStep>().map { it.pins } }.toSet()
     private var nextId = 1L
 
     val doc: Document get() = history.current
@@ -167,6 +178,7 @@ class EditorState {
         is GradientStep -> MaskTool.Gradient
         is ColorStep -> MaskTool.Color
         is LuminanceStep -> MaskTool.Luminance
+        is SubjectStep -> MaskTool.Subject
     }
 
     /** Adds [step] at the end of the mask, selects it and switches to its tool. */
@@ -210,6 +222,8 @@ class EditorState {
     fun load(uri: Uri, bmp: Bitmap) {
         source = uri
         preview = bmp
+        subjects = emptyMap()
+        subjectStatus = null
         history = History()
         close()
         bubble = null
@@ -236,7 +250,30 @@ fun EditorScreen(photoView: PhotoView) {
         photoView.onViewport = { viewport = it }
         photoView.onTransform = { transformTick++ }
         launch { snapshotFlow { state.doc.deband }.collect(photoView::setDeband) }
+        launch { snapshotFlow { state.subjects }.collect(photoView::setSubjects) }
         snapshotFlow { state.rendered() }.collect(photoView::setLayers)
+    }
+    // Subject masks are found once per photo and pin set, when a Subject or Background step needs one.
+    LaunchedEffect(state.preview, state.neededSubjects, state.subjectRetry) {
+        val photo = state.preview ?: return@LaunchedEffect
+        for (pins in state.neededSubjects - state.subjects.keys) {
+            state.subjectStatus = if (pins.isEmpty()) "Finding the subject…" else "Selecting…"
+            val r = runCatching {
+                withContext(Dispatchers.IO) {
+                    val get = { name: String -> ModelStore.get(context, name) { state.subjectStatus = "Downloading AI model… ${(it * 100).toInt()}%" } }
+                    val t = System.nanoTime()
+                    val m = if (pins.isEmpty()) Segment.subject(get("subject"), photo)
+                    else Segment.pinned(get("sam_encoder"), get("sam_decoder"), photo, pins)
+                    android.util.Log.d("Bloom", "subject (${pins.size / 3} pins): ${(System.nanoTime() - t) / 1_000_000} ms")
+                    m ?: error("the model couldn't run on this phone")
+                }
+            }
+            r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "subject failed", it) }
+            if (state.preview !== photo) return@LaunchedEffect
+            r.onSuccess { state.subjects = state.subjects + (pins to it) }
+            state.subjectStatus = r.exceptionOrNull()?.let { "Couldn't find the subject: ${it.message}" }
+            if (r.isFailure) return@LaunchedEffect
+        }
     }
     // Mask overlay and painting only in mask mode.
     val shownPreview = state.preview
@@ -271,8 +308,9 @@ fun EditorScreen(photoView: PhotoView) {
         val deband = state.doc.deband
         scope.launch {
             exporting = 0f
+            val subjects = state.subjects
             val r = runCatching {
-                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png) { exporting = it } }
+                withContext(Dispatchers.IO) { ImageIo.export(context.contentResolver, src, dst, context.cacheDir, layers, deband, png, subjects) { exporting = it } }
             }
             exporting = null
             r.exceptionOrNull()?.let { android.util.Log.e("Bloom", "export failed", it) }
@@ -308,6 +346,8 @@ fun EditorScreen(photoView: PhotoView) {
             AndroidView({ photoView }, Modifier.fillMaxSize())
             val selGradient = state.stepIndex?.let { state.draft?.mask?.steps?.getOrNull(it) } as? GradientStep
             if (state.maskMode && selGradient != null && selGradient.visible) GradientHandles(selGradient, photoView, transformTick)
+            val selSubject = state.stepIndex?.let { state.draft?.mask?.steps?.getOrNull(it) } as? SubjectStep
+            if (state.maskMode && selSubject != null) Pins(selSubject, photoView, transformTick)
             val preview = state.preview
             if (state.source == null || preview == null) {
                 // opaque, so a closed photo doesn't show through

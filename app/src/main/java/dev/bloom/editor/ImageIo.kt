@@ -17,6 +17,7 @@ import dev.bloom.editor.gl.HdrGain
 import dev.bloom.editor.gl.Offscreen
 import dev.bloom.editor.gl.Pipeline
 import dev.bloom.editor.model.Layer
+import dev.bloom.editor.model.SubjectStep
 import java.io.File
 
 object ImageIo {
@@ -71,7 +72,7 @@ object ImageIo {
      */
     fun export(
         cr: ContentResolver, src: Uri, dst: Uri, cacheDir: File, layers: List<Layer>, deband: Boolean, png: Boolean = false,
-        progress: (Float) -> Unit = {},
+        subjects: Map<List<Float>, SubjectMask> = emptyMap(), progress: (Float) -> Unit = {},
     ) {
         // Raw files decode whole (already upright); everything else is read tile by tile in sensor orientation.
         // ponytail: whole raw in memory (~14 B/px peak in LibRaw, then 8 B/px), fine to ~50 MP on 8 GB phones
@@ -96,7 +97,9 @@ object ImageIo {
         // Feather and deband read neighbours across tile edges, so each tile is rendered with that much overlap and cropped back.
         val uprightH = if (rotation % 180 == 0) h else w
         val feather = layers.filter { it.visible }.maxOfOrNull { it.mask.maxFeather } ?: 0f
-        val reach = maxOf(feather * 0.03f, if (deband) 2 * DEBAND_RADIUS else 0f)
+        // Subject edges look up to 3 mask texels away (joint bilateral upsampling).
+        val subjectReach = if (subjects.isNotEmpty() && layers.any { l -> l.visible && l.mask.steps.any { it.visible && it is SubjectStep } }) 3f / Segment.SIZE else 0f
+        val reach = maxOf(feather * 0.03f, if (deband) 2 * DEBAND_RADIUS else 0f, subjectReach)
         val pad = if (reach > 0f) (reach * uprightH).toInt() + 2 else 0
         val region = BitmapFactory.Options().apply { inPreferredColorSpace = SRGB }
         // ponytail: whole image in memory (8 bytes/px for PNG, ~400 MB at 50 MP); stream rows to the encoder if phones run out
@@ -112,6 +115,7 @@ object ImageIo {
         val canvas = Canvas(out).apply { concat(upright) }
         val gpu = if (layers.any { it.visible && it.opacity > 0f }) Offscreen() else null
         val pipeline = gpu?.let { Pipeline() }
+        pipeline?.setSubjects(subjects)
         if (pipeline != null && raw == null && Build.VERSION.SDK_INT >= 34) {
             // The whole photo's gain map, at the preview's size so export matches it; sensor orientation like the tiles.
             cr.openInputStream(src)!!.use {

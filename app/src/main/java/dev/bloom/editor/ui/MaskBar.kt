@@ -63,6 +63,8 @@ import dev.bloom.editor.ToolTouch
 import dev.bloom.editor.model.BrushStep
 import dev.bloom.editor.model.ColorStep
 import dev.bloom.editor.model.LuminanceStep
+import dev.bloom.editor.model.SubjectStep
+import androidx.compose.material3.CircularProgressIndicator
 import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.MaskStep
@@ -71,19 +73,21 @@ import dev.bloom.editor.model.with
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
-enum class MaskTool { Brush, Gradient, Color, Luminance }
+enum class MaskTool { Brush, Gradient, Color, Luminance, Subject }
 
 private fun MaskStep.label() = (if (add) "Add " else "Remove ") + when (this) {
     is BrushStep -> "brush"
     is GradientStep -> if (radial) "radial gradient" else "gradient"
     is ColorStep -> "color range"
     is LuminanceStep -> "luminance range"
+    is SubjectStep -> if (background) "background" else "subject"
 }
 private fun MaskStep.icon() = when (this) {
     is BrushStep -> Icons.Brush
     is GradientStep -> if (radial) Icons.Radial else Icons.Gradient
     is ColorStep -> Icons.Eyedropper
     is LuminanceStep -> Icons.Luminance
+    is SubjectStep -> if (background) Icons.Background else Icons.Subject
 }
 
 /** Right slot of a tool's bar: opens mask mode; shows the step count once there is a mask. */
@@ -121,6 +125,9 @@ fun RowScope.MaskBar(state: EditorState) {
         TypeButton(Icons.Gradient, state.maskAdd, state.maskTool == MaskTool.Gradient, "$sign gradient") { state.addGradient() }
         TypeButton(Icons.Eyedropper, state.maskAdd, state.maskTool == MaskTool.Color, "$sign color range") { state.addStep(ColorStep(add = state.maskAdd)) }
         TypeButton(Icons.Luminance, state.maskAdd, state.maskTool == MaskTool.Luminance, "$sign luminance range") { state.addStep(LuminanceStep.Shadows.copy(add = state.maskAdd)) }
+        val subj = (state.stepIndex?.let { mask.steps.getOrNull(it) } as? SubjectStep)?.takeIf { state.maskTool == MaskTool.Subject }
+        TypeButton(Icons.Subject, state.maskAdd, subj?.background == false, "$sign subject") { state.addStep(SubjectStep(add = state.maskAdd)) }
+        TypeButton(Icons.Background, state.maskAdd, subj?.background == true, "$sign background") { state.addStep(SubjectStep(background = true, add = state.maskAdd)) }
     }
     IconButton({ state.setMask(mask.copy(invert = !mask.invert)) }, Modifier.semantics { selected = mask.invert }) {
         Icon(Icons.Invert, if (mask.invert) "Invert on" else "Invert off", tint = if (mask.invert) Bloom.Pollen else Bloom.On)
@@ -201,6 +208,19 @@ fun MaskRows(state: EditorState, box: Modifier) {
                             state.replaceStep(i!!, l.copy(a = next.a, b = next.b, c = next.c, d = next.d))
                         }, Modifier.width(96.dp)) { Text(preset ?: "Custom", fontSize = 12.sp, color = Bloom.On) }
                         LuminanceStrip(l, Modifier.weight(1f)) { state.replaceStep(i!!, it) }
+                    }
+                }
+                MaskTool.Subject -> {
+                    val status = state.subjectStatus
+                    when {
+                        status != null && status.startsWith("Couldn't") -> TextButton({ state.subjectRetry++ }, Modifier.weight(1f)) {
+                            Text("$status. Tap to retry", fontSize = 12.sp, color = Bloom.On, maxLines = 2)
+                        }
+                        status != null -> Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.size(16.dp), color = Bloom.Pollen, strokeWidth = 2.dp)
+                            Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Bloom.OnVariant)
+                        }
+                        else -> Hint(if (state.maskAdd) "Tap what to select. Remove mode: tap what to leave out" else "Tap what to leave out", Modifier.weight(1f))
                     }
                 }
             }
@@ -435,6 +455,22 @@ fun GradientHandles(g: GradientStep, photoView: PhotoView, transformTick: Int) {
     }
 }
 
+/** Pins of the selected Subject step: filled = include, ring = leave out. */
+@Composable
+fun Pins(s: SubjectStep, photoView: PhotoView, transformTick: Int) {
+    Canvas(Modifier.fillMaxSize()) {
+        transformTick // redraw on zoom or pan
+        val r = 9.dp.toPx()
+        s.pins.chunked(3).forEach { (u, v, label) ->
+            val (x, y) = photoView.toView(u, v)
+            val p = Offset(x, y)
+            drawCircle(Color.Black, r + 1.5.dp.toPx(), p)
+            if (label > 0.5f) drawCircle(Bloom.Pollen, r, p)
+            else drawCircle(Color.White, r, p, style = Stroke(2.5.dp.toPx()))
+        }
+    }
+}
+
 /**
  * One-finger handler for mask mode. Brush: paints into the last Brush step with the current sign, or starts one.
  * Gradient: drags the nearest handle of the selected gradient, or redraws it from the touch point.
@@ -456,6 +492,7 @@ class MaskTouch(
                     MaskTool.Brush -> startStroke(mask, u, v)
                     MaskTool.Gradient -> grabGradient(mask, u, v)
                     MaskTool.Color -> pick(u, v, append = state.addingSample)
+                    MaskTool.Subject -> pin(mask, u, v)
                     MaskTool.Luminance -> Unit
                 }
             }
@@ -501,6 +538,17 @@ class MaskTouch(
         else mask.steps + BrushStep(listOf(stroke), state.maskAdd)
         state.setMask(mask.copy(steps = steps))
         state.stepIndex = steps.lastIndex
+    }
+
+    /** Adds a pin with the current sign to the selected Subject step, or removes the pin under the finger. */
+    private fun pin(mask: Mask, u: Float, v: Float) {
+        val i = state.stepIndex?.takeIf { mask.steps.getOrNull(it) is SubjectStep } ?: return
+        val s = mask.steps[i] as SubjectStep
+        val (x, y) = photoView.toView(u, v)
+        val hit = s.pins.chunked(3).indexOfFirst { (pu, pv) -> photoView.toView(pu, pv).let { (px, py) -> hypot(px - x, py - y) } < 24 * density }
+        val pins = if (hit >= 0) s.pins.chunked(3).filterIndexed { k, _ -> k != hit }.flatten()
+        else s.pins + listOf(u, v, if (state.maskAdd) 1f else 0f)
+        state.replaceStep(i, s.copy(pins = pins))
     }
 
     private fun grabGradient(mask: Mask, u: Float, v: Float) {

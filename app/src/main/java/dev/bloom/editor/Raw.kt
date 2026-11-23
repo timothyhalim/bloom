@@ -8,7 +8,7 @@ import dev.bloom.editor.model.Curves
 
 /** Camera raw files (DNG, CR3, NEF, ARW, ...) through LibRaw. */
 object Raw {
-    private val loaded = runCatching { System.loadLibrary("bloomraw") }.isSuccess
+    private val loaded = runCatching { System.loadLibrary("bloom") }.isSuccess
 
     // Formats Android decodes itself; anything else is tried as raw first.
     private val PLAIN = setOf("image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/avif", "image/gif", "image/bmp")

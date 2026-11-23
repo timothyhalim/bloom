@@ -14,6 +14,8 @@ import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.LuminanceStep
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.MaskStep
+import dev.bloom.editor.model.SubjectStep
+import dev.bloom.editor.SubjectMask
 import kotlin.math.sqrt
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -41,6 +43,7 @@ class Pipeline {
     // gallery and lowering Exposure brings back real highlight detail.
     private var gain: HdrGain? = null
     private var gainTex = 0
+    private val subjects = mutableMapOf<List<Float>, Triple<Int, Int, Int>>() // pins -> R8 texture, w, h
     private var hdrSource = 0
     private var hdrFbo = 0
     private var sdrKeep = 0 // the edited normal photo, kept while the full-range chain runs
@@ -109,6 +112,7 @@ class Pipeline {
         glUseProgram(maskProgram)
         glUniform1i(glGetUniformLocation(maskProgram, "uBrush"), 1)
         glUniform1i(glGetUniformLocation(maskProgram, "uBelow"), 2)
+        glUniform1i(glGetUniformLocation(maskProgram, "uSubject"), 3)
     }
 
     /**
@@ -159,6 +163,22 @@ class Pipeline {
             if (m !== g.map) m.recycle()
         }
         prepared = false
+        rendered = null
+    }
+
+    /** Masks for SubjectSteps, by their pins (empty = the automatic subject). Replaces the previous set. */
+    fun setSubjects(all: Map<List<Float>, SubjectMask>) {
+        glDeleteTextures(subjects.size, subjects.values.map { it.first }.toIntArray(), 0)
+        subjects.clear()
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+        for ((pins, m) in all) {
+            val t = genTexture()
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m.w, m.h, 0, GL_RED, GL_UNSIGNED_BYTE, ByteBuffer.wrap(m.alpha))
+            subjects[pins] = Triple(t, m.w, m.h)
+        }
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4)
+        masks.values.forEach { it.mask = null } // cached masks may contain old subjects
         rendered = null
     }
 
@@ -292,6 +312,7 @@ class Pipeline {
 
     fun release() {
         glDeleteTextures(4, intArrayOf(raw, source, curveTex, gainTex), 0)
+        setSubjects(emptyMap())
         freeHdrTargets()
         glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
         glDeleteTextures(2, tex, 0)
@@ -424,11 +445,17 @@ class Pipeline {
             is GradientStep -> if (s.radial) 2 else 1
             is ColorStep -> 3
             is LuminanceStep -> 4
+            is SubjectStep -> 5
         }
         glUniform1i(glGetUniformLocation(p, "uKind"), kind)
         when (s) {
             is GradientStep -> glUniform4f(glGetUniformLocation(p, "uG"), s.x0, s.y0, s.x1, s.y1)
             is LuminanceStep -> glUniform4f(glGetUniformLocation(p, "uG"), s.a, s.b, s.c, s.d)
+            is SubjectStep -> {
+                val (_, w, h) = subjects[s.pins] ?: Triple(0, 1, 1)
+                glUniform4f(glGetUniformLocation(p, "uG"), if (s.background) 1f else 0f, w.toFloat(), h.toFloat(), 0f)
+                glUniformMatrix3fv(glGetUniformLocation(p, "uUnmap"), 1, false, fromUpright, 0)
+            }
             is ColorStep -> {
                 val n = minOf(s.samples.size / 3, ColorStep.MAX_SAMPLES)
                 glUniform1i(glGetUniformLocation(p, "uN"), n)
@@ -441,6 +468,8 @@ class Pipeline {
         glBindTexture(GL_TEXTURE_2D, brush!!.tex)
         glActiveTexture(GL_TEXTURE2)
         glBindTexture(GL_TEXTURE_2D, below)
+        glActiveTexture(GL_TEXTURE3)
+        glBindTexture(GL_TEXTURE_2D, (s as? SubjectStep)?.let { subjects[it.pins]?.first } ?: 0)
         drawQuad(prev)
     }
 
@@ -705,7 +734,7 @@ void main() {
 }"""
 
         // Combines one mask step into the mask so far (uTex), or with uValueOnly writes the step value alone.
-        // uKind: 0 from texture (uBrush), 1 linear, 2 radial gradient, 3 color range, 4 luminance range.
+        // uKind: 0 from texture (uBrush), 1 linear, 2 radial gradient, 3 color range, 4 luminance range, 5 subject (uG.x = 1: background).
         // Gradient math runs in upright image coordinates scaled by aspect, so circles stay round.
         // Color and luminance read the composite of the layers below (uBelow).
         const val MASK_FRAGMENT = """#version 300 es
@@ -713,7 +742,9 @@ precision highp float;
 uniform sampler2D uTex;
 uniform sampler2D uBrush;
 uniform sampler2D uBelow;
+uniform sampler2D uSubject;
 uniform mat3 uMap;
+uniform mat3 uUnmap; // upright -> full image 0..1 (subject only)
 uniform vec2 uOrigin;
 uniform vec2 uFull;
 uniform float uAspect;
@@ -750,6 +781,26 @@ void main() {
         vec2 d = uG.zw * a - q0;
         if (uKind == 1) s = 1.0 - smoothstep(0.0, 1.0, dot(q - q0, d) / max(dot(d, d), 1e-8));
         else s = 1.0 - smoothstep(0.5, 1.0, length(q - q0) / max(length(d), 1e-6));
+    } else if (uKind == 5) {
+        // Joint bilateral upsampling of the low-res model mask: of the 4x4 nearest mask texels, those whose spot in the
+        // photo looks like this pixel count most, so the edge snaps to the photo's edge instead of a blurry halo.
+        vec2 n = uG.yz;
+        vec2 t = (uMap * vec3((gl_FragCoord.xy + uOrigin) / uFull, 1.0)).xy * n - 0.5;
+        vec2 base = floor(t);
+        vec3 g0 = texelFetch(uBelow, px, 0).rgb;
+        ivec2 last = textureSize(uBelow, 0) - 1;
+        float sum = 0.0, wsum = 0.0;
+        for (int j = -1; j <= 2; j++) for (int i = -1; i <= 2; i++) {
+            vec2 c = base + vec2(i, j);
+            vec2 d = t - c;
+            vec2 at = (uUnmap * vec3((c + 0.5) / n, 1.0)).xy * uFull - uOrigin;
+            vec3 g = texelFetch(uBelow, clamp(ivec2(at), ivec2(0), last), 0).rgb - g0;
+            float w = exp(-0.5 * dot(d, d) - dot(g, g) * 200.0); // spatial sigma 1 texel, color sigma 0.05
+            sum += w * texelFetch(uSubject, clamp(ivec2(c), ivec2(0), ivec2(n) - 1), 0).r;
+            wsum += w;
+        }
+        s = sum / max(wsum, 1e-6);
+        if (uG.x > 0.5) s = 1.0 - s;
     } else {
         vec3 c = texelFetch(uBelow, px, 0).rgb;
         if (uKind == 3) {

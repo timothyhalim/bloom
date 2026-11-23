@@ -79,11 +79,23 @@ data class LuminanceStep(
     }
 }
 
+/**
+ * The main subject found by the on-device model ([background] = everything else). With [pins] (x, y in 0..1 over the
+ * upright photo, label 1 = include / 0 = exclude, as triples) it is the object the pins point at instead.
+ * The mask itself is not stored here: it is computed once per photo and pin set, and cached by the editor.
+ */
+data class SubjectStep(
+    val background: Boolean = false,
+    val pins: List<Float> = emptyList(),
+    override val add: Boolean = true, override val visible: Boolean = true, override val feather: Float = 0f,
+) : MaskStep
+
 fun MaskStep.with(add: Boolean = this.add, visible: Boolean = this.visible, feather: Float = this.feather): MaskStep = when (this) {
     is BrushStep -> copy(add = add, visible = visible, feather = feather)
     is GradientStep -> copy(add = add, visible = visible, feather = feather)
     is ColorStep -> copy(add = add, visible = visible, feather = feather)
     is LuminanceStep -> copy(add = add, visible = visible, feather = feather)
+    is SubjectStep -> copy(add = add, visible = visible, feather = feather)
 }
 
 /** Ordered steps, evaluated first to last from empty, then [invert]. */
@@ -92,7 +104,7 @@ data class Mask(val steps: List<MaskStep> = emptyList(), val invert: Boolean = f
     val active: Boolean get() = steps.any { it.visible }
 
     /** Color and Luminance steps sample the layers below, so the mask changes when they do. */
-    val readsBelow: Boolean get() = steps.any { it.visible && (it is ColorStep || it is LuminanceStep) }
+    val readsBelow: Boolean get() = steps.any { it.visible && (it is ColorStep || it is LuminanceStep || it is SubjectStep) }
 
     /** Largest feather of a visible step (0..1); export tiles need that much overlap. */
     val maxFeather: Float get() = steps.filter { it.visible }.maxOfOrNull { it.feather } ?: 0f

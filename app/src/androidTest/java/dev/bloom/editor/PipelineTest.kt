@@ -17,6 +17,7 @@ import dev.bloom.editor.model.GradientStep
 import dev.bloom.editor.model.Layer
 import dev.bloom.editor.model.Mask
 import dev.bloom.editor.model.Stroke
+import dev.bloom.editor.model.SubjectStep
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -232,6 +233,67 @@ class PipelineTest {
         // a Curves layer on top of the raw must not cut that range off
         val curved = Layer(1).copy(curves = Curves(rgb = listOf(0f, 0f, 0.5f, 0.6f, 1f, 1f)))
         assertEquals(255.0, redsOf(src, listOf(curved, Layer(2).with(ColorParam.Exposure, -100f / 3))).average(), 1.0)
+    }
+
+    // --- AI subject (M3) ---
+
+    @Test
+    fun aPinSelectsOnlyThatObject() {
+        val dir = ctx.getExternalFilesDir("models")
+        val enc = java.io.File(dir, "mobilesam_encoder_w8.mnn")
+        val dec = java.io.File(dir, "mobilesam_decoder_w8.mnn")
+        org.junit.Assume.assumeTrue("push models/mobilesam_*.mnn first", enc.exists() && dec.exists())
+        // an orange ball (left) and a blue box (right) on a grey wall; one pin on the box
+        val photo = Bitmap.createBitmap(800, 600, Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(photo).apply {
+            drawColor(Color.rgb(150, 150, 150))
+            drawCircle(220f, 300f, 130f, android.graphics.Paint().apply { color = Color.rgb(240, 140, 30); isAntiAlias = true })
+            drawRect(480f, 180f, 700f, 420f, android.graphics.Paint().apply { color = Color.rgb(40, 80, 200) })
+        }
+        val m = Segment.pinned(enc, dec, photo, listOf(590f / 800, 300f / 600, 1f))!!
+        val at = { x: Float, y: Float -> m.alpha[(y * m.h).toInt() * m.w + (x * m.w).toInt()].toInt() and 0xFF }
+        assertTrue("box ${at(0.74f, 0.5f)}", at(0.74f, 0.5f) > 200)
+        assertTrue("ball ${at(0.275f, 0.5f)}", at(0.275f, 0.5f) < 50)
+        assertTrue("wall ${at(0.05f, 0.05f)}", at(0.05f, 0.05f) < 50)
+    }
+
+    @Test
+    fun subjectStepsFollowTheSubjectMask() {
+        // subject = left half of the upright image; brighten the subject, then the background
+        val mask = SubjectMask(Segment.SIZE, Segment.SIZE, ByteArray(Segment.SIZE * Segment.SIZE) { if (it % Segment.SIZE < Segment.SIZE / 2) -1 else 0 })
+        for (background in listOf(false, true)) {
+            val layer = Layer(1, mask = Mask(listOf(SubjectStep(background = background)))).with(ColorParam.Exposure, 50f)
+            val out = Offscreen().use {
+                val p = Pipeline()
+                try {
+                    p.setSource(gray(64, 32) { _, _ -> 100 })
+                    p.setSubjects(mapOf(emptyList<Float>() to mask))
+                    val b = p.renderToBitmap(listOf(layer))
+                    intArrayOf(Color.red(b.getPixel(8, 16)), Color.red(b.getPixel(56, 16)))
+                } finally {
+                    p.release()
+                }
+            }
+            val (left, right) = if (background) out[1] to out[0] else out[0] to out[1]
+            assertTrue("background=$background: selected side brightened ($left)", left > 140)
+            assertEquals("background=$background: other side untouched", 100.0, right.toDouble(), 1.0) // ±1: deband dither
+        }
+    }
+
+    @Test
+    fun subjectMaskFindsTheObject() {
+        val model = java.io.File(ctx.getExternalFilesDir("models"), "isnet_w8.mnn")
+        org.junit.Assume.assumeTrue("push models/isnet_w8.mnn first", model.exists())
+        // an orange ball on a grey-blue wall
+        val photo = Bitmap.createBitmap(800, 600, Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(photo).apply {
+            drawColor(Color.rgb(120, 130, 150))
+            drawCircle(400f, 300f, 150f, android.graphics.Paint().apply { color = Color.rgb(240, 140, 30); isAntiAlias = true })
+        }
+        val mask = Segment.subject(model, photo)!!
+        val at = { x: Int, y: Int -> mask.alpha[y * Segment.SIZE + x].toInt() and 0xFF }
+        assertTrue("ball centre ${at(512, 512)}", at(512, 512) > 200)
+        assertTrue("wall corner ${at(40, 40)}", at(40, 40) < 50)
     }
 
     // --- Ultra HDR (M2.5c) ---

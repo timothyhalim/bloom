@@ -80,6 +80,11 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
         reset()
     }
 
+    fun setSubjects(all: Map<List<Float>, SubjectMask>) {
+        queueEvent { renderer.setSubjects(all) }
+        requestRender()
+    }
+
     fun setDeband(on: Boolean) {
         renderer.deband = on
         requestRender()
@@ -246,6 +251,13 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
 
     fun sample(layers: List<Layer>, u: Float, v: Float): FloatArray? = pipeline?.takeIf { bitmap != null }?.sample(layers, u, v)
 
+    private var subjects = emptyMap<List<Float>, SubjectMask>() // kept like the bitmap, for re-upload after context loss
+
+    fun setSubjects(all: Map<List<Float>, SubjectMask>) {
+        subjects = all
+        pipeline?.setSubjects(all)
+    }
+
     fun upload(bmp: Bitmap) {
         bitmap = bmp
         pipeline?.let { it.setSource(bmp); it.setGainmap(ImageIo.gainOf(bmp)) }
@@ -258,7 +270,10 @@ private class PhotoRenderer : GLSurfaceView.Renderer {
         uOffset = glGetUniformLocation(program, "uOffset")
         glUseProgram(program)
         glUniform1i(glGetUniformLocation(program, "uMask"), 1)
-        pipeline = Pipeline().also { p -> bitmap?.let { p.setSource(it); p.setGainmap(ImageIo.gainOf(it)) } }
+        pipeline = Pipeline().also { p ->
+            bitmap?.let { p.setSource(it); p.setGainmap(ImageIo.gainOf(it)) }
+            p.setSubjects(subjects)
+        }
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
