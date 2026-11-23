@@ -492,12 +492,12 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Models listed in assets/models.json (file, url, sha256, size): subject, sam_encoder, sam_decoder, depth, eraser | ModelStore.kt:21, app/src/main/assets/models.json | none | unit (parse json) |
+| Models listed in assets/models.json (file, url, sha256, size): subject, sam_encoder, sam_decoder, depth, eraser | ModelStore.kt:21, app/src/main/assets/models.json | unit: ModelStoreTest.everyListedModelHasAFileUrlHashAndSize | unit (parse json) |
 | Stored in external files dir `models/` (fallback filesDir); `adb push` works | ModelStore.kt:22 | none | manual |
-| Existing file used only if its SHA-256 matches; verified once per process | ModelStore.kt:26-27 | none | unit (Robolectric, temp dir) |
-| Download to `.part`, SHA-256 while writing; mismatch deletes it: "Downloaded model is damaged, try again" | ModelStore.kt:28-32 | none | unit (local HTTP server) |
-| Multipart URLs (space-separated) joined in order (LaMa: 2 parts) | ModelStore.kt:29, 44 | none | unit (local HTTP server) |
-| Non-200: "Model download failed (HTTP n)"; 15 s connect / 30 s read timeouts | ModelStore.kt:46-49 | none | unit |
+| Existing file used only if its SHA-256 matches; verified once per process | ModelStore.kt:26-27 | unit: ModelStoreTest.aFileAlreadyThereIsUsedOnlyIfItsHashMatches, partsAreJoinedInOrderAndCheckedOnce | unit (Robolectric, temp dir) |
+| Download to `.part`, SHA-256 while writing; mismatch deletes it: "Downloaded model is damaged, try again" | ModelStore.kt:28-32 | unit: ModelStoreTest.aDamagedDownloadIsDeletedAndReported | unit (local HTTP server) |
+| Multipart URLs (space-separated) joined in order (LaMa: 2 parts) | ModelStore.kt:29, 44 | unit: ModelStoreTest.partsAreJoinedInOrderAndCheckedOnce, everyListedModelHasAFileUrlHashAndSize | unit (local HTTP server) |
+| Non-200: "Model download failed (HTTP n)"; 15 s connect / 30 s read timeouts | ModelStore.kt:46-49 | unit: ModelStoreTest.anHttpErrorIsReportedWithItsCode (timeouts: none) | unit |
 | Rename failure: "Can't save the model" | ModelStore.kt:33 | none | unit |
 | Download progress 0..1 shown as "Downloading AI model… N%" | ModelStore.kt:57, ui/EditorScreen.kt:355, 376, 451 | none | UI |
 | One download at a time (synchronized) | ModelStore.kt:25 | none | unit |

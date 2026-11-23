@@ -20,13 +20,16 @@ object ModelStore {
     fun get(context: Context, name: String, progress: (Float) -> Unit = {}): File {
         val spec = JSONObject(context.assets.open("models.json").bufferedReader().use { it.readText() }).getJSONObject(name)
         val dir = File(context.getExternalFilesDir(null) ?: context.filesDir, "models").apply { mkdirs() }
-        val file = File(dir, spec.getString("file"))
-        val sha = spec.getString("sha256")
+        return get(File(dir, spec.getString("file")), spec.getString("sha256"), spec.getString("url").split(' '), spec.getLong("size"), progress)
+    }
+
+    /** [file] if its SHA-256 is [sha], else downloaded first from [urls] (joined in order), [size] bytes in all. */
+    internal fun get(file: File, sha: String, urls: List<String>, size: Long, progress: (Float) -> Unit = {}): File {
         synchronized(this) {
             if (file.path in verified) return file
             if (file.exists() && sha256(file) == sha) return file.also { verified += it.path }
-            val part = File(dir, file.name + ".part")
-            if (download(spec.getString("url").split(' '), part, spec.getLong("size"), progress) != sha) {
+            val part = File(file.parentFile, file.name + ".part")
+            if (download(urls, part, size, progress) != sha) {
                 part.delete()
                 error("Downloaded model is damaged, try again")
             }
