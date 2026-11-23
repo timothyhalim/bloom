@@ -366,7 +366,8 @@ const val PHOTO_ID = 0L
 private fun Bubble(modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(12.dp)
     Box(modifier) {
-        Column(Modifier.width(236.dp).background(Bloom.SurfaceHigh, shape).border(1.dp, Bloom.Outline, shape).padding(bottom = 8.dp), content = content)
+        // a hit target of its own, so a touch on its background or labels doesn't fall through to the tap-outside layer
+        Column(Modifier.width(236.dp).pointerInput(Unit) {}.background(Bloom.SurfaceHigh, shape).border(1.dp, Bloom.Outline, shape).padding(bottom = 8.dp), content = content)
         Box(Modifier.align(Alignment.TopEnd).padding(top = 34.dp).offset(x = 6.dp).size(12.dp).rotate(45f).background(Bloom.SurfaceHigh).border(1.dp, Bloom.Outline))
     }
 }

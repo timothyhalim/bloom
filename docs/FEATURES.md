@@ -79,7 +79,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Back ("Close photo") closes the photo; asks first if there are edits (see §24) | ui/EditorScreen.kt:641, 510-513 | none | UI |
+| Back ("Close photo") closes the photo; asks first if there are edits (see §24) | ui/EditorScreen.kt:641, 510-513 | UI: BackTest.closingAPhotoWithEditsAsksKeepDiscardOrCancel | UI |
 | Undo button, enabled only with a photo, no tool open, and history to undo | ui/EditorScreen.kt:642 | UI: UndoTest.applyingAToolIsOneUndoStep, undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
 | Redo button, enabled only with a photo, no tool open, and history to redo | ui/EditorScreen.kt:643 | UI: UndoTest.applyingAToolIsOneUndoStep, undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
 | Undo/Redo step the open tool's own gestures while any tool or Crop is open (`idle` = no tool); a fresh tool starts with nothing to undo | ui/EditorScreen.kt:639 | UI: UndoTest.undoInsideAToolStepsBackOneBrushStrokeAtATime | UI |
@@ -104,8 +104,8 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Pushing an identical document is a no-op (no empty undo step) | model/Document.kt:288 | unit: HistoryTest.pushingTheSameDocumentAddsNoStep | unit |
 | Applying a tool (✓) is one undo step | ui/EditorScreen.kt:243-248 | UI: UndoTest.applyingAToolIsOneUndoStep | UI |
 | Applying Crop is one undo step | ui/EditorScreen.kt:256-260 | UI: UndoTest.applyingCropIsOneUndoStep | UI |
-| Hide/show, opacity release, blend change, delete, reorder, deband toggle, rename, group/ungroup, group hide/opacity/collapse/move: one undo step each (hide-all is not undoable) | ui/EditorScreen.kt:500, 608-615, 564, 598 | none | UI |
-| Opacity drag previews live and commits one step on release | ui/EditorScreen.kt:603-611, ui/LayerRail.kt:342 | none | UI |
+| Hide/show, opacity release, blend change, delete, reorder, deband toggle, rename, group/ungroup, group hide/opacity/collapse/move: one undo step each (hide-all is not undoable) | ui/EditorScreen.kt:500, 608-615, 564, 598 | UI: LayerRailTest.swipingAThumbnailHidesTheLayerAsOneStepAndTheSnackbarUndoesIt, LayerBubbleTest (opacity, blend, delete, rename, group, move tests), LayerRailTest.swipingThePillHidesAllLayersAsAViewSetting (hide-all not undoable) | UI |
+| Opacity drag previews live and commits one step on release | ui/EditorScreen.kt:603-611, ui/LayerRail.kt:342 | UI: LayerBubbleTest.opacityDragPreviewsLiveAndCommitsOnRelease | UI |
 | Undo of brush strokes / Liquify strokes inside an open tool: one gesture = one step (fixed 2026-11-23, `EditorState.steps`) | ui/EditorScreen.kt, model/Document.kt (History<T>) | unit: HistoryTest.toolStepsOneGestureEach, UI: UndoTest.undoInsideAToolStepsBackOneBrushStrokeAtATime, sliderDragInsideAToolIsOneStep | UI |
 | Opening a new photo clears history | ui/EditorScreen.kt:281 | UI: UndoTest.openingAnotherPhotoClearsHistory | UI |
 
@@ -113,32 +113,32 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Rail on the right edge, top layer first, Photo last | ui/LayerRail.kt:110, 124-133, ui/EditorScreen.kt:556-567 | none | UI |
-| Header pill: layers icon + layer count | ui/LayerRail.kt:111-122 | none | UI |
-| Tap the header collapses the rail to a 20dp tab; tap the tab ("Show layers") expands it | ui/LayerRail.kt:101-109, 112 | none | UI |
+| Rail on the right edge, top layer first, Photo last | ui/LayerRail.kt:110, 124-133, ui/EditorScreen.kt:556-567 | UI: LayerRailTest.railListsTheTopLayerFirstAndPhotoLast | UI |
+| Header pill: layers icon + layer count | ui/LayerRail.kt:111-122 | UI: LayerRailTest.railListsTheTopLayerFirstAndPhotoLast | UI |
+| Tap the header collapses the rail to a 20dp tab; tap the tab ("Show layers") expands it | ui/LayerRail.kt:101-109, 112 | UI: LayerRailTest.tappingThePillCollapsesTheRailAndTheTabExpandsIt | UI |
 | Collapsed state is not persisted (resets per composition) | ui/LayerRail.kt:96 | none | UI |
-| Thumbnail = layer kind icon (Color, Blur, Sharpen, Liquify, Retouch) | ui/LayerRail.kt:223, 275-281 | none | UI |
-| Half-filled dot badge when the layer has an active mask | ui/LayerRail.kt:242-247 | none | UI (screenshot) |
-| Hidden layer: dimmed to 45% + strike-through | ui/LayerRail.kt:236-241 | none | UI (screenshot) |
+| Thumbnail = layer kind icon (Color, Blur, Sharpen, Liquify, Retouch) | ui/LayerRail.kt:223, 275-281 | UI: LayerRailTest.thumbnailsReadNameKindGroupMaskAndHidden (kind by description) | UI |
+| Half-filled dot badge when the layer has an active mask | ui/LayerRail.kt:242-247 | UI: LayerRailTest.thumbnailsReadNameKindGroupMaskAndHidden (description only; drawing manual) | UI (screenshot) |
+| Hidden layer: dimmed to 45% + strike-through | ui/LayerRail.kt:236-241 | UI: LayerRailTest.swipingAThumbnailHidesTheLayerAsOneStepAndTheSnackbarUndoesIt (description only; drawing manual) | UI (screenshot) |
 | Active layer (bubble open or being edited): 2dp Pollen border + 3dp side bar | ui/LayerRail.kt:235, 256, ui/EditorScreen.kt:560 | none | UI |
-| Pending (new, unapplied) layer: dashed Pollen thumbnail at the top, "New X layer, not applied yet". Spec: directly above the active layer | ui/LayerRail.kt:125, 249-255, ui/EditorScreen.kt:529 | none | UI |
+| Pending (new, unapplied) layer: dashed Pollen thumbnail at the top, "New X layer, not applied yet". Spec: directly above the active layer | ui/LayerRail.kt:125, 249-255, ui/EditorScreen.kt:529 | UI: LayerRailTest.aDraftLayerShowsAsPendingAtTheTop | UI |
 | Pending thumbnail and Photo can't be swiped or reordered | ui/LayerRail.kt:125-133 | none | UI |
-| Tap a thumbnail opens its bubble; tap the same one again closes it | ui/LayerRail.kt:193, ui/EditorScreen.kt:562 | none | UI |
-| Tap Photo opens the Photo bubble (toggle) | ui/LayerRail.kt:127-130, ui/EditorScreen.kt:565 | none | UI |
-| Gesture decided by first touch-slop: sideways = swipe, vertical = scroll, none before long-press timeout = hold | ui/LayerRail.kt:176-190 | none | UI |
+| Tap a thumbnail opens its bubble; tap the same one again closes it | ui/LayerRail.kt:193, ui/EditorScreen.kt:562 | UI: LayerRailTest.tappingAThumbnailTogglesItsBubble | UI |
+| Tap Photo opens the Photo bubble (toggle) | ui/LayerRail.kt:127-130, ui/EditorScreen.kt:565 | UI: LayerRailTest.tappingThePhotoTogglesThePhotoBubble | UI |
+| Gesture decided by first touch-slop: sideways = swipe, vertical = scroll, none before long-press timeout = hold | ui/LayerRail.kt:176-190 | UI: LayerRailTest (tap, swipe and hold-drag tests) | UI |
 | Vertical drag on a thumbnail scrolls the rail | ui/LayerRail.kt:194, 124 | none | UI |
-| Swipe left/right: thumbnail follows with resistance (0.3×, max 10dp), toggles hide/show once past 24dp, snaps back on release | ui/LayerRail.kt:195-206 | none | UI |
-| Swipe toggle is one undo step | ui/EditorScreen.kt:499-500 | none | UI |
-| Snackbar "<Kind> layer hidden/shown · Undo" after a hide/show, first 3 times per session only | ui/EditorScreen.kt:499-507 | none | UI |
-| Snackbar Undo restores only that layer's visibility (later edits kept) | ui/EditorScreen.kt:503-504 | none | UI |
-| Hold-and-drag reorder: thumbnail (layer or group header) lifts (1.15×, shadow); on drop, one Move up/down step per row dragged, all one undo step | ui/LayerRail.kt:213-290, ui/EditorScreen.kt:792 | unit: LayersTest.stepSwapsWithTheNeighbourAndStopsAtTheEnds | unit + UI |
+| Swipe left/right: thumbnail follows with resistance (0.3×, max 10dp), toggles hide/show once past 24dp, snaps back on release | ui/LayerRail.kt:195-206 | UI: LayerRailTest.swipingAThumbnailHidesTheLayerAsOneStepAndTheSnackbarUndoesIt (toggle; follow animation manual) | UI |
+| Swipe toggle is one undo step | ui/EditorScreen.kt:499-500 | UI: LayerRailTest.swipingAThumbnailHidesTheLayerAsOneStepAndTheSnackbarUndoesIt | UI |
+| Snackbar "<Kind> layer hidden/shown · Undo" after a hide/show, first 3 times per session only | ui/EditorScreen.kt:499-507 | UI: LayerRailTest.swipingAThumbnailHidesTheLayerAsOneStepAndTheSnackbarUndoesIt (first 3 per session: none) | UI |
+| Snackbar Undo restores only that layer's visibility (later edits kept) | ui/EditorScreen.kt:503-504 | UI: LayerRailTest.swipingAThumbnailHidesTheLayerAsOneStepAndTheSnackbarUndoesIt | UI |
+| Hold-and-drag reorder: thumbnail (layer or group header) lifts (1.15×, shadow); on drop, one Move up/down step per row dragged, all one undo step | ui/LayerRail.kt:213-290, ui/EditorScreen.kt:792 | unit: LayersTest.stepSwapsWithTheNeighbourAndStopsAtTheEnds, UI: LayerRailTest.holdAndDragMovesALayerUpOneRowAsOneStep | unit + UI |
 | Document.move: into another group's run joins it, away from its own group leaves it | model/Document.kt:333 | unit: HistoryTest.moveKeepsAllLayers, LayersTest.moveIntoAGroupJoinsItAndOutOfItLeaves | unit |
-| Swipe the layers pill left/right: hides/shows all layers at once, latched until swiped back. View state (not saved, not undoable, reset on open); pill turns Pollen with an eye-off icon, layer rows dim to 45%. A draft being edited still shows. Export ignores it. Tap still collapses the rail | ui/LayerRail.kt:138-166, ui/EditorScreen.kt:146, 199-209 | unit: LayersTest.hidingAllLayersIsAViewSettingThatKeepsTheDraft | unit + UI |
-| Groups on the rail: a header row (folder icon) above its members; members have a line down the left; a collapsed group shows only its header; members of a hidden group are struck through | ui/LayerRail.kt:169-198, 300 | none | UI |
-| Group header: tap = group bubble, swipe = hide/show the group (one undo step), hold-drag = move the group as a block | ui/LayerRail.kt:174-181, ui/EditorScreen.kt:787-795 | unit: LayersTest.stepGroupMovesItsMembersAsABlock | unit + UI |
+| Swipe the layers pill left/right: hides/shows all layers at once, latched until swiped back. View state (not saved, not undoable, reset on open); pill turns Pollen with an eye-off icon, layer rows dim to 45%. A draft being edited still shows. Export ignores it. Tap still collapses the rail | ui/LayerRail.kt:138-166, ui/EditorScreen.kt:146, 199-209 | unit: LayersTest.hidingAllLayersIsAViewSettingThatKeepsTheDraft, UI: LayerRailTest.swipingThePillHidesAllLayersAsAViewSetting | unit + UI |
+| Groups on the rail: a header row (folder icon) above its members; members have a line down the left; a collapsed group shows only its header; members of a hidden group are struck through | ui/LayerRail.kt:169-198, 300 | UI: LayerRailTest.thumbnailsReadNameKindGroupMaskAndHidden, aCollapsedGroupShowsOnlyItsHeader | UI |
+| Group header: tap = group bubble, swipe = hide/show the group (one undo step), hold-drag = move the group as a block | ui/LayerRail.kt:174-181, ui/EditorScreen.kt:787-795 | unit: LayersTest.stepGroupMovesItsMembersAsABlock, UI: LayerRailTest.groupHeaderSwipesHideHoldDragsMoveAndTapsOpenTheBubble | unit + UI |
 | Spec: reorder haptic tick, auto-scroll near the edge; not built | design/UI.md:240 | none | n/a |
-| Scroll arrows: up/down pills appear only when there is more that way; tap scrolls one row | ui/LayerRail.kt:135-140 | none | UI |
-| A11y: thumbnail reads "<Name>, <Kind> layer in <Group>, has mask, hidden"; header reads "<Name>, group of n layers, collapsed, hidden"; custom action Hide/Show layer or group; pill has Hide/Show all layers. Spec also: Layer settings, Move up, Move down (as actions) | ui/LayerRail.kt:158-171 | none | UI (semantics) |
+| Scroll arrows: up/down pills appear only when there is more that way; tap scrolls one row | ui/LayerRail.kt:135-140 | UI: LayerRailTest.scrollArrowsShowOnlyWhenThereIsMoreThatWay | UI |
+| A11y: thumbnail reads "<Name>, <Kind> layer in <Group>, has mask, hidden"; header reads "<Name>, group of n layers, collapsed, hidden"; custom action Hide/Show layer or group; pill has Hide/Show all layers. Spec also: Layer settings, Move up, Move down (as actions) | ui/LayerRail.kt:158-171 | UI: LayerRailTest.thumbnailsReadNameKindGroupMaskAndHidden, theHideActionTogglesALayerForScreenReaders, swipingThePillHidesAllLayersAsAViewSetting | UI (semantics) |
 | Rail bottom padding follows the chrome height | ui/EditorScreen.kt:566 | none | UI |
 | Spec: rail fades to 25% while a finger is on the photo; not built | design/UI.md:240 | none | n/a |
 
@@ -147,40 +147,40 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
 | Bubble opens left of the rail, tail at the thumbnail, vertically at its centre (never above the canvas top) | ui/EditorScreen.kt:593-594, ui/LayerRail.kt:287-294 | none | UI |
-| Tap outside closes the bubble and does nothing else | ui/EditorScreen.kt:591-592 | none | UI |
-| Bubble closes if its layer disappears (e.g. undo) | ui/EditorScreen.kt:589-590 | none | UI |
-| Title = layer name, or its kind when unnamed; eye button hides/shows (same as swipe, with snackbar) | ui/LayerRail.kt:333-338, ui/EditorScreen.kt:606 | none | UI |
-| Opacity slider 0..100%, integer steps, value label | ui/LayerRail.kt:339-346 | none | UI |
-| Opacity drag previews live, one undo step on release | ui/EditorScreen.kt:603-611 | none | UI |
+| Tap outside closes the bubble and does nothing else | ui/EditorScreen.kt:591-592 | UI: LayerBubbleTest.tapOutsideClosesTheBubbleAndDoesNothingElse, touchesOnTheBubblesOwnBackgroundKeepItOpen | UI |
+| Bubble closes if its layer disappears (e.g. undo) | ui/EditorScreen.kt:589-590 | UI: LayerBubbleTest.theBubbleClosesWhenItsLayerGoes | UI |
+| Title = layer name, or its kind when unnamed; eye button hides/shows (same as swipe, with snackbar) | ui/LayerRail.kt:333-338, ui/EditorScreen.kt:606 | UI: LayerBubbleTest.renameTrimsAndEmptyFallsBackToTheKind, eyeButtonHidesTheLayerWithASnackbar | UI |
+| Opacity slider 0..100%, integer steps, value label | ui/LayerRail.kt:339-346 | UI: LayerBubbleTest.opacitySliderSetsOpacityAsOneStep | UI |
+| Opacity drag previews live, one undo step on release | ui/EditorScreen.kt:603-611 | UI: LayerBubbleTest.opacityDragPreviewsLiveAndCommitsOnRelease | UI |
 | Opacity math: 50% is halfway | gl/Pipeline.kt:270, 964 | GPU: halfOpacityIsHalfway | GPU |
-| Blend menu: Normal, Multiply, Screen, Overlay, Soft light; check on the current one | ui/LayerRail.kt:347-361, model/Document.kt:10 | none | UI |
+| Blend menu: Normal, Multiply, Screen, Overlay, Soft light; check on the current one | ui/LayerRail.kt:347-361, model/Document.kt:10 | UI: LayerBubbleTest.blendMenuListsTheModesAndSetsOne | UI |
 | Blend modes match their formulas | gl/Pipeline.kt:907-913, 958 | GPU: blendModesMatchTheirFormulas | GPU |
-| Edit: opens the layer's tool with its values (✓ updates the same layer) | ui/LayerRail.kt:363, ui/EditorScreen.kt:612, 181-190 | none | UI |
-| Edit mask: opens the tool already in mask mode | ui/LayerRail.kt:364, ui/EditorScreen.kt:613 | none | UI |
-| Delete: removes the layer (one undo step) and closes the bubble | ui/LayerRail.kt:365, ui/EditorScreen.kt:615 | none | UI |
-| Rename: tap the title to edit, IME Done commits (trimmed; empty = kind label); one undo step; saved as `Layer.name` | ui/LayerRail.kt:390-425, ui/EditorScreen.kt:757 | unit: LayersTest.renameIsOneUndoStep, ProjectTest.documentSurvivesJson | unit + UI |
-| Move up / Move down: one step, disabled when there is none. At its group's edge a layer leaves the group; next to a group it joins it (skips a collapsed group whole); else swaps. Bubble follows the thumbnail | model/Document.kt:347, ui/LayerRail.kt:477, ui/EditorScreen.kt:765-767, 786 | unit: LayersTest.stepSwapsWithTheNeighbourAndStopsAtTheEnds, stepLeavesAGroupAtItsEdgeAndJoinsOneNextToIt, stepSkipsACollapsedGroup | unit + UI |
-| Group below: groups the layer with the one below (new group, or joins the one either is in); disabled at the bottom or when both are grouped. A grouped layer shows Ungroup instead | model/Document.kt:377, ui/LayerRail.kt:479-480 | unit: LayersTest.groupWithBelowMakesAGroupThenJoinsIt | unit + UI |
+| Edit: opens the layer's tool with its values (✓ updates the same layer) | ui/LayerRail.kt:363, ui/EditorScreen.kt:612, 181-190 | UI: LayerBubbleTest.editOpensTheLayersToolAndApplyReplacesIt | UI |
+| Edit mask: opens the tool already in mask mode | ui/LayerRail.kt:364, ui/EditorScreen.kt:613 | UI: LayerBubbleTest.editMaskOpensTheToolInMaskMode | UI |
+| Delete: removes the layer (one undo step) and closes the bubble | ui/LayerRail.kt:365, ui/EditorScreen.kt:615 | UI: LayerBubbleTest.deleteRemovesTheLayerAsOneStepAndClosesTheBubble | UI |
+| Rename: tap the title to edit, IME Done commits (trimmed; empty = kind label); one undo step; saved as `Layer.name` | ui/LayerRail.kt:390-425, ui/EditorScreen.kt:757 | unit: LayersTest.renameIsOneUndoStep, ProjectTest.documentSurvivesJson, UI: LayerBubbleTest.renameTrimsAndEmptyFallsBackToTheKind | unit + UI |
+| Move up / Move down: one step, disabled when there is none. At its group's edge a layer leaves the group; next to a group it joins it (skips a collapsed group whole); else swaps. Bubble follows the thumbnail | model/Document.kt:347, ui/LayerRail.kt:477, ui/EditorScreen.kt:765-767, 786 | unit: LayersTest.stepSwapsWithTheNeighbourAndStopsAtTheEnds, stepLeavesAGroupAtItsEdgeAndJoinsOneNextToIt, stepSkipsACollapsedGroup, UI: LayerBubbleTest.moveButtonsStepTheLayerAndDisableAtTheEnds | unit + UI |
+| Group below: groups the layer with the one below (new group, or joins the one either is in); disabled at the bottom or when both are grouped. A grouped layer shows Ungroup instead | model/Document.kt:377, ui/LayerRail.kt:479-480 | unit: LayersTest.groupWithBelowMakesAGroupThenJoinsIt, UI: LayerBubbleTest.groupBelowMakesAGroupAndUngroupUndoesIt, groupBelowIsDisabledForTheBottomLayer | unit + UI |
 | Group members stay contiguous through move, step, group, ungroup and delete; empty groups are dropped | model/Document.kt:312-391 | unit: LayersTest.randomOperationsKeepGroupsContiguous, deletingInAGroupKeepsItUntilItsLastMemberGoes, ungroupKeepsTheLayersInPlace | unit |
 | No Duplicate action | ui/LayerRail.kt:470-481 | none | n/a |
-| System back closes an open bubble first | ui/EditorScreen.kt:519 | none | UI |
+| System back closes an open bubble first | ui/EditorScreen.kt:519 | UI: LayerBubbleTest.backClosesTheBubbleFirst | UI |
 
 ## 7b. Group bubble
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Title = group name or "Group", tap to rename; collapse/expand chevron; eye hides/shows the group; each one undo step, all saved | ui/LayerRail.kt:487-512, ui/EditorScreen.kt:729-745 | unit: ProjectTest.documentSurvivesJson | unit + UI |
-| Opacity slider previews live, one undo step on release | ui/EditorScreen.kt:733-737, 199-209 | unit: LayersTest.hidingAllLayersIsAViewSettingThatKeepsTheDraft (preview) | unit + UI |
+| Title = group name or "Group", tap to rename; collapse/expand chevron; eye hides/shows the group; each one undo step, all saved | ui/LayerRail.kt:487-512, ui/EditorScreen.kt:729-745 | unit: ProjectTest.documentSurvivesJson, UI: LayerBubbleTest.groupBubbleRenamesCollapsesHidesFadesMovesAndUngroups | unit + UI |
+| Opacity slider previews live, one undo step on release | ui/EditorScreen.kt:733-737, 199-209 | unit: LayersTest.hidingAllLayersIsAViewSettingThatKeepsTheDraft (preview), UI: LayerBubbleTest.groupBubbleRenamesCollapsesHidesFadesMovesAndUngroups | unit + UI |
 | Rendering: a hidden group hides its members, group opacity multiplies each member's (not the group's composite); preview and export | model/Document.kt:323, ui/EditorScreen.kt:207, 604 | unit: LayersTest.renderedAppliesGroupVisibilityAndOpacity | unit |
-| Move up / Move down move the group's run past the next layer or group; Ungroup keeps the layers in place and closes the bubble | model/Document.kt:362, 389 | unit: LayersTest.stepGroupMovesItsMembersAsABlock, ungroupKeepsTheLayersInPlace | unit + UI |
+| Move up / Move down move the group's run past the next layer or group; Ungroup keeps the layers in place and closes the bubble | model/Document.kt:362, 389 | unit: LayersTest.stepGroupMovesItsMembersAsABlock, ungroupKeepsTheLayersInPlace, UI: LayerBubbleTest.groupBubbleRenamesCollapsesHidesFadesMovesAndUngroups | unit + UI |
 | Group and layer ids share one id space (new ids start past both after opening a project) | ui/EditorScreen.kt:211, 346 | unit: LayersTest.hidingAllLayersIsAViewSettingThatKeepsTheDraft | unit |
 
 ## 8. Photo bubble (Smooth banding)
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Photo bubble: "Smooth banding" switch, on by default, one undo step per toggle | ui/LayerRail.kt:297-316, model/Document.kt:269, ui/EditorScreen.kt:598 | none | UI |
-| Switch disabled and off with "Not needed: this photo has more than 8 bits" for F16 previews | ui/LayerRail.kt:302-313, ui/EditorScreen.kt:597 | none | UI |
+| Photo bubble: "Smooth banding" switch, on by default, one undo step per toggle | ui/LayerRail.kt:297-316, model/Document.kt:269, ui/EditorScreen.kt:598 | UI: LayerBubbleTest.photoBubbleTogglesSmoothBandingAsOneStep | UI |
+| Switch disabled and off with "Not needed: this photo has more than 8 bits" for F16 previews | ui/LayerRail.kt:302-313, ui/EditorScreen.kt:597 | UI: LayerBubbleTest.photoBubbleSwitchIsOffAndDisabledForDeepPhotos | UI |
 | Deband smooths 8-bit steps under a hard push | gl/Pipeline.kt:537-563, 768-812 | GPU: debandSmoothsEightBitStepsUnderAHardPush | GPU |
 | Deband keeps edges and texture | gl/Pipeline.kt:768-812 | GPU: debandKeepsEdgesAndTexture | GPU |
 | Deband noise hashes the full-image pixel position, so export tiles agree | gl/Pipeline.kt:770 | GPU: paddedTileMatchesFullRenderWithFeather (deband = true) | GPU |
@@ -540,13 +540,13 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 
 | Feature / behaviour | Where (file:line) | Test today | Testable how |
 |---|---|---|---|
-| Back is handled only while a photo is open (otherwise the app exits) | ui/EditorScreen.kt:516 | none | UI (Espresso pressBack) |
-| Back order: dialog open → close it; bubble open → close it; mask mode → back to the tool; tool/Crop open → leave tool; else → close photo | ui/EditorScreen.kt:516-524 | none | UI |
-| Leaving a dirty tool (left slot or back) asks "Discard changes?" (Discard / Keep editing) | ui/EditorScreen.kt:514, 624-632 | none | UI |
-| Leaving an unchanged tool closes it without asking | ui/EditorScreen.kt:514 | none | UI |
-| Close photo with layers, a crop, or a dirty tool asks "Close photo? Your edits will be lost." | ui/EditorScreen.kt:510-513 | none | UI |
-| Close photo with nothing to lose closes at once, back to the empty state | ui/EditorScreen.kt:511 | none | UI |
-| Dialog dismiss (outside tap / back) keeps editing | ui/EditorScreen.kt:626, 518 | none | UI |
+| Back is handled only while a photo is open (otherwise the app exits) | ui/EditorScreen.kt:516 | UI: BackTest.backIsHandledOnlyWhileAPhotoIsOpen | UI (Espresso pressBack) |
+| Back order: dialog open → close it; bubble open → close it; mask mode → back to the tool; tool/Crop open → leave tool; else → close photo | ui/EditorScreen.kt:516-524 | UI: BackTest.backGoesFromMaskModeToTheToolToToolsToHome, leavingAChangedToolAsksAndKeepEditingStays, LayerBubbleTest.backClosesTheBubbleFirst | UI |
+| Leaving a dirty tool (left slot or back) asks "Discard changes?" (Discard / Keep editing) | ui/EditorScreen.kt:514, 624-632 | UI: BackTest.leavingAChangedToolAsksAndKeepEditingStays, leavingAChangedCropAsks | UI |
+| Leaving an unchanged tool closes it without asking | ui/EditorScreen.kt:514 | UI: BackTest.backGoesFromMaskModeToTheToolToToolsToHome | UI |
+| Close photo after this visit changed the document asks "Keep this project? Discard deletes it." (a reopened project: "Keep your changes? Discard takes the project back…") with Keep project / Cancel / Discard; a dirty tool first asks "Discard changes?" | ui/EditorScreen.kt:510-513 | UI: BackTest.closingAPhotoWithEditsAsksKeepDiscardOrCancel, closingWithAChangedToolAsksToDiscardItFirst, anOpenedProjectAsksAboutItsChanges | UI |
+| Close photo with nothing to lose closes at once, back to the empty state | ui/EditorScreen.kt:511 | UI: BackTest.backGoesFromMaskModeToTheToolToToolsToHome | UI |
+| Dialog dismiss (outside tap / back) keeps editing | ui/EditorScreen.kt:626, 518 | UI: BackTest.leavingAChangedToolAsksAndKeepEditingStays | UI |
 | Spec: "Keep project / Discard / Cancel" and a small discard bubble; built as an AlertDialog | design/UI.md:40, 219 | none | n/a |
 
 ## 27. Settings persistence
