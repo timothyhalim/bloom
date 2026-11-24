@@ -635,17 +635,18 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { scope.launch { autosave() } }
 
-    // Back to Home. Keep saves the project (one with no edits is removed); Discard removes a new project, or takes an
-    // opened one back to how it was when opened.
+    // Back to Home. Keep saves the project; Discard removes a new project, or takes an opened one back to how it was
+    // when opened. Only a new project that was never edited is removed on its own: a saved one goes only by Delete.
     fun closeProject(keep: Boolean) {
         val p = state.project
+        val reopened = state.opened != null
         val doc = if (keep) state.doc else state.opened
         val photo = state.preview
         val subjects = state.subjects
         val depth = state.depth
         state.load(null, null)
         if (p != null && photo != null) scope.launch {
-            if (doc?.edited == true) save(p, doc, photo, subjects, depth) else withContext(Dispatchers.IO) { p.delete() }
+            if (doc != null && (reopened || doc.edited)) save(p, doc, photo, subjects, depth) else withContext(Dispatchers.IO) { p.delete() }
             recentsTick++
         }
     }
@@ -817,7 +818,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     val closePhoto = {
         val ask = {
             state.close()
-            if (state.history.canUndo && state.doc.edited) keepAsk = true else closeProject(keep = true)
+            if (state.history.canUndo && (state.doc.edited || state.opened != null)) keepAsk = true else closeProject(keep = true)
         }
         if (state.dirty) confirm = "Discard changes?" to ask else ask()
     }

@@ -166,6 +166,22 @@ class ProjectsTest {
     }
 
     @Test
+    fun aReopenedProjectEmptiedOfLayersIsKeptNotDeleted() {
+        var dir: File? = null
+        val s = rule.showEditor(photo = false) { dir = saved("beach.jpg") }
+        rule.onNodeWithContentDescription("beach.jpg").performClick()
+        waitForPhoto(s)
+        rule.onNodeWithContentDescription("Color layer").performClick()
+        rule.onNodeWithText("Delete").performClick()
+        rule.runOnIdle { assertTrue(s.doc.layers.isEmpty()) }
+        rule.onNodeWithContentDescription("Close photo").performClick()
+        rule.onNodeWithText("Keep project").performClick() // asks even though nothing is left
+        rule.onNodeWithContentDescription("beach.jpg").assertIsDisplayed()
+        assertTrue(dir!!.exists())
+        assertTrue(Project.open(dir!!).second.layers.isEmpty())
+    }
+
+    @Test
     fun discardDeletesANewProject() {
         val s = openAndEdit("sea.jpg")
         val dir = rule.runOnIdle { s.project!!.dir }
