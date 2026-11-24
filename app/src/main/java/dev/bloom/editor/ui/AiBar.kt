@@ -183,12 +183,12 @@ fun AiRows(state: EditorState, mode: Capability, box: Modifier, onPickImage: () 
 
 /**
  * The AI bar: back, the modes, the mask (modes that paint one), and the split run button: tap runs [mode] with
- * [choice]; ▾ lists every provider · model in [options] that can run it, plus AI settings.
+ * [choice]; ▾ lists every provider · model in [options] that can run it, when there is more than one.
  */
 @Composable
 fun RowScope.AiBar(
     state: EditorState, d: Layer, modes: List<Capability>, mode: Capability, choice: Choice?, options: List<Choice>,
-    onDiscard: () -> Unit, onRun: () -> Unit, onPick: (Choice) -> Unit, onSettings: () -> Unit,
+    onDiscard: () -> Unit, onRun: () -> Unit, onPick: (Choice) -> Unit,
 ) {
     val idle = state.running == null
     ToolIcon(Icons.Sparkle, "AI. Back to tools", onDiscard)
@@ -228,7 +228,7 @@ fun RowScope.AiBar(
         Text(choice?.let { state.ai.name(it.provider) }.orEmpty(), fontSize = 9.sp, lineHeight = 11.sp, color = Bloom.OnVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
     var menu by remember { mutableStateOf(false) }
-    Box(
+    if (options.size > 1) Box(
         Modifier.width(24.dp).fillMaxHeight().clickable(enabled = idle, role = Role.Button) { menu = true }
             .semantics { contentDescription = "Choose where ${mode.label} runs" },
         contentAlignment = Alignment.Center,
@@ -240,7 +240,6 @@ fun RowScope.AiBar(
                 onClick = { menu = false; onPick(o) },
                 trailingIcon = if (o == choice) ({ Icon(Icons.Check, "Current", tint = Bloom.Pollen) }) else null,
             )
-            DropdownMenuItem(text = { Text("AI settings…", color = Bloom.On) }, onClick = { menu = false; onSettings() })
         }
     }
 }

@@ -7,6 +7,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
@@ -134,8 +135,8 @@ class ProjectsTest {
     }
 
     /** Opens [name] through the picker and applies an Exposure layer. */
-    private fun openAndEdit(name: String): dev.bloom.editor.ui.EditorState {
-        val s = rule.showEditor(photo = false, pickers = FakePickers().apply { result = photoFile(name) })
+    private fun openAndEdit(name: String, setup: () -> Unit = {}): dev.bloom.editor.ui.EditorState {
+        val s = rule.showEditor(photo = false, pickers = FakePickers().apply { result = photoFile(name) }, setup = setup)
         rule.onNodeWithText("Open photo").performClick()
         waitForPhoto(s)
         rule.onNodeWithContentDescription("Color").performClick()
@@ -203,10 +204,33 @@ class ProjectsTest {
     }
 
     @Test
-    fun editsAutosaveAfterTwoSeconds() {
+    fun autosaveIsOffByDefaultAndSaveWritesTheProjectThenHides() {
         val s = openAndEdit("sea.jpg")
         val doc = File(rule.runOnIdle { s.project!!.dir }, "doc.json")
-        rule.waitUntil(6_000) { doc.exists() }
+        Thread.sleep(3_000)
+        assertFalse(doc.exists())
+        rule.onNodeWithContentDescription("Save").performClick()
+        rule.waitUntil(5_000) { doc.exists() }
         assertEquals(1, Project.open(doc.parentFile!!).second.layers.size)
+        rule.waitUntil(5_000) { rule.onAllNodes(hasContentDescription("Save")).fetchSemanticsNodes().isEmpty() } // nothing left to save
+        rule.onNodeWithContentDescription("Close photo").performClick() // saved: no question
+        rule.onNodeWithContentDescription("sea.jpg").assertIsDisplayed()
+    }
+
+    @Test
+    fun noSaveButtonWithoutEdits() {
+        val s = rule.showEditor(photo = false, pickers = FakePickers().apply { result = photoFile("sea.jpg") })
+        rule.onNodeWithText("Open photo").performClick()
+        waitForPhoto(s)
+        rule.onNodeWithContentDescription("Save").assertDoesNotExist()
+    }
+
+    @Test
+    fun autosaveWhenOnSavesEditsAtItsInterval() {
+        val s = openAndEdit("sea.jpg") { ctx.getSharedPreferences("settings", 0).edit().putInt("autosave_s", 2).commit() }
+        val doc = File(rule.runOnIdle { s.project!!.dir }, "doc.json")
+        rule.waitUntil(8_000) { doc.exists() }
+        assertEquals(1, Project.open(doc.parentFile!!).second.layers.size)
+        rule.onNodeWithContentDescription("Save").assertIsDisplayed() // autosave isn't the user's save
     }
 }

@@ -120,6 +120,6 @@ class BackTest {
         rule.onNodeWithContentDescription("Opacity").setSlider(50f)
         rule.back() // closes the bubble
         rule.onNodeWithContentDescription("Close photo").performClick()
-        rule.onNodeWithText("Keep your changes? Discard takes the project back to how it was when you opened it.").assertIsDisplayed()
+        rule.onNodeWithText("Keep your changes? Discard takes the project back to its last save.").assertIsDisplayed()
     }
 }

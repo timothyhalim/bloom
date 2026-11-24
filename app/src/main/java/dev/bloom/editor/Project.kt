@@ -173,6 +173,8 @@ class Project(val dir: File) {
 
         /** Projects with edits, most recently saved first. */
         fun list(filesDir: File): List<Recent> = root(filesDir).listFiles().orEmpty()
+            // a new photo never saved, left by a killed app: gone after a day (not at once: it may be saving right now)
+            .onEach { if (!File(it, "doc.json").exists() && it.lastModified() < System.currentTimeMillis() - 86_400_000) it.deleteRecursively() }
             .mapNotNull { dir -> File(dir, "doc.json").takeIf { it.exists() }?.let { dir to it.lastModified() } }
             .sortedByDescending { it.second }
             .mapNotNull { (dir, _) ->

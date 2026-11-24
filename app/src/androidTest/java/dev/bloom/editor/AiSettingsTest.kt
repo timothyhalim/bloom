@@ -90,13 +90,25 @@ class AiSettingsTest {
     }
 
     @Test
-    fun theAiBarOpensAiSettings() {
+    fun autosaveIsOffUntilSwitchedOnThenEvery15MinutesAndAdjustable() {
+        val state = rule.showEditor(photo = false)
+        rule.onNodeWithContentDescription("Settings").performClick()
+        rule.onNodeWithText("Every 15 min").assertDoesNotExist()
+        rule.onNodeWithText("Autosave").performScrollTo().performClick()
+        rule.onNodeWithText("Every 15 min").performScrollTo().assertIsSelected()
+        rule.onNodeWithText("Every 5 min").performScrollTo().performClick()
+        rule.runOnIdle { assertEquals(300, state.autosave) }
+        rule.waitUntil(5_000) { rule.activity.getSharedPreferences("settings", 0).getInt("autosave_s", 0) == 300 }
+        rule.onNodeWithText("Autosave").performScrollTo().performClick()
+        rule.runOnIdle { assertEquals(0, state.autosave) }
+    }
+
+    @Test
+    fun withOnlyThePhoneThereIsNoRunMenu() {
         rule.showEditor()
         rule.onNodeWithContentDescription("AI").performClick()
-        rule.onNodeWithContentDescription("Choose where Erase runs").performClick()
-        rule.onNodeWithText("AI settings…").performClick()
-        rule.onNodeWithText("Settings").assertIsDisplayed()
-        rule.onNodeWithText("On-device models").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Phone").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Choose where Erase runs").assertDoesNotExist()
     }
 
     @Test
@@ -111,6 +123,7 @@ class AiSettingsTest {
         rule.onNodeWithContentDescription("Choose where Erase runs").performClick()
         rule.onNodeWithText("Phone · LaMa").assertIsDisplayed()
         rule.onNodeWithText("My PC · lama").assertIsDisplayed()
+        rule.onNodeWithText("AI settings…").assertDoesNotExist() // Settings open from Home only
         rule.onNodeWithText("My PC · mat").performClick()
         rule.runOnIdle { assertEquals(Choice("pc", "mat"), state.ai.choices[Capability.ERASE]) }
         rule.onNodeWithText("My PC").assertIsDisplayed()

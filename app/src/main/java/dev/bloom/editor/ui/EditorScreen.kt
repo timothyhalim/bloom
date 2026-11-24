@@ -141,7 +141,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
 import java.io.File
 import kotlin.math.abs
@@ -154,7 +153,8 @@ class EditorState {
     var photoSize by mutableStateOf<Pair<Int, Int>?>(null) // the source's upright size, px; null for a raw file
     var history by mutableStateOf(History(current = Document()))
     var project by mutableStateOf<Project?>(null) // where the photo autosaves
-    var opened: Document? = null // the project's document as opened; null for a new one
+    var opened by mutableStateOf<Document?>(null) // the project's document as last saved by the user; null for a new one
+    var autosave by mutableIntStateOf(0) // seconds between autosaves, 0 = off (Settings)
     var draft by mutableStateOf<Layer?>(null)
     // The open tool's own undo steps: the draft (or crop) after each gesture. ✓ then commits the session as one document step.
     var steps by mutableStateOf(History<Pair<Layer?, Crop?>>(current = null to null))
@@ -394,6 +394,9 @@ class EditorState {
         steps = History(current = draft to crop)
     }
 
+    /** Changes the user hasn't saved: a new photo with edits, or a saved one that differs from its save. */
+    val unsaved get() = opened?.let { doc != it } ?: doc.edited
+
     fun edit(f: (Document) -> Document) {
         history = history.push(f(doc))
     }
@@ -468,6 +471,11 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     LaunchedEffect(Unit) {
         state.ai = AiConfig.load(context)
         snapshotFlow { state.ai }.drop(1).collect { AiConfig.save(context, it) }
+    }
+    LaunchedEffect(Unit) {
+        val prefs = context.getSharedPreferences("settings", 0)
+        state.autosave = prefs.getInt("autosave_s", 0)
+        snapshotFlow { state.autosave }.drop(1).collect { prefs.edit().putInt("autosave_s", it).apply() }
     }
     val phone = remember { OnDevice(context) }
     fun provider(c: Choice) = if (c.provider == OnDevice.ID) phone else open(state.ai.providers.first { it.id == c.provider }, Keys.get(context, c.provider))
@@ -616,12 +624,20 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
         }
     }
 
-    // Autosave: the committed document (not an open tool's draft), 2 s after it last changed, and when the app leaves the screen.
+    // Save: the committed document (not an open tool's draft); Discard then goes back to it
+    fun saveNow() {
+        val p = state.project ?: return
+        val doc = state.doc
+        val photo = state.preview ?: return
+        scope.launch { save(p, doc, photo, state.subjects, state.depth); state.opened = doc }
+    }
+    // Autosave (when on in Settings): unsaved edits every n seconds and when the app leaves the screen, so a crash or a
+    // killed app doesn't lose them. It doesn't count as the user's save: Discard still goes back to that.
     suspend fun autosave() {
         val p = state.project ?: return
-        save(p, state.doc, state.preview ?: return, state.subjects, state.depth)
+        if (state.autosave > 0 && state.unsaved) save(p, state.doc, state.preview ?: return, state.subjects, state.depth)
     }
-    LaunchedEffect(state.project) { snapshotFlow { state.doc }.drop(1).collectLatest { delay(2000); autosave() } }
+    LaunchedEffect(state.project, state.autosave) { if (state.autosave > 0) while (true) { delay(state.autosave * 1000L); autosave() } }
     LaunchedEffect(state.source) { state.photoSize = state.source?.let { withContext(Dispatchers.IO) { ImageIo.size(context.contentResolver, it) } } }
     // Upscale swaps the photo for a bigger copy, undo and redo swap it back: layers, masks and crop are in 0..1 of the
     // photo, so they stay put; subject and depth masks are kept too
@@ -818,7 +834,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     val closePhoto = {
         val ask = {
             state.close()
-            if (state.history.canUndo && (state.doc.edited || state.opened != null)) keepAsk = true else closeProject(keep = true)
+            if (state.unsaved) keepAsk = true else closeProject(keep = true)
         }
         if (state.dirty) confirm = "Discard changes?" to ask else ask()
     }
@@ -850,7 +866,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     ) {
         TopBar(
             state, exporting, exportScale, { exportScale = it },
-            onBack = closePhoto,
+            onBack = closePhoto, onSave = ::saveNow,
             onExport = { f -> savers.getValue(f).launch("bloom_${System.currentTimeMillis()}.${f.ext}") },
         )
         Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { canvasTop = it.positionInRoot().y; canvasBottom = canvasTop + it.size.height }) {
@@ -898,7 +914,6 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
                             else -> Unit
                         }
                     },
-                    onSettings = { settings = true },
                     onPickImage = { if (state.project != null) pickBackground.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged {
                         chromePx = it.height
@@ -1008,7 +1023,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
     }
     if (keepAsk) AlertDialog(
         onDismissRequest = { keepAsk = false },
-        text = { Text(if (state.opened == null) "Keep this project? Discard deletes it." else "Keep your changes? Discard takes the project back to how it was when you opened it.") },
+        text = { Text(if (state.opened == null) "Keep this project? Discard deletes it." else "Keep your changes? Discard takes the project back to its last save.") },
         confirmButton = { TextButton({ keepAsk = false; closeProject(keep = true) }) { Text("Keep project") } },
         dismissButton = {
             Row {
@@ -1036,7 +1051,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
             onDismiss = { consent = null },
         )
     }
-    if (settings) SettingsScreen(state.ai, phone, { state.ai = it }, { settings = false })
+    if (settings) SettingsScreen(state.ai, phone, { state.ai = it }, state.autosave, { state.autosave = it }, { settings = false })
     deleting?.let { r ->
         AlertDialog(
             onDismissRequest = { deleting = null },
@@ -1054,7 +1069,7 @@ fun EditorScreen(photoView: PhotoView, state: EditorState = remember { EditorSta
 }
 
 @Composable
-private fun TopBar(state: EditorState, exporting: Float?, scale: Float, onScale: (Float) -> Unit, onBack: () -> Unit, onExport: (ImageIo.Format) -> Unit) {
+private fun TopBar(state: EditorState, exporting: Float?, scale: Float, onScale: (Float) -> Unit, onBack: () -> Unit, onSave: () -> Unit, onExport: (ImageIo.Format) -> Unit) {
     val busy = exporting != null
     val open = state.source != null
     val idle = state.draft == null && state.crop == null // inside a tool, undo/redo step through the tool's own gestures
@@ -1073,6 +1088,8 @@ private fun TopBar(state: EditorState, exporting: Float?, scale: Float, onScale:
                 } else Modifier),
             contentAlignment = Alignment.Center,
         ) { Icon(Icons.Compare, null, tint = if (open) Bloom.On else Bloom.Outline) }
+        // only when there is something to save
+        if (open && idle && state.project != null && state.unsaved) BarIcon(Icons.Save, "Save", true, onSave)
         Spacer(Modifier.weight(1f))
         var menu by remember { mutableStateOf(false) }
         Box {
@@ -1171,7 +1188,7 @@ private class Send(val cap: Capability, val choice: Choice, val what: String, va
 @Composable
 private fun Chrome(
     state: EditorState, aiModes: List<Capability>, aiMode: Capability, phone: OnDevice,
-    onBarTop: (Float) -> Unit, onDiscard: () -> Unit, onRun: (Capability) -> Unit, onSettings: () -> Unit, onPickImage: () -> Unit, modifier: Modifier,
+    onBarTop: (Float) -> Unit, onDiscard: () -> Unit, onRun: (Capability) -> Unit, onPickImage: () -> Unit, modifier: Modifier,
 ) {
     val float = RoundedCornerShape(16.dp)
     Column(modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1216,7 +1233,7 @@ private fun Chrome(
                         AiBar(
                             state, d, if (e is BackgroundEffect && state.editingId != null) listOf(mode) else aiModes, mode,
                             state.ai.choice(mode, phone), state.ai.options(mode, phone), onDiscard, { onRun(mode) },
-                            onPick = { state.ai = state.ai.copy(choices = state.ai.choices + (mode to it)) }, onSettings = onSettings,
+                            onPick = { state.ai = state.ai.copy(choices = state.ai.choices + (mode to it)) },
                         )
                     }
                 }
@@ -1427,7 +1444,7 @@ private fun shown(p: ColorParam, v: Float): String {
 private fun reason(e: Throwable) = when (e) {
     is OutOfMemoryError -> "not enough memory. Close other apps and try again"
     is java.net.SocketTimeoutException -> "the server took too long to answer"
-    is java.net.ConnectException, is java.net.UnknownHostException -> "can't reach the server. Check the address in AI settings"
+    is java.net.ConnectException, is java.net.UnknownHostException -> "can't reach the server. Check the address in Settings"
     else -> e.message
 }
 

@@ -44,7 +44,7 @@ class FakePickers : ActivityResultRegistry() {
  * runs after that, before the editor starts. [pickers] stands in for the system pickers.
  */
 fun EditorRule.showEditor(doc: Document? = null, photo: Boolean = true, pickers: FakePickers = FakePickers(), setup: () -> Unit = {}): EditorState {
-    for (prefs in listOf("tools", "ai", "ai_keys")) activity.getSharedPreferences(prefs, 0).edit().clear().commit()
+    for (prefs in listOf("tools", "ai", "ai_keys", "settings")) activity.getSharedPreferences(prefs, 0).edit().clear().commit()
     File(activity.filesDir, "projects").deleteRecursively()
     setup()
     val state = EditorState()

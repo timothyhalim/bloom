@@ -76,10 +76,10 @@ fun AiConfig.label(c: Choice) = "${name(c.provider)} · ${c.model}"
 
 /**
  * Settings: which provider and model runs each AI action, the user's providers (add, replace or forget the key,
- * delete), on-device model files, privacy, about. [ai] is saved by the caller.
+ * delete), on-device model files, autosave, privacy, about. [ai] and [autosave] (seconds, 0 = off) are saved by the caller.
  */
 @Composable
-fun SettingsScreen(ai: AiConfig, phone: AiProvider, onChange: (AiConfig) -> Unit, onClose: () -> Unit) {
+fun SettingsScreen(ai: AiConfig, phone: AiProvider, onChange: (AiConfig) -> Unit, autosave: Int, onAutosave: (Int) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     BackHandler(onBack = onClose)
     var adding by remember { mutableStateOf(false) }
@@ -118,6 +118,20 @@ fun SettingsScreen(ai: AiConfig, phone: AiProvider, onChange: (AiConfig) -> Unit
 
             Section("On-device models")
             OnDeviceModels()
+
+            Section("Projects")
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .toggleable(autosave > 0, role = Role.Switch) { onAutosave(if (it) 15 * 60 else 0) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Autosave", color = Bloom.On)
+                    Text("Saves unsaved edits now and then, and when you leave the app. Off: only Save and Keep project save.", fontSize = 12.sp, color = Bloom.OnVariant)
+                }
+                Switch(autosave > 0, null)
+            }
+            if (autosave > 0) for (m in listOf(1, 5, 15, 30)) Radio("Every $m min", autosave == m * 60) { onAutosave(m * 60) }
 
             Section("Privacy")
             TextButton({ onChange(ai.copy(consented = emptySet())) }, enabled = ai.consented.isNotEmpty()) {

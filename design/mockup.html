@@ -361,6 +361,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:0;border-radiu
     <button class="ib" id="undo" aria-label="Undo"><span class="i" data-i="undo"></span></button>
     <button class="ib" id="redo" aria-label="Redo" disabled><span class="i" data-i="redo"></span></button>
     <button class="ib" id="cmp" aria-label="Compare. Hold to see the original"><span class="i" data-i="compare"></span></button>
+    <button class="ib" id="save" aria-label="Save" hidden><span class="i" data-i="save"></span></button>
     <span class="sp"></span><button class="pill" id="export">Export</button>
   </div>
   <div class="canvas" data-cv id="cv"><svg class="photo" viewBox="0 0 300 400"><use href="#photo"/>
@@ -383,7 +384,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:0;border-radiu
 <script>
 const I={ // ui/Theme.kt Icons
 back:"M15 5l-7 7 7 7",undo:"M8 6L4 10l4 4M4 10h10a5 5 0 0 1 0 10h-3",redo:"M16 6l4 4-4 4M20 10H10a5 5 0 0 0 0 10h3",
-compare:"M12 3v18M4 6h5v12H4zM15 6h5v12h-5",layers:"M12 4l9 5-9 5-9-5 9-5zM3 14l9 5 9-5",
+compare:"M12 3v18M4 6h5v12H4zM15 6h5v12h-5",save:"M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6",layers:"M12 4l9 5-9 5-9-5 9-5zM3 14l9 5 9-5",
 adjust:"M12 3.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 1 0 0-9zM8 10a4.5 4.5 0 1 0 0 9 4.5 4.5 0 1 0 0-9zM16 10a4.5 4.5 0 1 0 0 9 4.5 4.5 0 1 0 0-9z",
 check:"M5 12l5 5 9-10",reset:"M19 12a7 7 0 1 1-2-5M19 4v4h-4",
 eye:"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",eyeoff:"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM4 4l16 16",
@@ -456,7 +457,7 @@ const OPTS={segment:[['phone','IS-Net + MobileSAM']],erase:[['phone','LaMa'],['s
   fill:[['srv','runwayml/stable-diffusion-inpainting'],['fal','fal-ai/flux-pro/v1/fill'],['fal','fal-ai/flux-lora/inpainting']],
   upscale:[['phone','Real-ESRGAN'],['srv','RealESRGAN'],['fal','fal-ai/esrgan'],['fal','fal-ai/clarity-upscaler']],background:[['phone','RVM']],ask:[['llm','qwen2.5-7b-instruct']]};
 const MODES={erase:{n:'Erase',icon:'eraser'},fill:{n:'Fill',icon:'fill'},upscale:{n:'Upscale',icon:'upscale'},background:{n:'Replace background',icon:'background'},ask:{n:'Ask',icon:'ask'}};
-const A={mode:'erase',fill:'',up:2,ask:'',asked:null,off:new Set,target:null,pick:{},consented:new Set,hideCloud:false,running:null,cancel:false};
+const A={mode:'erase',fill:'',up:2,ask:'',asked:null,off:new Set,target:null,pick:{},consented:new Set,hideCloud:false,autosave:0,running:null,cancel:false};
 const opts=cap=>OPTS[cap].filter(o=>o[0]==='phone'||!A.hideCloud&&PROVIDERS.some(x=>x.id===o[0]));
 const choice=cap=>{const o=opts(cap);return o.find(x=>x.join('|')===A.pick[cap])||o[0]||null};
 const label=c=>`${PN[c[0]]} · ${c[1]}`;
@@ -617,11 +618,11 @@ function aiBar(){const m=A.mode,idle=!A.running,modes=D.kind==='Background'&&D.e
   return tl('sparkle','AI. Back to tools',leave)+sc(modes.map(k=>pi(MODES[k].icon,MODES[k].n,k===m,()=>{if(idle&&k!==m)switchMode(k)},{ul:1})).join(''))
     +(m==='erase'||m==='fill'||m==='background'?mb(()=>{if(idle){maskMode=true;ui()}}):'')
     +`<button class="runb${ready?' ready':''}" aria-label="${run}" ${ready?'':'aria-disabled="true"'} ${h(()=>{if(ready)runAi()})}>${!idle?'<i class="spin"></i>':ap?`<span class="ap">Apply ${n}</span>`:ic(MODES[m].icon)}<small>${c?PN[c[0]]:''}</small></button>`
-    +`<button class="caret" ${idle?'':'disabled'} aria-haspopup="menu" aria-label="Choose where ${MODES[m].n} runs" ${h(el=>runMenu(el))}>${ic('down')}</button>`}
+    +(opts(m).length<2?'':`<button class="caret" ${idle?'':'disabled'} aria-haspopup="menu" aria-label="Choose where ${MODES[m].n} runs" ${h(el=>runMenu(el))}>${ic('down')}</button>`)}
 function aiReady(m){const active=D.steps.length>0||D.inv;
   return m==='fill'?active&&A.fill.trim()!=='':m==='upscale'?PW*PH*A.up*A.up<=64e6:m==='ask'?(A.asked?A.asked.ops.length>A.off.size:A.ask.trim()!==''):m==='background'?true:active}
 function runMenu(el){const m=A.mode,c=choice(m);
-  openMenu(el,[...opts(m).map(o=>({label:label(o),check:o===c,f:()=>{A.pick[m]=o.join('|');ui()}})),{label:'AI settings…',f:()=>openSettings()}])}
+  openMenu(el,[...opts(m).map(o=>({label:label(o),check:o===c,f:()=>{A.pick[m]=o.join('|');ui()}}))])}
 function aiBox(){const m=A.mode;
   if(A.running)return `<div class="box"><div class="br">${status(A.running,null,'st16')}${A.cancel?`<button class="tb" ${h(cancelJob)}>Cancel</button>`:''}</div></div>`;
   if(m==='erase')return toolbox('mask',[srow(BR.soft),srow(BR.flow)],two('Erase','Size')+sl(BR.size));
@@ -686,6 +687,7 @@ function ui(){
   topBar();rail();overlays();layout();gradUI();draw();navMark();
 }
 function topBar(){const idle=!tool,x=$('#export');
+  $('#save').hidden=!idle||!changed;
   $('#undo').disabled=idle?!changed&&!L.length:!dirty;
   x.disabled=!idle||exporting!=null;x.classList.toggle('busy',exporting!=null);
   x.innerHTML=exporting!=null?`<i class="prog" style="--p:${exporting*100}%"></i>${Math.round(exporting*100)}%`:'Export'}
@@ -727,6 +729,7 @@ let snackT;function snack(text,act,f){let s=$('.snack',cv);if(!s){cv.insertAdjac
   $('span',s).textContent=text;const b=$('button',s);b.hidden=!act;b.textContent=act||'';b.onclick=()=>{s.hidden=true;f&&f()};s.hidden=false;clearTimeout(snackT);snackT=setTimeout(()=>s.hidden=true,Q.has('demo')?1e6:4000)}
 
 // ---------- top bar ----------
+$('#save').onclick=()=>{changed=false;topBar();snack('Saved')};
 $('#close').onclick=()=>{const ask=()=>{close();if(changed)dialog('Keep this project? Discard deletes it.',[['Cancel'],['Discard',()=>go('home')],['Keep project',()=>go('recent')]]);else go('home')};
   if(dirty)dialog('Discard changes?',[['Keep editing'],['Discard',ask]]);else ask()}; // closing asks only when this visit changed something
 function exportMenu(){openMenu($('#export'),[{label:`Size: ${expScale*100}%`,muted:1,keep:1,f:()=>{expScale=expScale===1?.5:expScale===.5?.25:1;exportMenu()}}, // size cycles in place; the menu stays open
@@ -835,6 +838,8 @@ function settings(){const el=$('#s-settings'),y=$('.body',el)?.scrollTop||0,sec=
       <div><button class="tb" ${h(()=>keyDialog(v))}>${v.key?'Replace key':'Add key'}</button>${v.key?`<button class="tb" ${h(()=>{v.key=false;settings()})}>Forget key</button>`:''}</div></div>`).join(''); // keys are never shown again
     s+=adding?addForm():`<button class="tb" style="margin-top:4px" ${h(()=>{adding={type:'IOPaint',name:'',url:'',key:'',wf:false,testing:false,result:null,passed:false};settings()})}>+ Add provider</button>`}
   s+=sec('On-device models')+MODELS.map((m,i)=>`<div class="mdl"><div>${m[0]}<small>${m[2]?'':'Not downloaded · '}${m[1]} MB</small></div>${m[2]?`<button class="ib" aria-label="Delete ${m[0]}" ${h(()=>{m[2]=false;settings()})}>${ic('trash')}</button>`:'<span style="width:48px"></span>'}</div>`).join('');
+  s+=sec('Projects')+`<button class="swr" role="switch" aria-checked="${A.autosave>0}" ${h(()=>{A.autosave=A.autosave?0:15;settings()})}><span>Autosave<small>Saves unsaved edits now and then, and when you leave the app. Off: only Save and Keep project save.</small></span><i class="swi"></i></button>`
+    +(A.autosave?[1,5,15,30].map(n=>`<button class="rad" role="radio" aria-checked="${A.autosave===n}" ${h(()=>{A.autosave=n;settings()})}><i class="rb"></i>Every ${n} min</button>`).join(''):'');
   s+=sec('Privacy')+`<button class="tb" style="padding:0" ${A.consented.size?'':'disabled'} ${h(()=>{A.consented.clear();settings()})}>Reset consent choices</button><div class="sm">Bloom asks again before a photo crop goes to a provider.</div>
     <button class="swr" role="switch" aria-checked="${A.hideCloud}" ${h(()=>{A.hideCloud=!A.hideCloud;settings()})}><span>Hide cloud features<small>Only the phone runs AI; your providers are kept but not offered.</small></span><i class="swi"></i></button>`;
   s+=sec('About')+`<div>Bloom 0.1.0 · GPL-3.0</div>`+LICENSES.map(([w,l])=>`<div class="lic">${w} — ${l}</div>`).join('')+'<div style="height:24px"></div></div>';
