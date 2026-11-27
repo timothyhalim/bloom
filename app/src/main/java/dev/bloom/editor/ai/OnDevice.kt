@@ -35,7 +35,10 @@ class OnDevice(private val context: Context) : AiProvider {
             Capability.ERASE -> {
                 val file = get("eraser")
                 status("Erasing…")
-                AiResult.Image(Segment.erase(file, req.image!!, req.mask!!) ?: error("the model couldn't run on this phone"))
+                // LaMa's peak memory grows with its size: about 2 GB at 768, 2.7 GB at 1024
+                val ram = android.app.ActivityManager.MemoryInfo().also { context.getSystemService(android.app.ActivityManager::class.java).getMemoryInfo(it) }.totalMem
+                val max = if (ram < 7L shl 30) 768 else 1024
+                AiResult.Image(Segment.erase(file, req.image!!, req.mask!!, max) ?: error("the model couldn't run on this phone"))
             }
             Capability.UPSCALE -> {
                 val file = get("upscale")

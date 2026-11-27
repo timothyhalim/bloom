@@ -52,6 +52,7 @@ object Eraser {
         return out
     }
 
-    const val CONTEXT = 2
-    const val MIN = 512
+    // calibration: more surroundings to copy from vs. a softer fill (the model sees 512 px)
+    const val CONTEXT = 3
+    const val MIN = 768
 }

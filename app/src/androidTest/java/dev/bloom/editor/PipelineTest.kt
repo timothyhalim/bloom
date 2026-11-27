@@ -661,16 +661,19 @@ class PipelineTest {
         val h = 480
         val photo = gray(w, h) { x, y -> if (x in 280 until 360 && y in 200 until 280) 30 else if (x / 16 % 2 == 0) 60 else 200 }
         val hole = ByteArray(w * h) { i -> if (i % w in 276 until 364 && i / w in 196 until 284) 1 else 0 }
-        val t = System.nanoTime()
-        val area = EraseArea.of(photo, hole)!!
-        val (box, px) = area.paste(Segment.erase(model, area.crop, area.fill) ?: error("erase failed"))
-        android.util.Log.d("Bloom", "eraser test: ${(System.nanoTime() - t) / 1_000_000} ms")
-        assertTrue("box covers the hole: ${box.toList()}", box[0] <= 276 && box[1] <= 196 && box[2] >= 364 && box[3] >= 284)
-        // inside the old block, columns that were dark stripes stay darker than the light ones
-        val col = { x: Int -> (210 until 270).map { y -> Color.red(px.getPixel(x - box[0], y - box[1])) }.average() }
-        val dark = (290 until 350).filter { it / 16 % 2 == 0 }.map(col).average()
-        val light = (290 until 350).filter { it / 16 % 2 == 1 }.map(col).average()
-        assertTrue("stripes continue: dark $dark, light $light", light - dark > 40)
+        // the crop (640 px) at its own size, and shrunk to the smallest size the model takes
+        for (max in listOf(1024, 512)) {
+            val t = System.nanoTime()
+            val area = EraseArea.of(photo, hole)!!
+            val (box, px) = area.paste(Segment.erase(model, area.crop, area.fill, max) ?: error("erase failed at $max"))
+            android.util.Log.d("Bloom", "eraser test, max $max: ${(System.nanoTime() - t) / 1_000_000} ms")
+            assertTrue("box covers the hole: ${box.toList()}", box[0] <= 276 && box[1] <= 196 && box[2] >= 364 && box[3] >= 284)
+            // inside the old block, columns that were dark stripes stay darker than the light ones
+            val col = { x: Int -> (210 until 270).map { y -> Color.red(px.getPixel(x - box[0], y - box[1])) }.average() }
+            val dark = (290 until 350).filter { it / 16 % 2 == 0 }.map(col).average()
+            val light = (290 until 350).filter { it / 16 % 2 == 1 }.map(col).average()
+            assertTrue("stripes continue at $max: dark $dark, light $light", light - dark > 40)
+        }
     }
 
     // --- AI subject (M3) ---

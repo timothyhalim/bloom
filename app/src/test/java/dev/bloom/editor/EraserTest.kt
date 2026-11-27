@@ -17,15 +17,15 @@ class EraserTest {
 
     @Test
     fun contextIsCentredSquareAtLeastMinAndStaysOnThePhoto() {
-        // small hole in the middle of a big photo: a 512 square around it
-        assertArrayEquals(intArrayOf(744, 244, 1256, 756), Eraser.context(intArrayOf(990, 490, 1010, 510), 2000, 1000))
-        // big hole: twice its long side (capped by the photo's height here)
+        // small hole in the middle of a big photo: a 768 square around it
+        assertArrayEquals(intArrayOf(616, 116, 1384, 884), Eraser.context(intArrayOf(990, 490, 1010, 510), 2000, 1000))
+        // big hole: 3× its long side (capped by the photo's height here)
         val c = Eraser.context(intArrayOf(800, 400, 1100, 500), 2000, 1000)
-        assertEquals(600, c[2] - c[0])
+        assertEquals(900, c[2] - c[0])
         assertEquals(1000, Eraser.context(intArrayOf(500, 100, 1100, 300), 2000, 1000).let { it[3] - it[1] })
         // near the corner: moved back onto the photo
-        assertArrayEquals(intArrayOf(0, 0, 512, 512), Eraser.context(intArrayOf(5, 5, 20, 20), 2000, 1000))
-        // photo smaller than 512: the whole photo
+        assertArrayEquals(intArrayOf(0, 0, 768, 768), Eraser.context(intArrayOf(5, 5, 20, 20), 2000, 1000))
+        // photo smaller than 768: the whole photo
         assertArrayEquals(intArrayOf(0, 0, 300, 200), Eraser.context(intArrayOf(100, 50, 120, 70), 300, 200))
     }
 

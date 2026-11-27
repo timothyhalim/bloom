@@ -10,7 +10,7 @@ import kotlin.math.roundToInt
 class SubjectMask(val w: Int, val h: Int, val alpha: ByteArray)
 
 /**
- * What an eraser works on: [crop], the photo around the hole (a square of 2× its long side, min 512, see [Eraser.context]),
+ * What an eraser works on: [crop], the photo around the hole (a square of 3× its long side, min 768, see [Eraser.context]),
  * and [fill] (crop-sized, 1 = fill): the hole widened a little. [at] is the crop's box in the photo (px).
  */
 class EraseArea(private val photo: Bitmap, val crop: Bitmap, val fill: ByteArray, private val at: IntArray, private val box: IntArray, private val grow: Int) {
@@ -37,9 +37,10 @@ class EraseArea(private val photo: Bitmap, val crop: Bitmap, val fill: ByteArray
         fun of(photo: Bitmap, hole: ByteArray): EraseArea? {
             val w = photo.width
             val h = photo.height
-            // widen the hole a little: brush strokes rarely cover an object's soft edge and shadow fringe
-            val grow = maxOf(3, h / 300)
-            val box = Eraser.bounds(hole, w, h)?.let { Eraser.inflate(it, grow, w, h) } ?: return null
+            // widen the hole: brush strokes rarely cover an object's soft edge and shadow fringe, more so on big holes
+            val marked = Eraser.bounds(hole, w, h) ?: return null
+            val grow = maxOf(3, h / 300, maxOf(marked[2] - marked[0], marked[3] - marked[1]) / 50)
+            val box = Eraser.inflate(marked, grow, w, h)
             val at = Eraser.context(box, w, h)
             val (cl, ct, cr, cb) = at
             val cw = cr - cl
@@ -57,7 +58,6 @@ class EraseArea(private val photo: Bitmap, val crop: Bitmap, val fill: ByteArray
  */
 object Segment {
     const val SIZE = 1024
-    private const val SIZE_ERASE = 512 // LaMa's input
     private val loaded = runCatching { System.loadLibrary("bloom") }.isSuccess
 
     // ponytail: the emulator's translated Vulkan takes 20-35 s to set up IS-Net, its CPU ~11 s in all; real phones use the GPU
@@ -127,13 +127,15 @@ object Segment {
         return matte(model.path, cache(model), small, gpu).also { small.recycle() }?.let { SubjectMask(w, h, it) }
     }
 
-    /** LaMa eraser: [crop] with [fill] (crop-sized, non-zero = fill) filled in, at the crop's size. */
-    fun erase(model: File, crop: Bitmap, fill: ByteArray): Bitmap? {
+    /**
+     * LaMa eraser: [crop] with [fill] (crop-sized, non-zero = fill) filled in, at the crop's size. The model runs on a
+     * square of the crop's long side, 512 to [maxSide] px (a multiple of 8): small crops aren't shrunk at all.
+     */
+    fun erase(model: File, crop: Bitmap, fill: ByteArray, maxSide: Int = 1024): Bitmap? {
         if (!loaded) return null
         val cw = crop.width
         val ch = crop.height
-        // the model works at 512 x 512
-        val n = SIZE_ERASE
+        val n = (maxOf(cw, ch).coerceIn(512, maxSide) + 7) / 8 * 8
         val small = argb(crop, n, n, mutable = true)
         val m = ByteArray(n * n) { i -> fill[(i / n * ch / n) * cw + i % n * cw / n] }
         // ponytail: CPU, LaMa crashed the app on a real phone's GPU (2026-11-24); retry the GPU when a phone log shows why

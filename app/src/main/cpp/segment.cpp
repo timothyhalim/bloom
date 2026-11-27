@@ -240,11 +240,13 @@ Net eraseNet;
 extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_bloom_editor_Segment_erase(JNIEnv *env, jclass, jstring modelPath, jstring cachePath, jobject bmp, jbyteArray maskArr, jboolean gpu) {
     std::lock_guard<std::mutex> guard(lock);
-    const int n = 512;
     auto rt = getRuntime(gpu, str(env, cachePath));
     if (!rt || !load(eraseNet, str(env, modelPath), {"image", "mask"}, {"output"}, rt)) return false;
+    // any square size, a multiple of 8 (Segment.erase picks 512..1024): MNN reshapes on a new input size
     AndroidBitmapInfo info;
-    uint8_t *rgba = env->GetArrayLength(maskArr) == n * n ? lockRgba(env, bmp, info, n) : nullptr;
+    if (AndroidBitmap_getInfo(env, bmp, &info) != 0) return false;
+    const int n = int(info.width);
+    uint8_t *rgba = n % 8 == 0 && env->GetArrayLength(maskArr) == n * n ? lockRgba(env, bmp, info, n) : nullptr;
     if (!rgba) return false;
     auto t0 = std::chrono::steady_clock::now();
     VARP image = _Input({1, 3, n, n}, NCHW, halide_type_of<float>());
