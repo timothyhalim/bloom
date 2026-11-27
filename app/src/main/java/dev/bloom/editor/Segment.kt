@@ -113,7 +113,8 @@ object Segment {
         val w = maxOf(14, Math.round(photo.width * s / 14) * 14) // the model works in 14 px patches
         val h = maxOf(14, Math.round(photo.height * s / 14) * 14)
         val small = argb(photo, w, h)
-        return depth(model.path, cache(model), small, gpu).also { small.recycle() }?.let { SubjectMask(w, h, it) }
+        // ponytail: CPU, Depth Anything gave no usable depth on a real phone's GPU (2026-11-24); retry the GPU with normal precision
+        return depth(model.path, cache(model), small, false).also { small.recycle() }?.let { SubjectMask(w, h, it) }
     }
 
     /** RVM: the person matte of [photo] at 1024 px on the long side, 255 = person. */
@@ -135,7 +136,8 @@ object Segment {
         val n = SIZE_ERASE
         val small = argb(crop, n, n, mutable = true)
         val m = ByteArray(n * n) { i -> fill[(i / n * ch / n) * cw + i % n * cw / n] }
-        val ok = erase(model.path, cache(model), small, m, gpu)
+        // ponytail: CPU, LaMa crashed the app on a real phone's GPU (2026-11-24); retry the GPU when a phone log shows why
+        val ok = erase(model.path, cache(model), small, m, false)
         val big = if (ok) Bitmap.createScaledBitmap(small, cw, ch, true) else null
         small.recycle()
         return big
