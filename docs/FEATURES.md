@@ -60,7 +60,7 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | One-finger pan when no tool takes touches | PhotoView.kt:269-275 | none | UI |
 | Two-finger pan always (also inside brush tools) | PhotoView.kt:270 | none | manual |
 | Double-tap resets to Fit (only when no tool takes touches). Spec: Fit ↔ 200% at the tapped point | PhotoView.kt:277-281 | none | UI |
-| Pan limits: photo can't leave the view; bottom limit is the top of the floating bar | PhotoView.kt:224-235 | none | unit (extract math) / UI |
+| Pan limits: at any zoom the photo's edge may come in up to the middle of the visible area (50 %), so a corner can be brought to the centre; a new photo starts top-aligned; the visible area's bottom is the top of the floating bar | PhotoView.kt (update, panLimit) | unit: MathTest.panLimitLetsThePhotosEdgeReachTheViewsMiddleButNoFurther | unit / manual |
 | At Fit, a photo taller than the clear area rests at the top | PhotoView.kt:52, 232 | none | UI |
 | Bottom inset follows the bar only (rows above it never move the photo) | ui/EditorScreen.kt:579-581, PhotoView.kt:197-202 | none | UI |
 | Crop tool adds 32dp margin around the photo at Fit (clear of the back gesture) | ui/EditorScreen.kt:409, PhotoView.kt:88, 220 | none | UI |
@@ -475,10 +475,10 @@ Spec references are to `design/UI.md` (v3.3) and `docs/PLAN.md`. Where the code 
 | Bar: back, mode icons, Mask button, run button (no ✓: running is applying) | ui/AiBar.kt | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask, AiSettingsTest.withOnlyThePhoneThereIsNoRunMenu | UI |
 | Erase disabled until the mask is active; spinner while running | ui/EraseBar.kt:32-36 | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask | UI |
 | Status "Downloading AI model… N%" then "Erasing…" in the main row (on the phone; remote runs: see §31) | ai/OnDevice.kt, ui/AiBar.kt (AiRows) | UI: ToolBarsTest.aiBarErasesOnlyOnceThereIsAMask ("Erasing…" only) | UI (fake ModelStore) |
-| Hole = rendered mask ≥ 50%; widened by max(3, h/300) px | ui/EditorScreen.kt:616-634, Segment.kt:44-58 (EraseArea.of) | none | unit (Eraser) |
-| Mask bounds; context square 2× the hole's long side, min 512, kept on the photo | model/Eraser.kt:6-35 | unit: EraserTest.boundsOfTheMarkedPixels, EraserTest.contextIsCentredSquareAtLeastMinAndStaysOnThePhoto | unit |
+| Hole = rendered mask ≥ 50%; widened by max(3, h/300, 2 % of the hole's long side) px | ui/EditorScreen.kt:616-634, Segment.kt:44-58 (EraseArea.of) | none | unit (Eraser) |
+| Mask bounds; context square 3× the hole's long side, min 768, kept on the photo | model/Eraser.kt:6-35 | unit: EraserTest.boundsOfTheMarkedPixels, EraserTest.contextIsCentredSquareAtLeastMinAndStaysOnThePhoto | unit |
 | Erode grows the hole | model/Eraser.kt:38-53 | unit: EraserTest.erodeGrowsTheHole | unit |
-| LaMa at 512×512 on the crop (EraseArea); only hole pixels come from the model (or a remote provider, scaled to the crop), the rest stays the photo | Segment.kt:14-58 (EraseArea.paste), 118-130, cpp/segment.cpp:239-280 | GPU (model): eraserContinuesStripesAcrossTheHole | GPU |
+| LaMa on a square of the crop's long side, 512–1024 px (768 on phones under 7 GB RAM), a multiple of 8: small crops aren't shrunk (EraseArea); only hole pixels come from the model (or a remote provider, scaled to the crop), the rest stays the photo | Segment.kt:14-58 (EraseArea.paste), 118-130, cpp/segment.cpp:239-280 | GPU (model): eraserContinuesStripesAcrossTheHole | GPU |
 | LaMa weights freed after each run | cpp/segment.cpp:274 | none | manual (memory) |
 | Result: new Retouch layer at the bottom of the stack (every other layer still applies); editing an existing Retouch layer replaces it | ui/EditorScreen.kt:589-614 | UI: AiSettingsTest.theFirstSendAsksAndSendOnlyWhenAgreed (remote, new layer) | UI |
 | Result dropped if the draft changed while erasing | ui/EditorScreen.kt:606 | none | UI |

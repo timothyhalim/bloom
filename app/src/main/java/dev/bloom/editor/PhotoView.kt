@@ -226,10 +226,11 @@ class PhotoView(context: Context) : GLSurfaceView(context), DefaultLifecycleObse
         val (sx, sy) = scales()
         val cy = insetPx.toFloat() / height // centre of the area above the chrome, in NDC
         val a = 1f - cy // half-height of that area
-        val mx = (sx - 1f).coerceAtLeast(0f)
-        val my = (sy - a).coerceAtLeast(0f)
+        val mx = panLimit(sx, 1f)
+        val my = panLimit(sy, a)
         panX = panX.coerceIn(-mx, mx)
-        panY = if (panY.isNaN()) -my else panY.coerceIn(-my, my)
+        // a new photo starts with its top at the top of the view
+        panY = if (panY.isNaN()) -(sy - a).coerceAtLeast(0f) else panY.coerceIn(-my, my)
         val oy = panY + cy
         shown = floatArrayOf(sx, sy, panX, oy)
         renderer.setTransform(sx, sy, panX, oy)
@@ -498,3 +499,10 @@ void main() {
 }"""
     }
 }
+
+/**
+ * How far the photo's centre may pan from the view's centre, in NDC, on an axis where the photo's half-size is [s] and
+ * the view's is [half]: its edge may come in as far as the view's middle (50 % of it), at any zoom, so a corner can be
+ * brought to the centre for painting.
+ */
+fun panLimit(s: Float, half: Float) = (s - half).coerceAtLeast(0f) + minOf(s, half)

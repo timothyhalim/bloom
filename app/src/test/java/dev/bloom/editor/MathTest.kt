@@ -18,4 +18,11 @@ class MathTest {
         assertEquals(0.5f to 1f, fitScale(1000, 2000, 1000, 1000)) // tall image: bars left/right
         assertEquals(1f to 1f, fitScale(1600, 900, 1920, 1080))
     }
+
+    @Test
+    fun panLimitLetsThePhotosEdgeReachTheViewsMiddleButNoFurther() {
+        assertEquals(1.5f, panLimit(1.5f, 1f), 0f) // bigger than the view: pan = half-size puts its edge in the middle
+        assertEquals(0.8f, panLimit(0.8f, 1f), 0f) // smaller (not zoomed): the same, its edge stops at the middle
+        assertEquals(1f, panLimit(1f, 1f), 0f) // exactly fits
+    }
 }
